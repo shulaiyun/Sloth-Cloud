@@ -21,6 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__ . '/../routes/console.php',
         // channels: __DIR__.'/../routes/channels.php',
     )
+    ->withCommands([
+        __DIR__ . '/../app/Console/Commands',
+    ])
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->append(ProxyMiddleware::class);
         $middleware->alias([

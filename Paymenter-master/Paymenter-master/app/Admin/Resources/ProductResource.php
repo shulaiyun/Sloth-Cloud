@@ -70,6 +70,8 @@ class ProductResource extends Resource
 
     public static function form(Schema $schema): Schema
     {
+        Currency::ensureBaseline();
+
         return $schema
             ->components([
                 Tabs::make('Tabs')

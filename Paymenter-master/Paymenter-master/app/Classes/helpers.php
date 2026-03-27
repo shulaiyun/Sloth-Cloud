@@ -122,6 +122,8 @@ if (!function_exists('locale_flag')) {
             'tr' => '🇹🇷',
             'uk' => '🇺🇦',
             'zh' => '🇨🇳',
+            'zh_TW' => '🇹🇼',
+            'zh-TW' => '🇹🇼',
         ][$locale] ?? '🌐';
     }
 }
@@ -156,6 +158,8 @@ if (!function_exists('locale_label')) {
             'tr' => 'Türkçe',
             'uk' => 'Українська',
             'zh' => '中文',
+            'zh_TW' => '繁體中文',
+            'zh-TW' => '繁體中文',
         ];
 
         return $labels[$locale] ?? config("app.available_locales.$locale", strtoupper($locale));
