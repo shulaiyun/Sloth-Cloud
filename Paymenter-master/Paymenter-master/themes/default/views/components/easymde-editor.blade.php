@@ -1,5 +1,6 @@
 @once
-    @vite('themes/' . config('settings.theme', 'default') . '/js/easymde-entry.js', config('settings.theme', 'default'))
+@php($activeTheme = active_theme())
+@vite('themes/' . $activeTheme . '/js/easymde-entry.js', $activeTheme)
 @endonce
 
 @script

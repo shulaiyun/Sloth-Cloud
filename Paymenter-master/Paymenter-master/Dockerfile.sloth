@@ -39,9 +39,9 @@ COPY . .
 COPY --from=composer_deps /app/vendor /app/vendor
 
 RUN npm run build \
-    && if [ -d /app/public/build/default ]; then cp -R /app/public/build/default/. /app/public/build/; fi \
-    && test -d /app/public/build \
-    && test -f /app/public/build/manifest.json
+    && if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi \
+    && if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi \
+    && (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json)
 
 FROM php:8.3-fpm-alpine AS runtime
 
@@ -81,14 +81,14 @@ RUN composer install \
     && chmod -R ug+rwX storage bootstrap/cache
 
 COPY --from=asset_builder /app/public /var/www/html/public
-COPY --from=asset_builder /app/public/build /var/www/html/public/build
 COPY docker/sloth/default.conf /etc/nginx/http.d/default.conf
 COPY docker/sloth/www.conf /usr/local/etc/php-fpm.d/zz-sloth-www.conf
 COPY docker/sloth/supervisord.conf /etc/supervisord.conf
 COPY docker/sloth/entrypoint.sh /entrypoint.sh
 
-RUN test -d /var/www/html/public/build \
-    && test -f /var/www/html/public/build/manifest.json \
+RUN if [ -d /var/www/html/public/default ] && [ ! -f /var/www/html/public/build/manifest.json ]; then mkdir -p /var/www/html/public/build && cp -R /var/www/html/public/default/. /var/www/html/public/build/; fi \
+    && if [ -d /var/www/html/public/build ] && [ ! -f /var/www/html/public/default/manifest.json ]; then mkdir -p /var/www/html/public/default && cp -R /var/www/html/public/build/. /var/www/html/public/default/; fi \
+    && (test -f /var/www/html/public/default/manifest.json || test -f /var/www/html/public/build/manifest.json) \
     && rm -f /usr/local/etc/php-fpm.d/www.conf \
     && chmod +x /entrypoint.sh \
     && chown -R www-data:www-data /var/www/html

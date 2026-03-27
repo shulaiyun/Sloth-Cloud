@@ -3,6 +3,24 @@
 use App\Helpers\EventHelper;
 use Illuminate\Config\Repository;
 
+if (!function_exists('active_theme')) {
+    /**
+     * Resolve the active theme and always fall back to the bundled default theme.
+     */
+    function active_theme(): string
+    {
+        $theme = config('settings.theme');
+
+        if (!is_string($theme)) {
+            return 'default';
+        }
+
+        $theme = trim($theme);
+
+        return $theme !== '' ? $theme : 'default';
+    }
+}
+
 if (!function_exists('theme')) {
     /**
      * Get the specified configuration value.
@@ -15,7 +33,7 @@ if (!function_exists('theme')) {
      */
     function theme($key, $default = null)
     {
-        $current_theme = config('settings.theme', 'default');
+        $current_theme = active_theme();
 
         return config("settings.theme_$current_theme" . "_$key", $default) ?? $default;
     }

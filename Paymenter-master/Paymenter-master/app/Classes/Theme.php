@@ -9,8 +9,16 @@ class Theme
 {
     public static function getSettings()
     {
+        $themeName = active_theme();
+        $themePath = base_path('themes/' . $themeName . '/theme.php');
+
+        if (!file_exists($themePath)) {
+            $themeName = 'default';
+            $themePath = base_path('themes/default/theme.php');
+        }
+
         try {
-            $theme = require base_path('themes/' . config('settings.theme', 'default') . '/theme.php');
+            $theme = require $themePath;
         } catch (Throwable $th) {
             // If not ran from the command line, throw an exception
             if (php_sapi_name() !== 'cli') {
@@ -23,7 +31,7 @@ class Theme
         // Add theme settings prefix to name <theme_name>_<setting_name>
         $settings = [];
         foreach ($theme['settings'] as $setting) {
-            $setting['name'] = 'theme_' . config('settings.theme', 'default') . '_' . $setting['name'];
+            $setting['name'] = 'theme_' . $themeName . '_' . $setting['name'];
             $settings[] = $setting;
         }
 

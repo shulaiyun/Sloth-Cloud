@@ -12,10 +12,11 @@
         @endisset
     </title>
     @livewireStyles
+    @php($activeTheme = active_theme())
     @vite([
-        'themes/' . config('settings.theme', 'default') . '/js/app.js',
-        'themes/' . config('settings.theme', 'default') . '/css/app.css',
-    ], config('settings.theme', 'default'))
+        'themes/' . $activeTheme . '/js/app.js',
+        'themes/' . $activeTheme . '/css/app.css',
+    ], $activeTheme)
     @include('layouts.colors')
 
     @if (config('settings.favicon'))

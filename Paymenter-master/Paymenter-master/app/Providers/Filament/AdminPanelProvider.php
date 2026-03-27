@@ -79,7 +79,7 @@ class AdminPanelProvider extends PanelProvider
             ->renderHook(
                 'panels::head.end',
                 function (): string {
-                    $activeTheme = config('settings.theme', 'default');
+                    $activeTheme = active_theme();
                     $activeThemePath = base_path("themes/{$activeTheme}/views/layouts/colors.blade.php");
                     $defaultThemePath = base_path('themes/default/views/layouts/colors.blade.php');
                     $pathToUse = File::exists($activeThemePath) ? $activeThemePath : $defaultThemePath;
@@ -107,7 +107,7 @@ class AdminPanelProvider extends PanelProvider
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
             ])
-            ->viteTheme('resources/css/filament/admin/theme.css', 'default')
+            ->viteTheme('resources/css/filament/admin/theme.css', active_theme())
             ->authMiddleware([
                 Authenticate::class,
             ]);

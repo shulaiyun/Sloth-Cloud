@@ -57,7 +57,7 @@ class SettingsProvider extends ServiceProvider
 
             date_default_timezone_set(config('settings.timezone', 'UTC'));
 
-            Theme::set(config('settings.theme', 'default'), 'default');
+            Theme::set(active_theme(), 'default');
 
             if (Str::startsWith(config('app.url') ?? '', 'https://')) {
                 URL::forceScheme('https');
