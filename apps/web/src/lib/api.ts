@@ -17,8 +17,7 @@ export class ApiError extends Error {
 export interface ApiRequestOptions {
   body?: unknown;
   headers?: HeadersInit;
-  method?: 'GET' | 'POST';
-  token?: string | null;
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
 }
 
 export interface RemoteState<T> {
@@ -58,10 +57,6 @@ export async function requestJson<T>(path: string, options: ApiRequestOptions = 
   const headers = new Headers(options.headers);
   headers.set('Accept', 'application/json');
 
-  if (options.token) {
-    headers.set('Authorization', `Bearer ${options.token}`);
-  }
-
   if (options.body !== undefined) {
     headers.set('Content-Type', 'application/json');
   }
@@ -69,6 +64,7 @@ export async function requestJson<T>(path: string, options: ApiRequestOptions = 
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? 'GET',
     headers,
+    credentials: 'include',
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
@@ -136,7 +132,7 @@ export function useApiData<T>(path: string | null, options: ApiRequestOptions = 
     return () => {
       isCurrent = false;
     };
-  }, [path, options.method, options.token]);
+  }, [path, options.method]);
 
   return state;
 }

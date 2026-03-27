@@ -10,8 +10,8 @@ export function LanguageToggle() {
     <details className="locale-menu">
       <summary className="toggle-button locale-trigger">
         <FlagIcon locale={locale} />
-        <span>{localeMeta[locale].label}</span>
-        <span className="locale-caret">v</span>
+        <span>{localeMeta[locale].code} {localeMeta[locale].label}</span>
+        <span className="locale-caret">▾</span>
       </summary>
       <div className="locale-menu-list">
         {entries.map(([code, meta]) => (

@@ -32,9 +32,9 @@ export function HomePage() {
         </div>
         <div className="hero-panel">
           <div className="glass-panel">
-            <span className="panel-kicker">{data.data.brand.subtitle}</span>
-            <strong>{data.data.brand.name}</strong>
-            <p>{data.data.brand.statement}</p>
+            <span className="panel-kicker">树懒云</span>
+            <strong>Sloth Cloud</strong>
+            <p>Headless 计费核心，现代化 VPS 客户端体验。</p>
             <div className="chip-row">
               {data.data.categories.slice(0, 3).map((item) => (
                 <span className="chip" key={item.id}>{item.name}</span>

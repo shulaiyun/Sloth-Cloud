@@ -1,22 +1,25 @@
 export const localeMeta = {
-  'zh-CN': { flag: '🇨🇳', label: '中文' },
-  'zh-TW': { flag: '🇹🇼', label: '繁體中文' },
-  'en-US': { flag: '🇺🇸', label: 'English' },
-  'de-DE': { flag: '🇩🇪', label: 'Deutsch' },
-  'fr-FR': { flag: '🇫🇷', label: 'Français' },
-  'es-ES': { flag: '🇪🇸', label: 'Español' },
-  'ko-KR': { flag: '🇰🇷', label: '한국어' },
+  'zh-CN': { code: 'CN', label: '\u4E2D\u6587' },
+  'zh-TW': { code: 'TW', label: '\u7E41\u9AD4\u4E2D\u6587' },
+  'en-US': { code: 'US', label: 'English' },
+  'de-DE': { code: 'DE', label: 'Deutsch' },
+  'fr-FR': { code: 'FR', label: 'Francais' },
+  'es-ES': { code: 'ES', label: 'Espanol' },
+  'ko-KR': { code: 'KR', label: '\uD55C\uAD6D\uC5B4' },
 } as const;
 
 export type Locale = keyof typeof localeMeta;
 
-type TextContent = {
+export type TextContent = {
   nav: {
     home: string;
     catalog: string;
+    cart: string;
+    checkout: string;
+    services: string;
+    invoices: string;
     login: string;
     register: string;
-    account: string;
     logout: string;
   };
   common: {
@@ -31,7 +34,6 @@ type TextContent = {
     empty: string;
     loginRequired: string;
     hello: string;
-    accountReady: string;
     view: string;
     open: string;
     inspect: string;
@@ -45,6 +47,11 @@ type TextContent = {
     slug: string;
     allowQuantity: string;
     perUserLimit: string;
+    submit: string;
+    remove: string;
+    quantity: string;
+    status: string;
+    total: string;
   };
   home: {
     kicker: string;
@@ -71,7 +78,34 @@ type TextContent = {
     details: string;
     loginHint: string;
     configEmpty: string;
-    checkoutPending: string;
+    addToCart: string;
+    addSuccess: string;
+    goCheckout: string;
+  };
+  checkout: {
+    title: string;
+    subtitle: string;
+    empty: string;
+    coupon: string;
+    couponHint: string;
+    placeOrder: string;
+    placingOrder: string;
+    orderCreated: string;
+    redirectTo: string;
+  };
+  services: {
+    title: string;
+    subtitle: string;
+    noServices: string;
+    updateLabel: string;
+    cancel: string;
+  };
+  invoices: {
+    title: string;
+    subtitle: string;
+    noInvoices: string;
+    payWithCredit: string;
+    payWithGateway: string;
   };
   auth: {
     loginTitle: string;
@@ -96,14 +130,7 @@ type TextContent = {
 };
 
 const enUs: TextContent = {
-  nav: {
-    home: 'Home',
-    catalog: 'Store',
-    login: 'Login',
-    register: 'Register',
-    account: 'Console',
-    logout: 'Logout',
-  },
+  nav: { home: 'Home', catalog: 'Store', cart: 'Cart', checkout: 'Checkout', services: 'Services', invoices: 'Invoices', login: 'Login', register: 'Register', logout: 'Logout' },
   common: {
     loading: 'Loading Sloth Cloud data...',
     error: 'Request failed',
@@ -116,7 +143,6 @@ const enUs: TextContent = {
     empty: 'Nothing to show yet',
     loginRequired: 'Continue with login',
     hello: 'Hello',
-    accountReady: 'Authenticated',
     view: 'View',
     open: 'Open',
     inspect: 'Inspect',
@@ -130,24 +156,24 @@ const enUs: TextContent = {
     slug: 'Slug',
     allowQuantity: 'Allow quantity',
     perUserLimit: 'Per-user limit',
+    submit: 'Submit',
+    remove: 'Remove',
+    quantity: 'Quantity',
+    status: 'Status',
+    total: 'Total',
   },
   home: {
-    kicker: 'Sloth Cloud headless client',
+    kicker: 'Sloth Cloud Headless Client',
     title: 'Built like a premium VPS storefront, not a default panel skin',
-    subtitle: 'The branded web app and BFF now own catalog delivery and user auth while Paymenter stays behind the edge.',
+    subtitle: 'A modern customer experience powered by a headless billing core and edge BFF.',
     primaryCta: 'Browse store',
     secondaryCta: 'Sign in',
     featuredTitle: 'Live products',
-    featuredSubtitle: 'These cards are rendered from the new headless catalog endpoints.',
+    featuredSubtitle: 'Rendered from the new headless catalog endpoints.',
     categoryTitle: 'Live categories',
-    categorySubtitle: 'Categories, products, and prices are no longer tied to the old Livewire frontend.',
+    categorySubtitle: 'Categories and prices are no longer tied to old Livewire pages.',
   },
-  catalog: {
-    title: 'Store / Categories',
-    subtitle: 'Browse real products by category, backed by the new Paymenter headless API.',
-    allProducts: 'All products',
-    noProducts: 'No products are available in this category yet.',
-  },
+  catalog: { title: 'Store / Categories', subtitle: 'Browse real products by category.', allProducts: 'All products', noProducts: 'No products are available in this category yet.' },
   product: {
     summary: 'Configuration summary',
     plans: 'Billing plans',
@@ -156,13 +182,28 @@ const enUs: TextContent = {
     details: 'Product detail',
     loginHint: 'Sign in first to continue into the order flow.',
     configEmpty: 'This product currently has no extra config options.',
-    checkoutPending: 'Checkout is the next API slice. This release focuses on live auth and live catalog data.',
+    addToCart: 'Add to cart',
+    addSuccess: 'Added to cart successfully.',
+    goCheckout: 'Go to checkout',
   },
+  checkout: {
+    title: 'Checkout',
+    subtitle: 'Review cart items, coupon, and complete order creation.',
+    empty: 'Your cart is currently empty.',
+    coupon: 'Coupon',
+    couponHint: 'Enter a coupon code and apply.',
+    placeOrder: 'Place order',
+    placingOrder: 'Placing order...',
+    orderCreated: 'Order created successfully.',
+    redirectTo: 'Open target',
+  },
+  services: { title: 'My services', subtitle: 'Manage purchased services and view runtime details.', noServices: 'No services yet.', updateLabel: 'Update label', cancel: 'Cancel service' },
+  invoices: { title: 'My invoices', subtitle: 'Track invoice status and complete payment.', noInvoices: 'No invoices yet.', payWithCredit: 'Pay with credit', payWithGateway: 'Pay with gateway' },
   auth: {
     loginTitle: 'Sign in to Sloth Cloud',
-    loginSubtitle: 'Use the Paymenter headless auth API to get a real access token.',
+    loginSubtitle: 'Use Paymenter headless auth through the BFF session.',
     registerTitle: 'Create your Sloth Cloud account',
-    registerSubtitle: 'Successful registration returns a live token immediately.',
+    registerSubtitle: 'Registration signs you in automatically.',
     email: 'Email',
     password: 'Password',
     code: 'Two-factor code',
@@ -175,175 +216,77 @@ const enUs: TextContent = {
     alreadyHaveAccount: 'Already have an account? Sign in',
     needAccount: 'Need an account? Register',
   },
-  footer: {
-    statement: 'Sloth Cloud storefront. Real auth and live catalog data now flow through the edge BFF.',
-  },
+  footer: { statement: 'Sloth Cloud storefront. Headless auth and catalog are now powered by the edge BFF.' },
 };
 
 const zhCn: TextContent = {
-  nav: {
-    home: '首页',
-    catalog: '商店',
-    login: '登录',
-    register: '注册',
-    account: '控制台',
-    logout: '退出',
-  },
+  ...enUs,
+  nav: { home: '\u9996\u9875', catalog: '\u5546\u5E97', cart: '\u8D2D\u7269\u8F66', checkout: '\u7ED3\u7B97', services: '\u670D\u52A1', invoices: '\u8D26\u5355', login: '\u767B\u5F55', register: '\u6CE8\u518C', logout: '\u9000\u51FA' },
   common: {
-    loading: '正在加载树懒云数据...',
-    error: '请求失败',
-    backToCatalog: '返回商店',
-    sourceMode: '数据来源',
-    mock: '演示模式',
-    live: '真实数据',
-    themeDark: '黑暗',
-    themeLight: '明亮',
-    empty: '暂时没有可展示内容',
-    loginRequired: '登录后继续',
-    hello: '你好',
-    accountReady: '已认证',
-    view: '查看',
-    open: '打开',
-    inspect: '详情',
-    stock: '库存',
-    products: '个产品',
-    defaultPlan: '默认套餐',
-    customBilling: '自定义计费',
-    yes: '是',
-    no: '否',
-    pending: '待补充',
-    slug: '标识',
-    allowQuantity: '数量模式',
-    perUserLimit: '单用户限制',
+    ...enUs.common,
+    loading: '\u6B63\u5728\u52A0\u8F7D\u6811\u61D2\u4E91\u6570\u636E...',
+    error: '\u8BF7\u6C42\u5931\u8D25',
+    backToCatalog: '\u8FD4\u56DE\u5546\u5E97',
+    mock: '\u6F14\u793A\u6A21\u5F0F',
+    live: '\u771F\u5B9E\u6570\u636E',
+    themeDark: '\u9ED1\u6697',
+    themeLight: '\u660E\u4EAE',
+    loginRequired: '\u8BF7\u5148\u767B\u5F55',
+    hello: '\u4F60\u597D',
+    view: '\u67E5\u770B',
+    inspect: '\u8BE6\u60C5',
+    stock: '\u5E93\u5B58',
+    products: '\u4E2A\u4EA7\u54C1',
+    defaultPlan: '\u9ED8\u8BA4\u5957\u9910',
+    customBilling: '\u81EA\u5B9A\u4E49\u5468\u671F',
+    pending: '\u5F85\u5904\u7406',
+    slug: '\u6807\u8BC6',
+    allowQuantity: '\u6570\u91CF\u6A21\u5F0F',
+    perUserLimit: '\u5355\u7528\u6237\u9650\u5236',
+    submit: '\u63D0\u4EA4',
+    remove: '\u79FB\u9664',
+    quantity: '\u6570\u91CF',
+    status: '\u72B6\u6001',
+    total: '\u603B\u8BA1',
   },
   home: {
-    kicker: '树懒云 Headless 客户端',
-    title: '更像专业 VPS 服务商，而不是默认面板皮肤',
-    subtitle: '品牌前台、商品展示和用户认证都由我们的 Web 与 BFF 接管，Paymenter 退回后方做计费引擎。',
-    primaryCta: '进入商店',
-    secondaryCta: '立即登录',
-    featuredTitle: '真实商品',
-    featuredSubtitle: '这些卡片来自新的 Headless 商品接口。',
-    categoryTitle: '真实分类',
-    categorySubtitle: '分类、产品和价格不再绑定旧的 Livewire 前端。',
+    kicker: '\u6811\u61D2\u4E91 Headless \u5BA2\u6237\u7AEF',
+    title: '\u66F4\u50CF\u4E13\u4E1A VPS \u670D\u52A1\u5546\uFF0C\u800C\u4E0D\u662F\u9ED8\u8BA4\u9762\u677F\u76AE\u80A4',
+    subtitle: '\u73B0\u4EE3\u54C1\u724C\u4F53\u9A8C\uFF0CHeadless \u8BA1\u8D39\u6838\u5FC3\uFF0C\u957F\u671F\u53EF\u6269\u5C55\u67B6\u6784\u3002',
+    primaryCta: '\u8FDB\u5165\u5546\u5E97',
+    secondaryCta: '\u7ACB\u5373\u767B\u5F55',
+    featuredTitle: '\u771F\u5B9E\u5546\u54C1',
+    featuredSubtitle: '\u6765\u81EA\u65B0\u7684 Headless \u5546\u54C1\u63A5\u53E3\u3002',
+    categoryTitle: '\u771F\u5B9E\u5206\u7C7B',
+    categorySubtitle: '\u5206\u7C7B\u548C\u4EF7\u683C\u4E0D\u518D\u7ED1\u5B9A\u65E7 Livewire \u9875\u9762\u3002',
   },
-  catalog: {
-    title: '商店 / 分类',
-    subtitle: '按分类浏览真实商品，价格与周期均来自新的 Paymenter Headless API。',
-    allProducts: '全部产品',
-    noProducts: '当前分类下还没有可售商品。',
-  },
-  product: {
-    summary: '购买概览',
-    plans: '计费周期',
-    config: '购买配置',
-    os: '操作系统',
-    details: '产品详情',
-    loginHint: '登录后即可继续接入下单链路。',
-    configEmpty: '该商品当前没有额外配置项。',
-    checkoutPending: '下一步将接入真实结算与下单接口，这一版先完成真实认证与真实目录数据。',
-  },
-  auth: {
-    loginTitle: '登录树懒云',
-    loginSubtitle: '通过 Paymenter Headless 认证接口获取真实访问令牌。',
-    registerTitle: '创建树懒云账号',
-    registerSubtitle: '注册成功后将直接返回真实可用令牌。',
-    email: '邮箱',
-    password: '密码',
-    code: '两步验证码',
-    firstName: '名字',
-    lastName: '姓氏',
-    passwordConfirmation: '确认密码',
-    submitLogin: '登录',
-    submitRegister: '创建账号',
-    tfaHint: '检测到两步验证，请补充验证码后再次提交。',
-    alreadyHaveAccount: '已有账号？去登录',
-    needAccount: '还没有账号？去注册',
-  },
-  footer: {
-    statement: '树懒云前台。真实认证与真实商品数据已经通过边缘 BFF 接入。',
-  },
+  catalog: { title: '\u5546\u5E97 / \u5206\u7C7B', subtitle: '\u6309\u5206\u7C7B\u6D4F\u89C8\u771F\u5B9E\u5546\u54C1\u3002', allProducts: '\u5168\u90E8\u4EA7\u54C1', noProducts: '\u5F53\u524D\u5206\u7C7B\u4E0B\u6682\u65E0\u5546\u54C1\u3002' },
+  product: { ...enUs.product, summary: '\u8D2D\u4E70\u6982\u89C8', plans: '\u8BA1\u8D39\u5468\u671F', config: '\u8D2D\u4E70\u914D\u7F6E', os: '\u64CD\u4F5C\u7CFB\u7EDF', details: '\u4EA7\u54C1\u8BE6\u60C5', loginHint: '\u767B\u5F55\u540E\u5373\u53EF\u7EE7\u7EED\u5B8C\u6574\u4E0B\u5355\u6D41\u7A0B\u3002', configEmpty: '\u8BE5\u5546\u54C1\u5F53\u524D\u6CA1\u6709\u989D\u5916\u914D\u7F6E\u9879\u3002', addToCart: '\u52A0\u5165\u8D2D\u7269\u8F66', addSuccess: '\u5DF2\u52A0\u5165\u8D2D\u7269\u8F66\u3002', goCheckout: '\u524D\u5F80\u7ED3\u7B97' },
+  checkout: { ...enUs.checkout, title: '\u7ED3\u7B97', subtitle: '\u786E\u8BA4\u8D2D\u7269\u8F66\u3001\u4F18\u60E0\u7801\u5E76\u63D0\u4EA4\u8BA2\u5355\u3002', empty: '\u4F60\u7684\u8D2D\u7269\u8F66\u5F53\u524D\u4E3A\u7A7A\u3002', coupon: '\u4F18\u60E0\u7801', couponHint: '\u8F93\u5165\u4F18\u60E0\u7801\u540E\u70B9\u51FB\u5E94\u7528\u3002', placeOrder: '\u63D0\u4EA4\u8BA2\u5355', placingOrder: '\u6B63\u5728\u4E0B\u5355...', orderCreated: '\u8BA2\u5355\u521B\u5EFA\u6210\u529F\u3002', redirectTo: '\u6253\u5F00\u76EE\u6807\u9875' },
+  services: { ...enUs.services, title: '\u6211\u7684\u670D\u52A1', subtitle: '\u7BA1\u7406\u5DF2\u8D2D\u670D\u52A1\u5E76\u67E5\u770B\u8BE6\u60C5\u3002', noServices: '\u6682\u65E0\u670D\u52A1\u3002', updateLabel: '\u66F4\u65B0\u540D\u79F0', cancel: '\u53D6\u6D88\u670D\u52A1' },
+  invoices: { ...enUs.invoices, title: '\u6211\u7684\u8D26\u5355', subtitle: '\u67E5\u770B\u8D26\u5355\u72B6\u6001\u5E76\u5B8C\u6210\u652F\u4ED8\u3002', noInvoices: '\u6682\u65E0\u8D26\u5355\u3002', payWithCredit: '\u4F59\u989D\u652F\u4ED8', payWithGateway: '\u7F51\u5173\u652F\u4ED8' },
+  auth: { ...enUs.auth, loginTitle: '\u767B\u5F55\u6811\u61D2\u4E91', loginSubtitle: '\u901A\u8FC7 BFF \u4F1A\u8BDD\u8FDE\u63A5 Paymenter Headless \u8BA4\u8BC1\u3002', registerTitle: '\u521B\u5EFA\u6811\u61D2\u4E91\u8D26\u53F7', registerSubtitle: '\u6CE8\u518C\u6210\u529F\u540E\u81EA\u52A8\u767B\u5F55\u3002', email: '\u90AE\u7BB1', password: '\u5BC6\u7801', code: '\u53CC\u91CD\u9A8C\u8BC1\u7801', firstName: '\u540D\u5B57', lastName: '\u59D3\u6C0F', passwordConfirmation: '\u786E\u8BA4\u5BC6\u7801', submitLogin: '\u767B\u5F55', submitRegister: '\u6CE8\u518C', tfaHint: '\u68C0\u6D4B\u5230\u53CC\u91CD\u9A8C\u8BC1\uFF0C\u8BF7\u8F93\u5165\u9A8C\u8BC1\u7801\u540E\u91CD\u8BD5\u3002', alreadyHaveAccount: '\u5DF2\u6709\u8D26\u53F7\uFF1F\u53BB\u767B\u5F55', needAccount: '\u8FD8\u6CA1\u6709\u8D26\u53F7\uFF1F\u53BB\u6CE8\u518C' },
+  footer: { statement: '\u6811\u61D2\u4E91\u524D\u53F0\u3002\u771F\u5B9E\u8BA4\u8BC1\u3001\u76EE\u5F55\u3001\u7ED3\u7B97\u94FE\u8DEF\u5DF2\u901A\u8FC7\u8FB9\u7F18 BFF \u63A5\u5165\u3002' },
 };
+
+const zhTw: TextContent = {
+  ...zhCn,
+  nav: { home: '\u9996\u9801', catalog: '\u5546\u5E97', cart: '\u8CFC\u7269\u8ECA', checkout: '\u7D50\u7B97', services: '\u670D\u52D9', invoices: '\u5E33\u55AE', login: '\u767B\u5165', register: '\u8A3B\u518A', logout: '\u767B\u51FA' },
+  common: { ...zhCn.common, loading: '\u6B63\u5728\u8F09\u5165\u6A39\u61F6\u96F2\u8CC7\u6599...', products: '\u500B\u7522\u54C1', customBilling: '\u81EA\u8A02\u9031\u671F' },
+  home: { ...zhCn.home, title: '\u66F4\u50CF\u5C08\u696D VPS \u670D\u52D9\u5546\uFF0C\u800C\u4E0D\u662F\u9810\u8A2D\u9762\u677F\u76AE\u819A' },
+};
+
+const deDe: TextContent = { ...enUs, nav: { ...enUs.nav, home: 'Start', catalog: 'Shop', cart: 'Warenkorb', checkout: 'Kasse', services: 'Dienste', invoices: 'Rechnungen', login: 'Anmelden', register: 'Registrieren', logout: 'Abmelden' }, home: { ...enUs.home, title: 'Wie ein professioneller VPS-Anbieter, nicht wie ein Standard-Panel', subtitle: 'Moderne Kundenerfahrung mit Headless Billing Core und BFF.' } };
+const frFr: TextContent = { ...enUs, nav: { ...enUs.nav, home: 'Accueil', catalog: 'Boutique', cart: 'Panier', checkout: 'Paiement', services: 'Services', invoices: 'Factures', login: 'Connexion', register: 'Inscription', logout: 'Deconnexion' }, home: { ...enUs.home, title: 'Une vitrine VPS pro, pas un theme de panel par defaut', subtitle: 'Experience moderne basee sur un coeur de facturation headless.' } };
+const esEs: TextContent = { ...enUs, nav: { ...enUs.nav, home: 'Inicio', catalog: 'Tienda', cart: 'Carrito', checkout: 'Pago', services: 'Servicios', invoices: 'Facturas', login: 'Entrar', register: 'Registro', logout: 'Salir' }, home: { ...enUs.home, title: 'Como un proveedor VPS profesional, no un panel basico', subtitle: 'Experiencia moderna con facturacion headless y BFF de borde.' } };
+const koKr: TextContent = { ...enUs, nav: { ...enUs.nav, home: '\uD648', catalog: '\uC2A4\uD1A0\uC5B4', cart: '\uC7A5\uBC14\uAD6C\uB2C8', checkout: '\uACB0\uC81C', services: '\uC11C\uBE44\uC2A4', invoices: '\uCCAD\uAD6C\uC11C', login: '\uB85C\uADF8\uC778', register: '\uD68C\uC6D0\uAC00\uC785', logout: '\uB85C\uADF8\uC544\uC6C3' }, home: { ...enUs.home, title: '\uAE30\uBCF8 \uD328\uB110\uC774 \uC544\uB2CC \uC804\uBB38 VPS \uC2A4\uD1A0\uC5B4', subtitle: '\uD5E4\uB4DC\uB9AC\uC2A4 \uACFC\uAE08 \uCF54\uC5B4\uC640 BFF \uAE30\uBC18 \uACBD\uD5D8' } };
 
 export const content: Record<Locale, TextContent> = {
   'zh-CN': zhCn,
-  'zh-TW': {
-    ...zhCn,
-    nav: {
-      home: '首頁',
-      catalog: '商店',
-      login: '登入',
-      register: '註冊',
-      account: '控制台',
-      logout: '退出',
-    },
-    common: {
-      ...zhCn.common,
-      loading: '正在載入樹懶雲資料...',
-      backToCatalog: '返回商店',
-      loginRequired: '登入後繼續',
-      stock: '庫存',
-      products: '個產品',
-      defaultPlan: '預設方案',
-      customBilling: '自定義計費',
-      pending: '待補充',
-      slug: '標識',
-      allowQuantity: '數量模式',
-      perUserLimit: '單用戶限制',
-    },
-    home: {
-      ...zhCn.home,
-      kicker: '樹懶雲 Headless 客戶端',
-      title: '更像專業 VPS 服務商，而不是預設面板皮膚',
-      subtitle: '品牌前台、商品展示和用戶認證都由我們的 Web 與 BFF 接管，Paymenter 退回後方做計費引擎。',
-      primaryCta: '進入商店',
-      secondaryCta: '立即登入',
-      featuredSubtitle: '這些卡片來自新的 Headless 商品接口。',
-      categorySubtitle: '分類、產品和價格不再綁定舊的 Livewire 前端。',
-    },
-    catalog: {
-      ...zhCn.catalog,
-      title: '商店 / 分類',
-      subtitle: '按分類瀏覽真實商品，價格與週期均來自新的 Paymenter Headless API。',
-      allProducts: '全部產品',
-      noProducts: '當前分類下還沒有可售商品。',
-    },
-    product: {
-      ...zhCn.product,
-      summary: '購買概覽',
-      plans: '計費週期',
-      config: '購買配置',
-      os: '作業系統',
-      details: '產品詳情',
-      loginHint: '登入後即可繼續接入下單鏈路。',
-      configEmpty: '該商品當前沒有額外配置項。',
-      checkoutPending: '下一步將接入真實結算與下單接口，這一版先完成真實認證與真實目錄資料。',
-    },
-    auth: {
-      ...zhCn.auth,
-      loginTitle: '登入樹懶雲',
-      loginSubtitle: '透過 Paymenter Headless 認證接口取得真實訪問令牌。',
-      registerTitle: '建立樹懶雲帳號',
-      registerSubtitle: '註冊成功後將直接返回真實可用令牌。',
-      email: '信箱',
-      password: '密碼',
-      code: '兩步驗證碼',
-      firstName: '名字',
-      lastName: '姓氏',
-      passwordConfirmation: '確認密碼',
-      submitLogin: '登入',
-      submitRegister: '建立帳號',
-      tfaHint: '檢測到兩步驗證，請補充驗證碼後再次提交。',
-      alreadyHaveAccount: '已有帳號？去登入',
-      needAccount: '還沒有帳號？去註冊',
-    },
-    footer: {
-      statement: '樹懶雲前台。真實認證與真實商品資料已經透過邊緣 BFF 接入。',
-    },
-  },
+  'zh-TW': zhTw,
   'en-US': enUs,
-  'de-DE': { ...enUs },
-  'fr-FR': { ...enUs },
-  'es-ES': { ...enUs },
-  'ko-KR': { ...enUs },
+  'de-DE': deDe,
+  'fr-FR': frFr,
+  'es-ES': esEs,
+  'ko-KR': koKr,
 };

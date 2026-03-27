@@ -3,63 +3,46 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { requestJson } from './api';
 import type { AuthResponse, AuthUser, LoginInput, LogoutResponse, MeResponse, RegisterInput } from './types';
 
-const TOKEN_STORAGE_KEY = 'sloth-cloud-access-token';
-
 interface AuthContextValue {
   isAuthenticated: boolean;
   loading: boolean;
-  token: string | null;
   user: AuthUser | null;
   login: (payload: LoginInput) => Promise<AuthResponse>;
   logout: () => Promise<void>;
   register: (payload: RegisterInput) => Promise<AuthResponse>;
+  refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => window.localStorage.getItem(TOKEN_STORAGE_KEY));
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState<boolean>(Boolean(window.localStorage.getItem(TOKEN_STORAGE_KEY)));
+  const [loading, setLoading] = useState(true);
+
+  async function refresh() {
+    try {
+      const response = await requestJson<MeResponse>('/api/v1/auth/me');
+      setUser(response.data.user);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    requestJson<MeResponse>('/api/v1/auth/me', {
-      token,
-    })
-      .then((response) => {
-        setUser(response.data.user);
-      })
-      .catch(() => {
-        window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-        setToken(null);
-        setUser(null);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [token]);
+    void refresh();
+  }, []);
 
   const value = useMemo<AuthContextValue>(() => ({
-    isAuthenticated: Boolean(token && user),
+    isAuthenticated: Boolean(user),
     loading,
-    token,
     user,
     async login(payload) {
       const response = await requestJson<AuthResponse>('/api/v1/auth/login', {
         method: 'POST',
         body: payload,
       });
-
-      window.localStorage.setItem(TOKEN_STORAGE_KEY, response.data.accessToken);
-      setToken(response.data.accessToken);
       setUser(response.data.user);
 
       return response;
@@ -69,26 +52,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         body: payload,
       });
-
-      window.localStorage.setItem(TOKEN_STORAGE_KEY, response.data.accessToken);
-      setToken(response.data.accessToken);
       setUser(response.data.user);
 
       return response;
     },
     async logout() {
-      if (token) {
-        await requestJson<LogoutResponse>('/api/v1/auth/logout', {
-          method: 'POST',
-          token,
-        }).catch(() => undefined);
-      }
+      await requestJson<LogoutResponse>('/api/v1/auth/logout', {
+        method: 'POST',
+      }).catch(() => undefined);
 
-      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-      setToken(null);
       setUser(null);
     },
-  }), [loading, token, user]);
+    refresh,
+  }), [loading, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

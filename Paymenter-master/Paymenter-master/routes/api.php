@@ -1,7 +1,11 @@
 <?php
 
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\Cart\CartController;
 use App\Http\Controllers\Api\V1\Catalog\CatalogController;
+use App\Http\Controllers\Api\V1\Checkout\CheckoutController;
+use App\Http\Controllers\Api\V1\Invoices\InvoiceController as HeadlessInvoiceController;
+use App\Http\Controllers\Api\V1\Services\ServiceController as HeadlessServiceController;
 use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\CreditController;
 use App\Http\Controllers\Api\Admin\InvoiceController;
@@ -38,6 +42,27 @@ Route::prefix('v1')->group(function () {
         Route::get('/categories', [CatalogController::class, 'categories']);
         Route::get('/products', [CatalogController::class, 'products']);
         Route::get('/products/{product:slug}', [CatalogController::class, 'product']);
+    });
+
+    Route::middleware('auth:api')->group(function () {
+        Route::get('/cart', [CartController::class, 'show']);
+        Route::post('/cart/items', [CartController::class, 'storeItem']);
+        Route::patch('/cart/items/{item}', [CartController::class, 'updateItem']);
+        Route::delete('/cart/items/{item}', [CartController::class, 'destroyItem']);
+        Route::post('/cart/coupon', [CartController::class, 'applyCoupon']);
+        Route::delete('/cart/coupon', [CartController::class, 'removeCoupon']);
+
+        Route::post('/checkout', [CheckoutController::class, 'store']);
+
+        Route::get('/services', [HeadlessServiceController::class, 'index']);
+        Route::get('/services/{service}', [HeadlessServiceController::class, 'show']);
+        Route::patch('/services/{service}/label', [HeadlessServiceController::class, 'updateLabel']);
+        Route::post('/services/{service}/cancel', [HeadlessServiceController::class, 'cancel']);
+        Route::post('/services/{service}/actions/{action}', [HeadlessServiceController::class, 'action']);
+
+        Route::get('/invoices', [HeadlessInvoiceController::class, 'index']);
+        Route::get('/invoices/{invoice}', [HeadlessInvoiceController::class, 'show']);
+        Route::post('/invoices/{invoice}/pay', [HeadlessInvoiceController::class, 'pay']);
     });
 });
 

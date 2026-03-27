@@ -13,16 +13,25 @@ export function AppShell() {
     <div className="shell">
       <header className="topbar">
         <Link className="brand" to="/">
-          <span className="brand-mark">SC</span>
+          <span className="brand-mark" aria-hidden="true">
+            懒
+          </span>
           <span>
-            <strong>Sloth Cloud</strong>
-            <small>树懒云</small>
+            <strong>树懒云</strong>
+            <small>Sloth Cloud</small>
           </span>
         </Link>
 
         <nav className="nav-links">
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/">{text.nav.home}</NavLink>
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/catalog">{text.nav.catalog}</NavLink>
+          {isAuthenticated ? (
+            <>
+              <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/checkout">{text.nav.checkout}</NavLink>
+              <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/services">{text.nav.services}</NavLink>
+              <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/invoices">{text.nav.invoices}</NavLink>
+            </>
+          ) : null}
           {!loading && !isAuthenticated ? (
             <>
               <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/login">{text.nav.login}</NavLink>

@@ -43,7 +43,7 @@ class Currency extends Model
             'name' => 'Japanese Yen',
             'prefix' => '¥',
             'suffix' => '',
-            'format' => '1,000.00',
+            'format' => '1,000',
         ],
         [
             'code' => 'SGD',
@@ -72,10 +72,6 @@ class Currency extends Model
 
     public static function ensureBaseline(): void
     {
-        if (static::query()->count() > 0) {
-            return;
-        }
-
         static::query()->upsert(static::BASELINE, ['code'], ['name', 'prefix', 'suffix', 'format']);
         Cache::flush();
     }
@@ -111,19 +107,17 @@ class Currency extends Model
         return new Builders\CacheableBuilder($query);
     }
 
-    // Clear cache when model is updated, created, or deleted
     protected static function booted()
     {
-        // Currencies change infrequently, so we can clear the entire cache on changes
-        static::created(function ($currency) {
+        static::created(function () {
             Cache::flush();
         });
 
-        static::saved(function ($currency) {
+        static::saved(function () {
             Cache::flush();
         });
 
-        static::deleted(function ($currency) {
+        static::deleted(function () {
             Cache::flush();
         });
     }

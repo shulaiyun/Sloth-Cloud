@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-import { useApiData } from '../lib/api';
+import { ApiError, requestJson, useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { useSite } from '../lib/site-context';
-import type { ConfigOption, ProductDetailResponse } from '../lib/types';
+import type { CheckoutField, ConfigOption, ProductDetailResponse } from '../lib/types';
 
 function optionDelta(option: ConfigOption, currentValue: string | null | undefined, planId: string | undefined) {
   if (!planId || option.children.length === 0) {
@@ -25,9 +25,26 @@ function cycleLabel(period: number | null, unit: string | null, fallback: string
   return `${period} ${unit}`;
 }
 
+function isOptionSelectable(option: ConfigOption) {
+  return ['select', 'radio'].includes(option.type);
+}
+
+function normalizeCheckoutValue(field: CheckoutField, value: string) {
+  if (field.type === 'number') {
+    return value.length > 0 ? Number(value) : null;
+  }
+
+  if (field.type === 'checkbox') {
+    return value === '1';
+  }
+
+  return value;
+}
+
 export function ProductPage() {
   const { productSlug } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const { text, formatMoney } = useSite();
   const { isAuthenticated } = useAuth();
   const { data, error, loading } = useApiData<ProductDetailResponse>(
@@ -35,6 +52,10 @@ export function ProductPage() {
   );
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [formState, setFormState] = useState<Record<string, string | null>>({});
+  const [checkoutForm, setCheckoutForm] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
   const product = data?.data ?? null;
   const extraOptions = useMemo(() => {
@@ -52,7 +73,14 @@ export function ProductPage() {
     }
 
     setSelectedPlanId(product.plans[0]?.id ?? '');
-    setFormState(Object.fromEntries(product.configOptions.map((option) => [option.id, option.children[0]?.id ?? null])));
+    setFormState(Object.fromEntries(
+      product.configOptions
+        .filter(isOptionSelectable)
+        .map((option) => [option.id, option.children[0]?.id ?? null]),
+    ));
+    setCheckoutForm(Object.fromEntries(
+      product.checkoutFields.map((field) => [field.name, field.default === null ? '' : String(field.default)]),
+    ));
   }, [product]);
 
   const selectedPlan = useMemo(
@@ -72,6 +100,49 @@ export function ProductPage() {
 
     return basePrice + configTotal;
   }, [formState, product, selectedPlan]);
+
+  async function addToCart() {
+    if (!product || !selectedPlan) {
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+
+    try {
+      const configOptions = Object.fromEntries(
+        Object.entries(formState).filter(([, value]) => value !== null && value !== ''),
+      );
+      const checkoutConfig = Object.fromEntries(
+        Object.entries(checkoutForm).map(([key, value]) => {
+          const field = product.checkoutFields.find((entry) => entry.name === key);
+          if (!field) {
+            return [key, value];
+          }
+
+          return [key, normalizeCheckoutValue(field, value)];
+        }),
+      );
+
+      await requestJson('/api/v1/cart/items', {
+        method: 'POST',
+        body: {
+          productSlug: product.slug,
+          planId: selectedPlan.id,
+          quantity: 1,
+          configOptions,
+          checkoutConfig,
+        },
+      });
+
+      setSubmitSuccess(text.product.addSuccess);
+    } catch (caughtError) {
+      setSubmitError((caughtError as ApiError).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
@@ -107,8 +178,17 @@ export function ProductPage() {
               {text.common.loginRequired}
             </Link>
           ) : (
-            <div className="callout compact">{text.product.checkoutPending}</div>
+            <div className="stack-12">
+              <button className="button primary" disabled={submitting} type="button" onClick={() => void addToCart()}>
+                {submitting ? `${text.product.addToCart}...` : text.product.addToCart}
+              </button>
+              <button className="button secondary" type="button" onClick={() => navigate('/checkout')}>
+                {text.product.goCheckout}
+              </button>
+            </div>
           )}
+          {submitSuccess ? <div className="callout compact">{submitSuccess}</div> : null}
+          {submitError ? <div className="error-card compact">{submitError}</div> : null}
         </aside>
       </section>
 
@@ -133,73 +213,69 @@ export function ProductPage() {
             ))}
           </div>
 
-          {product.operatingSystemOptions.length > 0 ? (
-            <div className="stack-16">
-              <div>
-                <p className="eyebrow">{text.product.os}</p>
-                <h2>{text.product.config}</h2>
+          {[...product.operatingSystemOptions, ...extraOptions].map((option) => (
+            <div className="option-card" key={option.id}>
+              <div className="stack-8">
+                <strong>{option.name}</strong>
+                <p className="muted">{option.description}</p>
               </div>
-              {product.operatingSystemOptions.map((option) => (
-                <div className="option-card" key={option.id}>
-                  <div className="stack-8">
-                    <strong>{option.name}</strong>
-                    <p className="muted">{option.description}</p>
-                  </div>
-                  <div className="choice-grid">
-                    {option.children.map((choice) => (
-                      <button
-                        className={`choice-card compact ${formState[option.id] === choice.id ? 'selected' : ''}`}
-                        key={choice.id}
-                        type="button"
-                        onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
-                      >
-                        <strong>{choice.name}</strong>
-                        {choice.description ? <span>{choice.description}</span> : null}
-                      </button>
-                    ))}
-                  </div>
+              {option.children.length > 0 ? (
+                <div className="choice-grid">
+                  {option.children.map((choice) => (
+                    <button
+                      className={`choice-card compact ${formState[option.id] === choice.id ? 'selected' : ''}`}
+                      key={`${option.id}-${choice.id}`}
+                      type="button"
+                      onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
+                    >
+                      <strong>{choice.name}</strong>
+                      {choice.description ? <span>{choice.description}</span> : null}
+                      {selectedPlan ? (
+                        <small>
+                          + {formatMoney(
+                            choice.pricing.find((entry) => entry.planId === selectedPlan.id)?.price ?? 0,
+                            selectedPlan.prices[0]?.currencyCode ?? 'USD',
+                          )}
+                        </small>
+                      ) : null}
+                    </button>
+                  ))}
                 </div>
+              ) : <p className="muted">{text.product.configEmpty}</p>}
+            </div>
+          ))}
+
+          {product.checkoutFields.length > 0 ? (
+            <div className="stack-16">
+              <p className="eyebrow">{text.product.config}</p>
+              {product.checkoutFields.map((field) => (
+                <label className="field" key={field.name}>
+                  <span>{field.label}</span>
+                  {field.type === 'select' ? (
+                    <select
+                      className="text-input"
+                      value={checkoutForm[field.name] ?? ''}
+                      onChange={(event) => setCheckoutForm((state) => ({ ...state, [field.name]: event.target.value }))}
+                    >
+                      <option value="">-</option>
+                      {field.options.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="text-input"
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      required={field.required}
+                      placeholder={field.placeholder ?? ''}
+                      value={checkoutForm[field.name] ?? ''}
+                      onChange={(event) => setCheckoutForm((state) => ({ ...state, [field.name]: event.target.value }))}
+                    />
+                  )}
+                </label>
               ))}
             </div>
           ) : null}
-
-          {extraOptions.length === 0 ? (
-            <div className="callout">{text.product.configEmpty}</div>
-          ) : (
-            <div className="stack-16">
-              {extraOptions.map((option) => (
-                <div className="option-card" key={option.id}>
-                  <div className="stack-8">
-                    <strong>{option.name}</strong>
-                    <p className="muted">{option.description}</p>
-                  </div>
-                  {option.children.length > 0 ? (
-                    <div className="choice-grid">
-                      {option.children.map((choice) => (
-                        <button
-                          className={`choice-card compact ${formState[option.id] === choice.id ? 'selected' : ''}`}
-                          key={`${option.id}-${choice.id}`}
-                          type="button"
-                          onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
-                        >
-                          <strong>{choice.name}</strong>
-                          {choice.description ? <span>{choice.description}</span> : null}
-                          {selectedPlan ? (
-                            <small>
-                              + {formatMoney(
-                                choice.pricing.find((entry) => entry.planId === selectedPlan.id)?.price ?? 0,
-                                selectedPlan.prices[0]?.currencyCode ?? 'USD',
-                              )}
-                            </small>
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : <p className="muted">{text.product.configEmpty}</p>}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="stack-20">
@@ -207,7 +283,7 @@ export function ProductPage() {
             <p className="eyebrow">{text.product.details}</p>
             <div className="bullet-list">
               <span>{text.common.slug}: {product.slug}</span>
-              <span>{text.common.allowQuantity}: {product.allowQuantity ? text.common.yes : text.common.no}</span>
+              <span>{text.common.allowQuantity}: {(product.allowQuantityMode ?? 'disabled') !== 'disabled' ? text.common.yes : text.common.no}</span>
               <span>{text.common.perUserLimit}: {product.perUserLimit ?? '-'}</span>
               <span>{text.product.loginHint}</span>
             </div>
