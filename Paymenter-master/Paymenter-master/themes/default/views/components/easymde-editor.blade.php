@@ -1,5 +1,5 @@
 @once
-    @vite('themes/' . config('settings.theme') . '/js/easymde-entry.js', config('settings.theme'))
+    @vite('themes/' . config('settings.theme', 'default') . '/js/easymde-entry.js', config('settings.theme', 'default'))
 @endonce
 
 @script

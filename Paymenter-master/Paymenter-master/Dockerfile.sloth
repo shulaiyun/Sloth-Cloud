@@ -39,8 +39,9 @@ COPY . .
 COPY --from=composer_deps /app/vendor /app/vendor
 
 RUN npm run build \
+    && if [ -d /app/public/build/default ]; then cp -R /app/public/build/default/. /app/public/build/; fi \
     && test -d /app/public/build \
-    && (test -f /app/public/build/manifest.json || test -f /app/public/build/default/manifest.json)
+    && test -f /app/public/build/manifest.json
 
 FROM php:8.3-fpm-alpine AS runtime
 
@@ -87,7 +88,7 @@ COPY docker/sloth/supervisord.conf /etc/supervisord.conf
 COPY docker/sloth/entrypoint.sh /entrypoint.sh
 
 RUN test -d /var/www/html/public/build \
-    && (test -f /var/www/html/public/build/manifest.json || test -f /var/www/html/public/build/default/manifest.json) \
+    && test -f /var/www/html/public/build/manifest.json \
     && rm -f /usr/local/etc/php-fpm.d/www.conf \
     && chmod +x /entrypoint.sh \
     && chown -R www-data:www-data /var/www/html
