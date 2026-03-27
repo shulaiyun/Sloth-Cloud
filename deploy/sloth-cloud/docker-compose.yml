@@ -1,0 +1,77 @@
+services:
+  sloth-cloud-db:
+    image: mariadb:lts
+    container_name: sloth-cloud-db
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: slothcloud_paymenter
+      MYSQL_USER: slothcloud
+      MYSQL_PASSWORD: ${SLOTH_DB_PASSWORD:-replace-with-strong-password}
+      MYSQL_ROOT_PASSWORD: ${SLOTH_DB_ROOT_PASSWORD:-replace-with-even-stronger-password}
+    volumes:
+      - ../../runtime/data/mariadb:/var/lib/mysql
+    networks:
+      - sloth-cloud-net
+
+  sloth-cloud-redis:
+    image: redis:7-alpine
+    container_name: sloth-cloud-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ../../runtime/data/redis:/data
+    networks:
+      - sloth-cloud-net
+
+  sloth-cloud-paymenter:
+    build:
+      context: ../../Paymenter-master/Paymenter-master
+      dockerfile: Dockerfile.sloth
+    container_name: sloth-cloud-paymenter
+    restart: unless-stopped
+    depends_on:
+      - sloth-cloud-db
+      - sloth-cloud-redis
+    ports:
+      - "127.0.0.1:${SLOTH_PAYMENTER_PORT:-18080}:80"
+    volumes:
+      - ../../runtime/env/paymenter.env:/var/www/html/.env
+      - ../../runtime/data/paymenter/storage:/var/www/html/storage
+    networks:
+      - sloth-cloud-net
+
+  sloth-cloud-api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: sloth-cloud-api
+    restart: unless-stopped
+    depends_on:
+      - sloth-cloud-paymenter
+    ports:
+      - "127.0.0.1:${SLOTH_API_PORT:-14000}:4000"
+    volumes:
+      - ../../runtime/env/api.env:/app/apps/api/.env
+    networks:
+      - sloth-cloud-net
+
+  sloth-cloud-web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${SLOTH_API_PUBLIC_URL}
+    container_name: sloth-cloud-web
+    restart: unless-stopped
+    depends_on:
+      - sloth-cloud-api
+    ports:
+      - "127.0.0.1:${SLOTH_WEB_PORT:-13000}:80"
+    networks:
+      - sloth-cloud-net
+
+networks:
+  sloth-cloud-net:
+    name: sloth-cloud-net
+    driver: bridge
