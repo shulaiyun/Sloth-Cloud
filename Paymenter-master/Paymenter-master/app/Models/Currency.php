@@ -43,7 +43,7 @@ class Currency extends Model
             'name' => 'Japanese Yen',
             'prefix' => '¥',
             'suffix' => '',
-            'format' => '1,000',
+            'format' => '1,000.00',
         ],
         [
             'code' => 'SGD',
