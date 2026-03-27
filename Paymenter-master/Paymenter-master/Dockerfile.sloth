@@ -1,6 +1,22 @@
-FROM composer:2.8 AS composer_deps
+FROM php:8.3-cli-alpine AS composer_deps
 
 WORKDIR /app
+
+RUN apk add --no-cache \
+    bash \
+    git \
+    unzip \
+    icu-dev \
+    libzip-dev \
+    gmp-dev \
+    oniguruma-dev \
+    linux-headers \
+    $PHPIZE_DEPS \
+    && docker-php-ext-configure zip \
+    && docker-php-ext-install intl pdo_mysql zip gmp mbstring \
+    && apk del $PHPIZE_DEPS
+
+COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
 
 COPY composer.json composer.lock ./
 
@@ -43,7 +59,7 @@ RUN apk add --no-cache \
     linux-headers \
     $PHPIZE_DEPS \
     && docker-php-ext-configure zip \
-    && docker-php-ext-install bcmath gd intl pdo_mysql sockets zip gmp \
+    && docker-php-ext-install bcmath gd intl pdo_mysql sockets zip gmp mbstring \
     && pecl install redis \
     && docker-php-ext-enable redis \
     && apk del $PHPIZE_DEPS \
