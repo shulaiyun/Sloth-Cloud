@@ -194,6 +194,10 @@ function buildPaymenterUrl(config: GatewayConfig, path: string) {
 }
 
 function extractErrorMessage(payload: unknown, statusCode: number) {
+  if (statusCode >= 500) {
+    return 'Billing upstream is temporarily unavailable. Please try again in a moment.';
+  }
+
   const record = asRecord(payload);
   const validationErrors = asRecord(record.errors);
   const firstValidationEntry = Object.values(validationErrors)[0];
@@ -211,6 +215,19 @@ function extractErrorMessage(payload: unknown, statusCode: number) {
   }
 
   return `Paymenter request failed with status ${statusCode}.`;
+}
+
+function isMissingRouteError(payload: unknown) {
+  const record = asRecord(payload);
+  const message = readString(record.message).toLowerCase();
+
+  return message.includes('route') && message.includes('could not be found');
+}
+
+function routeMissingMessage(path: string) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+
+  return `Paymenter upstream route is missing (${normalizedPath}). Rebuild and redeploy the Sloth Paymenter image, then clear route cache.`;
 }
 
 async function requestPaymenter<T>(
@@ -250,6 +267,10 @@ async function requestPaymenter<T>(
       : await response.text();
 
     if (!response.ok) {
+      if (response.status === 404 && isMissingRouteError(payload)) {
+        throw new GatewayError(routeMissingMessage(path), 502, payload);
+      }
+
       throw new GatewayError(extractErrorMessage(payload, response.status), response.status, payload);
     }
 

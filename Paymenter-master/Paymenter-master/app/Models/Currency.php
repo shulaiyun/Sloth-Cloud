@@ -3,11 +3,18 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
 
 class Currency extends Model
 {
     use HasFactory;
+
+    private const SUPPORTED_FORMATS = ['1.000,00', '1,000.00', '1 000,00', '1 000.00'];
+
+    private const FALLBACK_FORMAT = '1,000.00';
+
+    private static bool $baselineEnsured = false;
 
     public const BASELINE = [
         [
@@ -20,14 +27,14 @@ class Currency extends Model
         [
             'code' => 'CNY',
             'name' => 'Chinese Yuan',
-            'prefix' => '¥',
+            'prefix' => 'CNY ',
             'suffix' => '',
             'format' => '1,000.00',
         ],
         [
             'code' => 'EUR',
             'name' => 'Euro',
-            'prefix' => '€',
+            'prefix' => 'EUR ',
             'suffix' => '',
             'format' => '1,000.00',
         ],
@@ -41,9 +48,9 @@ class Currency extends Model
         [
             'code' => 'JPY',
             'name' => 'Japanese Yen',
-            'prefix' => '¥',
+            'prefix' => 'JPY ',
             'suffix' => '',
-            'format' => '1,000',
+            'format' => '1,000.00',
         ],
         [
             'code' => 'SGD',
@@ -70,10 +77,83 @@ class Currency extends Model
         'format',
     ];
 
+    private static function normalizeBaselineCurrency(array $currency): array
+    {
+        $code = strtoupper(trim((string) ($currency['code'] ?? '')));
+        $name = trim((string) ($currency['name'] ?? $code));
+        $prefix = (string) ($currency['prefix'] ?? '');
+        $suffix = (string) ($currency['suffix'] ?? '');
+        $format = (string) ($currency['format'] ?? self::FALLBACK_FORMAT);
+
+        if (!in_array($format, self::SUPPORTED_FORMATS, true)) {
+            $format = self::FALLBACK_FORMAT;
+        }
+
+        return [
+            'code' => $code,
+            'name' => $name !== '' ? $name : $code,
+            'prefix' => $prefix,
+            'suffix' => $suffix,
+            'format' => $format,
+        ];
+    }
+
     public static function ensureBaseline(): void
     {
-        static::query()->upsert(static::BASELINE, ['code'], ['name', 'prefix', 'suffix', 'format']);
-        Cache::flush();
+        if (self::$baselineEnsured) {
+            return;
+        }
+
+        $changed = false;
+
+        foreach (static::BASELINE as $currency) {
+            $payload = static::normalizeBaselineCurrency($currency);
+            if ($payload['code'] === '') {
+                continue;
+            }
+
+            $existing = static::query()->whereKey($payload['code'])->first();
+
+            if (!$existing) {
+                try {
+                    static::query()->create($payload);
+                } catch (QueryException $exception) {
+                    $message = strtolower($exception->getMessage());
+                    if (!str_contains($message, 'format')) {
+                        throw $exception;
+                    }
+
+                    // Guard against legacy / malformed format strings in old deployments.
+                    $payload['format'] = self::FALLBACK_FORMAT;
+                    static::query()->create($payload);
+                }
+
+                $changed = true;
+                continue;
+            }
+
+            $updates = [];
+
+            if (!is_string($existing->name) || trim($existing->name) === '') {
+                $updates['name'] = $payload['name'];
+            }
+
+            if (!in_array((string) $existing->format, self::SUPPORTED_FORMATS, true)) {
+                $updates['format'] = self::FALLBACK_FORMAT;
+            }
+
+            if ($updates !== []) {
+                $existing->fill($updates);
+                $existing->save();
+                $changed = true;
+            }
+        }
+
+        if ($changed) {
+            Cache::flush();
+        }
+
+        self::$baselineEnsured = true;
     }
 
     public static function codeOptions(array $excluded = []): array
