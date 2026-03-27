@@ -21,6 +21,29 @@ if (!function_exists('active_theme')) {
     }
 }
 
+if (!function_exists('theme_build_directory')) {
+    /**
+     * Resolve the Vite build directory that actually exists on disk.
+     */
+    function theme_build_directory(): string
+    {
+        $activeTheme = active_theme();
+        $candidates = array_unique([
+            $activeTheme,
+            'default',
+            'build',
+        ]);
+
+        foreach ($candidates as $candidate) {
+            if (file_exists(public_path($candidate . '/manifest.json'))) {
+                return $candidate;
+            }
+        }
+
+        return 'build';
+    }
+}
+
 if (!function_exists('theme')) {
     /**
      * Get the specified configuration value.

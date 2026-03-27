@@ -1,6 +1,7 @@
 @once
 @php($activeTheme = active_theme())
-@vite('themes/' . $activeTheme . '/js/easymde-entry.js', $activeTheme)
+@php($themeBuildDirectory = theme_build_directory())
+@vite('themes/' . $activeTheme . '/js/easymde-entry.js', $themeBuildDirectory)
 @endonce
 
 @script

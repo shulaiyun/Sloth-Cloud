@@ -13,10 +13,11 @@
     </title>
     @livewireStyles
     @php($activeTheme = active_theme())
+    @php($themeBuildDirectory = theme_build_directory())
     @vite([
         'themes/' . $activeTheme . '/js/app.js',
         'themes/' . $activeTheme . '/css/app.css',
-    ], $activeTheme)
+    ], $themeBuildDirectory)
     @include('layouts.colors')
 
     @if (config('settings.favicon'))

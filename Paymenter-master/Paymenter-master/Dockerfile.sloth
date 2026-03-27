@@ -41,7 +41,8 @@ COPY --from=composer_deps /app/vendor /app/vendor
 RUN npm run build \
     && if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi \
     && if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi \
-    && (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json)
+    && (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json) \
+    && test -f /app/public/css/filament/admin/theme.css
 
 FROM php:8.3-fpm-alpine AS runtime
 
@@ -89,6 +90,7 @@ COPY docker/sloth/entrypoint.sh /entrypoint.sh
 RUN if [ -d /var/www/html/public/default ] && [ ! -f /var/www/html/public/build/manifest.json ]; then mkdir -p /var/www/html/public/build && cp -R /var/www/html/public/default/. /var/www/html/public/build/; fi \
     && if [ -d /var/www/html/public/build ] && [ ! -f /var/www/html/public/default/manifest.json ]; then mkdir -p /var/www/html/public/default && cp -R /var/www/html/public/build/. /var/www/html/public/default/; fi \
     && (test -f /var/www/html/public/default/manifest.json || test -f /var/www/html/public/build/manifest.json) \
+    && test -f /var/www/html/public/css/filament/admin/theme.css \
     && rm -f /usr/local/etc/php-fpm.d/www.conf \
     && chmod +x /entrypoint.sh \
     && chown -R www-data:www-data /var/www/html
