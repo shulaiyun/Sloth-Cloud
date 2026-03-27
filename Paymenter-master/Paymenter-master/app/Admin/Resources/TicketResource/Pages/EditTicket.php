@@ -178,7 +178,7 @@ class EditTicket extends EditRecord
                                         ->required(),
                                     Select::make('department')
                                         ->label('Department')
-                                        ->options(array_combine(config('settings.ticket_departments'), config('settings.ticket_departments'))),
+                                        ->options(TicketResource::ticketDepartmentOptions()),
                                     UserComponent::make('user_id'),
                                     Select::make('assigned_to')
                                         ->label('Assigned To')

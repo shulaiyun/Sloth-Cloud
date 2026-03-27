@@ -55,6 +55,21 @@ class TicketResource extends Resource
         return $record->subject;
     }
 
+    public static function ticketDepartments(): array
+    {
+        return array_values(array_filter(
+            (array) config('settings.ticket_departments', []),
+            fn ($department) => is_string($department) && trim($department) !== ''
+        ));
+    }
+
+    public static function ticketDepartmentOptions(): array
+    {
+        $departments = static::ticketDepartments();
+
+        return $departments === [] ? [] : array_combine($departments, $departments);
+    }
+
     public static function form(Schema $schema): Schema
     {
         return $schema
@@ -91,7 +106,7 @@ class TicketResource extends Resource
                     ->required(),
                 Select::make('department')
                     ->label('Department')
-                    ->options(array_combine(config('settings.ticket_departments'), config('settings.ticket_departments')))
+                    ->options(static::ticketDepartmentOptions())
                     ->columnSpan(function ($record) {
                         return $record ? 2 : 1;
                     }),
@@ -175,7 +190,7 @@ class TicketResource extends Resource
                         'high' => 'High',
                     ]),
                 SelectFilter::make('department')
-                    ->options(array_combine(config('settings.ticket_departments'), config('settings.ticket_departments')), config('settings.ticket_departments')),
+                    ->options(static::ticketDepartmentOptions()),
                 SelectFilter::make('assigned_to')
                     ->label('Assigned To')
                     ->relationship('user', 'id', fn (Builder $query) => $query->where('role_id', '!=', null))

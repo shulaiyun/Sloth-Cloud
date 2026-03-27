@@ -5,6 +5,7 @@ namespace App\Providers\Filament;
 use App\Http\Middleware\ImpersonateMiddleware;
 use App\Http\Middleware\LockSession;
 use App\Http\Middleware\ResolveUserSession;
+use App\Http\Middleware\SetLocale;
 use App\Models\Extension;
 use App\Providers\SettingsProvider;
 use Exception;
@@ -99,6 +100,7 @@ class AdminPanelProvider extends PanelProvider
                 StartSession::class,
                 ResolveUserSession::class,
                 LockSession::class,
+                SetLocale::class,
                 ImpersonateMiddleware::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
