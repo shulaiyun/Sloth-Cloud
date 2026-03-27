@@ -25,6 +25,28 @@ class Currency extends Model
         'format',
     ];
 
+    public static function codeOptions(array $excluded = []): array
+    {
+        $excluded = array_values(array_filter($excluded, fn ($code) => is_string($code) && $code !== ''));
+
+        return static::query()
+            ->when($excluded !== [], fn ($query) => $query->whereNotIn('code', $excluded))
+            ->orderBy('code')
+            ->pluck('code', 'code')
+            ->toArray();
+    }
+
+    public static function defaultCode(): ?string
+    {
+        $configured = config('settings.default_currency');
+
+        if (is_string($configured) && $configured !== '' && static::query()->whereKey($configured)->exists()) {
+            return $configured;
+        }
+
+        return static::query()->orderBy('code')->value('code');
+    }
+
     public function newEloquentBuilder($query)
     {
         return new Builders\CacheableBuilder($query);

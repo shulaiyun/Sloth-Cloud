@@ -83,7 +83,8 @@ class InvoiceResource extends Resource
                 Select::make('currency_code')
                     ->label('Currency')
                     ->required()
-                    ->relationship('currency', 'code')
+                    ->options(fn () => Currency::codeOptions())
+                    ->default(fn () => Currency::defaultCode())
                     ->placeholder('Select the currency'),
                 Toggle::make('send_email')
                     ->label('Send Email')

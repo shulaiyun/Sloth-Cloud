@@ -37,7 +37,7 @@ class ShowCredits extends ManageRelatedRecords
                     ->options(function () {
                         $existing_currencies = $this->getOwnerRecord()->credits->pluck('currency_code');
 
-                        return Currency::whereNotIn('code', $existing_currencies)->pluck('code', 'code');
+                        return Currency::codeOptions($existing_currencies->toArray());
                     })
                     ->live()
                     ->required(),
@@ -73,7 +73,7 @@ class ShowCredits extends ManageRelatedRecords
                 CreateAction::make()->disabled(function () {
                     $existing_currencies = $this->getOwnerRecord()->credits->pluck('currency_code');
 
-                    return count(Currency::whereNotIn('code', $existing_currencies)->pluck('code', 'code')) <= 0;
+                    return count(Currency::codeOptions($existing_currencies->toArray())) <= 0;
                 }),
             ])
             ->recordActions([

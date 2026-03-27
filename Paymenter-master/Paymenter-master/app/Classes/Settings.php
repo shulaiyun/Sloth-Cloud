@@ -22,10 +22,12 @@ class Settings
         try {
             // Only code is needed
             $currencies = once(function () {
-                return Currency::pluck('code')->toArray();
+                $currencies = Currency::pluck('code')->toArray();
+
+                return $currencies === [] ? ['USD'] : $currencies;
             });
         } catch (Exception $e) {
-            $currencies = [];
+            $currencies = ['USD'];
         }
         $settings = [
             // Split settings into groups (only used in the settings page for organization)

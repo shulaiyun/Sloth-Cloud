@@ -45,6 +45,7 @@ class GatewayResource extends Resource
     public static function form(Schema $schema): Schema
     {
         $gateways = ExtensionHelper::getExtensions('gateway');
+        $gatewayOptions = collect($gateways)->pluck('name', 'name')->toArray();
 
         return $schema
             ->components([
@@ -68,10 +69,7 @@ class GatewayResource extends Resource
                         ignoreRecord: true,
                         modifyRuleUsing: fn ($rule) => $rule->where('deleted_at', null)
                     )
-                    ->options(array_combine(
-                        array_column($gateways, 'name'),
-                        array_column($gateways, 'name')
-                    ))
+                    ->options($gatewayOptions)
                     ->live(onBlur: true)
                     ->afterStateUpdated(fn (Select $component) => $component
                         ->getContainer()

@@ -116,10 +116,11 @@ class ServiceResource extends Resource
                             return $code !== null;
                         });
 
-                        return Currency::whereNotIn('code', $pricing)->pluck('code', 'code');
+                        return Currency::codeOptions($pricing->toArray());
                     })
                     ->live()
-                    ->default(config('settings.default_currency'))
+                    ->helperText(fn () => Currency::codeOptions() === [] ? 'No currencies are available yet. The system will create USD automatically on startup.' : null)
+                    ->default(fn () => Currency::defaultCode())
                     ->required(),
                 TextInput::make('price')
                     ->required()

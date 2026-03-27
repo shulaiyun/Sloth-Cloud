@@ -47,6 +47,7 @@ class ServerResource extends Resource
     public static function form(Schema $schema): Schema
     {
         $servers = ExtensionHelper::getExtensions('server');
+        $serverOptions = collect($servers)->pluck('name', 'name')->toArray();
 
         return $schema
             ->components([
@@ -65,10 +66,7 @@ class ServerResource extends Resource
                     ->label('Server')
                     ->required()
                     ->searchable()
-                    ->options(array_combine(
-                        array_column($servers, 'name'),
-                        array_column($servers, 'name')
-                    ))
+                    ->options($serverOptions)
                     ->live(onBlur: true)
                     ->disabledOn('edit')
                     ->afterStateUpdated(fn (Select $component) => $component

@@ -22,6 +22,7 @@ chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R ug+rwX /var/www/html/storage /var/www/html/bootstrap/cache
 
 php /var/www/html/artisan storage:link >/dev/null 2>&1 || true
+php /var/www/html/artisan app:ensure-defaults >/dev/null 2>&1 || true
 php /var/www/html/artisan config:clear >/dev/null 2>&1 || true
 php /var/www/html/artisan route:clear >/dev/null 2>&1 || true
 php /var/www/html/artisan view:clear >/dev/null 2>&1 || true

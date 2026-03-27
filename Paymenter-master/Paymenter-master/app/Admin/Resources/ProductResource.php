@@ -248,7 +248,7 @@ class ProductResource extends Resource
                     ->reorderable(false)
                     ->relationship('prices')
                     ->columnSpanFull()
-                    ->maxItems(Currency::count())
+                    ->maxItems(fn () => max(1, count(Currency::codeOptions())))
                     ->defaultItems(1)
                     ->itemLabel(fn (array $state) => $state['currency_code'])
                     ->schema([
@@ -264,10 +264,11 @@ class ProductResource extends Resource
                                     return $code !== null;
                                 });
 
-                                return Currency::whereNotIn('code', $pricing)->pluck('code', 'code');
+                                return Currency::codeOptions($pricing->toArray());
                             })
                             ->live()
-                            ->default(config('settings.default_currency'))
+                            ->helperText(fn () => Currency::codeOptions() === [] ? 'No currencies are available yet. The system will create USD automatically on startup.' : null)
+                            ->default(fn () => Currency::defaultCode())
                             ->required(),
                         TextInput::make('price')
                             ->required()
