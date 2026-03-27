@@ -32,6 +32,21 @@ class ExtensionResource extends Resource
 
     protected static ?string $cluster = Extensions::class;
 
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.extension.navigation', 'Installed Extensions');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.extension.singular', 'Extension');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.extension.plural', 'Extensions');
+    }
+
     public static function getGloballySearchableAttributes(): array
     {
         return ['name'];

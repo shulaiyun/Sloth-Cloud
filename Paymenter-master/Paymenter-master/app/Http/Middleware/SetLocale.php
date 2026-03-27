@@ -10,10 +10,15 @@ class SetLocale
 {
     public function handle(Request $request, Closure $next)
     {
-        if (session()->has('locale')) {
-            $locale = session()->get('locale');
-            App::setLocale($locale);
+        $availableLocales = array_keys(config('app.available_locales', []));
+        $locale = session('locale', config('settings.app_language', config('app.locale')));
+
+        if (!is_string($locale) || !in_array($locale, $availableLocales, true)) {
+            $locale = config('app.locale');
         }
+
+        App::setLocale($locale);
+        session(['locale' => $locale]);
 
         return $next($request);
     }

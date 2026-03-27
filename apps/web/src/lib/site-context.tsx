@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-import { content, type Locale } from './content';
+import { content, localeMeta, type Locale } from './content';
 
 type Theme = 'dark' | 'light';
 
@@ -19,7 +19,7 @@ const SiteContext = createContext<SiteContextValue | null>(null);
 export function SiteProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocale] = useState<Locale>(() => {
     const value = window.localStorage.getItem('sloth-cloud-locale');
-    return value === 'en-US' ? 'en-US' : 'zh-CN';
+    return value && value in localeMeta ? (value as Locale) : 'zh-CN';
   });
   const [theme, setTheme] = useState<Theme>(() => {
     const value = window.localStorage.getItem('sloth-cloud-theme');
@@ -36,15 +36,17 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
     window.localStorage.setItem('sloth-cloud-theme', theme);
   }, [theme]);
 
+  const text = content[locale];
+
   const value = useMemo<SiteContextValue>(() => ({
     locale,
     setLocale,
     theme,
     setTheme,
-    text: content[locale],
+    text,
     formatMoney(number, currency) {
       if (number === null) {
-        return locale === 'zh-CN' ? '待补充' : 'Pending';
+        return text.common.pending;
       }
 
       return new Intl.NumberFormat(locale, {
@@ -55,7 +57,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
     },
     formatDate(dateString) {
       if (!dateString) {
-        return locale === 'zh-CN' ? '待补充' : 'Pending';
+        return text.common.pending;
       }
 
       return new Intl.DateTimeFormat(locale, {
@@ -64,7 +66,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         day: 'numeric',
       }).format(new Date(dateString));
     },
-  }), [locale, theme]);
+  }), [locale, text, theme]);
 
   return <SiteContext.Provider value={value}>{children}</SiteContext.Provider>;
 }

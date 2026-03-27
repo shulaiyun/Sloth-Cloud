@@ -9,6 +9,51 @@ class Currency extends Model
 {
     use HasFactory;
 
+    public const BASELINE = [
+        [
+            'code' => 'USD',
+            'name' => 'US Dollar',
+            'prefix' => '$',
+            'suffix' => '',
+            'format' => '1,000.00',
+        ],
+        [
+            'code' => 'CNY',
+            'name' => 'Chinese Yuan',
+            'prefix' => '¥',
+            'suffix' => '',
+            'format' => '1,000.00',
+        ],
+        [
+            'code' => 'EUR',
+            'name' => 'Euro',
+            'prefix' => '€',
+            'suffix' => '',
+            'format' => '1,000.00',
+        ],
+        [
+            'code' => 'HKD',
+            'name' => 'Hong Kong Dollar',
+            'prefix' => 'HK$',
+            'suffix' => '',
+            'format' => '1,000.00',
+        ],
+        [
+            'code' => 'JPY',
+            'name' => 'Japanese Yen',
+            'prefix' => '¥',
+            'suffix' => '',
+            'format' => '1,000',
+        ],
+        [
+            'code' => 'SGD',
+            'name' => 'Singapore Dollar',
+            'prefix' => 'S$',
+            'suffix' => '',
+            'format' => '1,000.00',
+        ],
+    ];
+
     public $timestamps = false;
 
     public $incrementing = false;
@@ -25,8 +70,20 @@ class Currency extends Model
         'format',
     ];
 
+    public static function ensureBaseline(): void
+    {
+        if (static::query()->count() > 0) {
+            return;
+        }
+
+        static::query()->upsert(static::BASELINE, ['code'], ['name', 'prefix', 'suffix', 'format']);
+        Cache::flush();
+    }
+
     public static function codeOptions(array $excluded = []): array
     {
+        static::ensureBaseline();
+
         $excluded = array_values(array_filter($excluded, fn ($code) => is_string($code) && $code !== ''));
 
         return static::query()
@@ -38,6 +95,8 @@ class Currency extends Model
 
     public static function defaultCode(): ?string
     {
+        static::ensureBaseline();
+
         $configured = config('settings.default_currency');
 
         if (is_string($configured) && $configured !== '' && static::query()->whereKey($configured)->exists()) {

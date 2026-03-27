@@ -28,13 +28,31 @@ class CategoryResource extends Resource
 {
     protected static ?string $model = Category::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Administration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-folder-6-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-folder-6-fill';
 
     protected static ?int $navigationSort = 1;
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.administration', 'Administration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.category.navigation', 'Categories');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.category.singular', 'Category');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.category.plural', 'Categories');
+    }
 
     public static function form(Schema $schema): Schema
     {

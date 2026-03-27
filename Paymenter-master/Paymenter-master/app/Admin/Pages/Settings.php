@@ -23,10 +23,6 @@ class Settings extends Page implements HasForms
 {
     use InteractsWithForms;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'System';
-
-    protected static ?string $title = 'Settings';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-settings-3-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-settings-3-fill';
@@ -53,7 +49,7 @@ class Settings extends Page implements HasForms
 
         foreach (ClassesSettings::settings() as $key => $categories) {
             $tab = Tab::make($key)
-                ->label(ucwords(str_replace('-', ' ', $key)))
+                ->label(admin_t('sloth-admin.settings_tabs.' . $key, ucwords(str_replace('-', ' ', $key))))
                 ->schema(function () use ($categories, $key) {
                     $inputs = [];
                     foreach ($categories as $setting) {
@@ -63,7 +59,7 @@ class Settings extends Page implements HasForms
                         // Add a reset colors button if there are color settings
                         array_unshift($inputs, Actions::make([
                             Action::make('resetColors')
-                                ->label('Reset Colors')
+                                ->label(admin_t('sloth-admin.actions.reset_colors', 'Reset Colors'))
                                 ->color('danger')
                                 ->requiresConfirmation()
                                 ->action(fn () => $this->resetColors()),
@@ -96,6 +92,7 @@ class Settings extends Page implements HasForms
                         Actions::make([
                             Action::make('save')
                                 ->submit('save')
+                                ->label(admin_t('sloth-admin.actions.save', 'Save'))
                                 ->keyBindings(['mod+s']),
                         ]),
                     ]),
@@ -139,7 +136,7 @@ class Settings extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Saved successfully!')
+            ->title(admin_t('sloth-admin.notifications.saved', 'Saved successfully!'))
             ->success()
             ->send();
     }
@@ -164,9 +161,24 @@ class Settings extends Page implements HasForms
         $this->form->fill($currentData);
 
         Notification::make()
-            ->title('Colors has been reset!')
+            ->title(admin_t('sloth-admin.notifications.colors_reset', 'Colors have been reset!'))
             ->success()
             ->send();
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.system', 'System');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.pages.settings', 'Settings');
+    }
+
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.pages.settings', 'Settings');
     }
 
     public static function canAccess(): bool

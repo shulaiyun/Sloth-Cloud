@@ -39,9 +39,6 @@ class Extension extends Page implements HasActions, HasTable
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-download-2-fill';
 
-    // Label for the navigation item
-    protected static ?string $navigationLabel = 'Available Extensions';
-
     #[Url(except: 'marketplace', as: 'tab')]
     public string $activeTab = 'marketplace';
 
@@ -219,5 +216,15 @@ class Extension extends Page implements HasActions, HasTable
     public static function canAccess(): bool
     {
         return Auth::user()->hasPermission('admin.extensions.viewAny') && Auth::user()->hasPermission('admin.extensions.install');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.pages.marketplace', 'Marketplace');
+    }
+
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.pages.marketplace', 'Marketplace');
     }
 }

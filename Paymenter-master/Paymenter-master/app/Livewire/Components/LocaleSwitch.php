@@ -18,6 +18,7 @@ class LocaleSwitch extends Component
     {
         $this->currentLocale = session('locale', config('app.locale'));
         $this->currentCurrency = session('currency', config('settings.default_currency'));
+        Currency::ensureBaseline();
         $this->currencies = Currency::all()->map(fn ($currency) => [
             'value' => $currency->code,
             'label' => $currency->name,
@@ -66,7 +67,15 @@ class LocaleSwitch extends Component
     public function render()
     {
         $locales = config('settings.allowed_languages');
+        $localeOptions = collect($locales)
+            ->filter(fn ($locale) => is_string($locale) && $locale !== '')
+            ->map(fn ($locale) => [
+                'value' => $locale,
+                'label' => locale_option_label($locale),
+            ])
+            ->values()
+            ->toArray();
 
-        return view('components.locale-switch', compact('locales'));
+        return view('components.locale-switch', compact('locales', 'localeOptions'));
     }
 }

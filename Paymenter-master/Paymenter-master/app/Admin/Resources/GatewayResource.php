@@ -26,11 +26,29 @@ class GatewayResource extends Resource
 {
     protected static ?string $model = Gateway::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Extensions';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-secure-payment-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-secure-payment-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.extensions', 'Extensions');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.gateway.navigation', 'Gateways');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.gateway.singular', 'Gateway');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.gateway.plural', 'Gateways');
+    }
 
     public static function getGloballySearchableAttributes(): array
     {

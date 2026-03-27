@@ -52,11 +52,9 @@ class Settings
                 [
                     'name' => 'app_language',
                     'label' => 'Default Language',
-                    'default' => 'en',
+                    'default' => 'zh',
                     'type' => 'select',
-                    // Read languages from resources/lang directory
-                    // The ternary operator is only present for now. Since there are no lang files, it returns [], which breaks the frontend, so we return ['en']
-                    'options' => self::getAvailableLanguages(),
+                    'options' => self::getAvailableLanguageOptions(),
                     'required' => true,
                     'validation' => 'in:' . implode(',', self::getAvailableLanguages()),
                     'override' => 'app.locale',
@@ -65,7 +63,7 @@ class Settings
                     'name' => 'allowed_languages',
                     'label' => 'Allowed Languages',
                     'type' => 'select',
-                    'options' => array_combine(self::getAvailableLanguages(), array_map('strtoupper', self::getAvailableLanguages())),
+                    'options' => self::getAvailableLanguageOptions(),
                     'database_type' => 'array',
                     'multiple' => true,
                     'default' => self::getAvailableLanguages(),
@@ -659,6 +657,17 @@ class Settings
             ? array_map('basename', glob(base_path('lang/*'), GLOB_ONLYDIR))
             : ['en']
         );
+    }
+
+    private static function getAvailableLanguageOptions(): array
+    {
+        return once(function () {
+            $languages = self::getAvailableLanguages();
+
+            return collect($languages)
+                ->mapWithKeys(fn ($locale) => [$locale => locale_option_label($locale)])
+                ->toArray();
+        });
     }
 
     public static function tax(?User $user = null)

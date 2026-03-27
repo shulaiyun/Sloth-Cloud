@@ -32,11 +32,29 @@ class UserResource extends Resource
 {
     protected static ?string $model = User::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Administration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-group-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-group-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.administration', 'Administration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.user.navigation', 'Users');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.user.singular', 'User');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.user.plural', 'Users');
+    }
 
     public static function getGloballySearchableAttributes(): array
     {

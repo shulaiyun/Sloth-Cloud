@@ -19,11 +19,16 @@ class EditProduct extends EditRecord
 {
     protected static string $resource = ProductResource::class;
 
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.resources.product.navigation', 'Products');
+    }
+
     protected function getHeaderActions(): array
     {
         return [
             Action::make('duplicate')
-                ->label('Duplicate')
+                ->label(__('Duplicate'))
                 ->requiresConfirmation()
                 ->action(function (Product $record) {
                     $new_record = $record->replicate();
@@ -58,7 +63,7 @@ class EditProduct extends EditRecord
                     });
 
                     Notification::make()
-                        ->title('Product duplicated successfully!')
+                        ->title(__('Product duplicated successfully!'))
                         ->success()
                         ->send();
 

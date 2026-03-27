@@ -21,11 +21,29 @@ class RoleResource extends Resource
 {
     protected static ?string $model = Role::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Configuration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-shield-user-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-shield-user-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.configuration', 'Configuration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.role.navigation', 'Roles');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.role.singular', 'Role');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.role.plural', 'Roles');
+    }
 
     public static function form(Schema $schema): Schema
     {

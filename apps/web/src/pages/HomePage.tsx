@@ -66,13 +66,13 @@ export function HomePage() {
             <article className="product-card" key={product.id}>
               <div className="chip-row">
                 {product.category ? <span className="chip">{product.category.name}</span> : null}
-                <span className="chip">{product.pricing?.planName ?? 'Default plan'}</span>
+                <span className="chip">{product.pricing?.planName ?? text.common.defaultPlan}</span>
               </div>
               <h3>{product.name}</h3>
               <p>{product.description}</p>
               <div className="card-footer">
                 <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
-                <Link className="button ghost" to={`/product/${product.slug}`}>View</Link>
+                <Link className="button ghost" to={`/product/${product.slug}`}>{text.common.view}</Link>
               </div>
             </article>
           ))}
@@ -91,8 +91,8 @@ export function HomePage() {
             <article className="category-card" key={category.id}>
               <h3>{category.name}</h3>
               <p>{category.description}</p>
-              <strong>{category.productCount} products</strong>
-              <Link className="button ghost" to={`/catalog/${category.slug}`}>Open</Link>
+              <strong>{category.productCount} {text.common.products}</strong>
+              <Link className="button ghost" to={`/catalog/${category.slug}`}>{text.common.open}</Link>
             </article>
           ))}
         </div>

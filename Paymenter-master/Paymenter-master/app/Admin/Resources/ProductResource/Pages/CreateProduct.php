@@ -13,6 +13,11 @@ class CreateProduct extends CreateRecord
 {
     protected static string $resource = ProductResource::class;
 
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.resources.product.navigation', 'Products');
+    }
+
     protected function handleRecordCreation(array $data): Model
     {
         $record = static::getModel()::create(Arr::except($data, ['settings']));

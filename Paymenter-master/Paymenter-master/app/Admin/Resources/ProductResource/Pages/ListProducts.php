@@ -10,6 +10,11 @@ class ListProducts extends ListRecords
 {
     protected static string $resource = ProductResource::class;
 
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.resources.product.navigation', 'Products');
+    }
+
     protected function getHeaderActions(): array
     {
         return [

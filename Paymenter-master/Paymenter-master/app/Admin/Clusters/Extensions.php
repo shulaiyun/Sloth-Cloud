@@ -10,9 +10,17 @@ class Extensions extends Cluster
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-puzzle-fill';
 
-    public static string|\UnitEnum|null $navigationGroup = 'Extensions';
-
     protected static ?int $navigationSort = 0;
 
     protected static ?string $slug = 'extensions';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.extensions', 'Extensions');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.groups.extensions', 'Extensions');
+    }
 }

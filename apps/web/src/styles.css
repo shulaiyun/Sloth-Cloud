@@ -167,6 +167,68 @@ select {
   border-radius: 999px;
 }
 
+.locale-menu {
+  position: relative;
+}
+
+.locale-trigger {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  min-width: 126px;
+  justify-content: space-between;
+}
+
+.locale-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.locale-menu[open] .locale-trigger {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.locale-menu-list {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  min-width: 200px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.locale-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.locale-option:hover,
+.locale-option.active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-soft));
+}
+
+.locale-flag,
+.locale-caret {
+  flex-shrink: 0;
+}
+
 .page {
   padding-top: 28px;
 }

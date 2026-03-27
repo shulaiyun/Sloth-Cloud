@@ -17,9 +17,9 @@ function optionDelta(option: ConfigOption, currentValue: string | null | undefin
   return pricing?.price ?? 0;
 }
 
-function cycleLabel(period: number | null, unit: string | null) {
+function cycleLabel(period: number | null, unit: string | null, fallback: string) {
   if (!period || !unit) {
-    return 'Custom billing';
+    return fallback;
   }
 
   return `${period} ${unit}`;
@@ -91,7 +91,7 @@ export function ProductPage() {
           <div className="chip-row">
             {product.category ? <span className="chip">{product.category.name}</span> : null}
             <span className="chip">{text.common.sourceMode}: {sourceMode === 'live' ? text.common.live : text.common.mock}</span>
-            <span className="chip">Stock: {product.stock ?? '-'}</span>
+            <span className="chip">{text.common.stock}: {product.stock ?? '-'}</span>
           </div>
           <h1>{product.name}</h1>
           <p className="lead">{product.description}</p>
@@ -101,7 +101,7 @@ export function ProductPage() {
           <strong className="price-large">
             {formatMoney(total, selectedPlan?.prices[0]?.currencyCode ?? 'USD')}
           </strong>
-          <p>{cycleLabel(selectedPlan?.billingPeriod ?? null, selectedPlan?.billingUnit ?? null)}</p>
+          <p>{cycleLabel(selectedPlan?.billingPeriod ?? null, selectedPlan?.billingUnit ?? null, text.common.customBilling)}</p>
           {!isAuthenticated ? (
             <Link className="button primary" to={`/login?next=${encodeURIComponent(location.pathname)}`}>
               {text.common.loginRequired}
@@ -127,7 +127,7 @@ export function ProductPage() {
                 onClick={() => setSelectedPlanId(plan.id)}
               >
                 <strong>{plan.name}</strong>
-                <span>{cycleLabel(plan.billingPeriod, plan.billingUnit)}</span>
+                <span>{cycleLabel(plan.billingPeriod, plan.billingUnit, text.common.customBilling)}</span>
                 <small>{formatMoney(plan.prices[0]?.price ?? null, plan.prices[0]?.currencyCode ?? 'USD')}</small>
               </button>
             ))}
@@ -206,9 +206,9 @@ export function ProductPage() {
           <section className="panel">
             <p className="eyebrow">{text.product.details}</p>
             <div className="bullet-list">
-              <span>Slug: {product.slug}</span>
-              <span>Allow quantity: {product.allowQuantity ? 'Yes' : 'No'}</span>
-              <span>Per-user limit: {product.perUserLimit ?? '-'}</span>
+              <span>{text.common.slug}: {product.slug}</span>
+              <span>{text.common.allowQuantity}: {product.allowQuantity ? text.common.yes : text.common.no}</span>
+              <span>{text.common.perUserLimit}: {product.perUserLimit ?? '-'}</span>
               <span>{text.product.loginHint}</span>
             </div>
           </section>

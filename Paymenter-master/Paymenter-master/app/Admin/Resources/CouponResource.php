@@ -30,8 +30,6 @@ class CouponResource extends Resource
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-coupon-fill';
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Configuration';
-
     public static function form(Schema $schema): Schema
     {
         return $schema
@@ -117,6 +115,26 @@ class CouponResource extends Resource
                     ->placeholder('Select the products that this coupon applies to')
                     ->hint('Leave empty to apply the coupon to all products'),
             ]);
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.configuration', 'Configuration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.coupon.navigation', 'Coupons');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.coupon.singular', 'Coupon');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.coupon.plural', 'Coupons');
     }
 
     public static function table(Table $table): Table

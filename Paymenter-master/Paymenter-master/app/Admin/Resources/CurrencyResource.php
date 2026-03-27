@@ -20,11 +20,29 @@ class CurrencyResource extends Resource
 {
     protected static ?string $model = Currency::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Configuration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-money-dollar-circle-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-money-dollar-circle-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.configuration', 'Configuration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.currency.navigation', 'Currencies');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.currency.singular', 'Currency');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.currency.plural', 'Currencies');
+    }
 
     public static function form(Schema $schema): Schema
     {

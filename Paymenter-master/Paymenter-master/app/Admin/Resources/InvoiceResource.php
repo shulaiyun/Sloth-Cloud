@@ -41,6 +41,21 @@ class InvoiceResource extends Resource
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-receipt-fill';
 
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.invoice.navigation', 'Invoices');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.invoice.singular', 'Invoice');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.invoice.plural', 'Invoices');
+    }
+
     public static function getNavigationBadge(): ?string
     {
         return static::getModel()::where('status', 'pending')->count() ?: null;

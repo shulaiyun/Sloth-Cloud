@@ -24,11 +24,29 @@ class ConfigOptionResource extends Resource
 {
     protected static ?string $model = ConfigOption::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Configuration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-equalizer-2-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-equalizer-2-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.configuration', 'Configuration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.config_option.navigation', 'Config Options');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.config_option.singular', 'Config Option');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.config_option.plural', 'Config Options');
+    }
 
     public static function form(Schema $schema): Schema
     {

@@ -21,8 +21,6 @@ class Updates extends Page implements HasForms
 
     protected string $view = 'admin.pages.updates';
 
-    protected static string|\UnitEnum|null $navigationGroup = 'System';
-
     protected function getHeaderActions(): array
     {
         return [
@@ -30,7 +28,7 @@ class Updates extends Page implements HasForms
                 ->action(function () {
                     Artisan::call(CheckForUpdates::class);
                 })
-                ->label('Check for updates'),
+                ->label(admin_t('sloth-admin.actions.check_updates', 'Check for updates')),
         ];
     }
 
@@ -55,7 +53,22 @@ class Updates extends Page implements HasForms
                     'output' => $output->fetch(),
                 ]);
             })
-            ->label('Update');
+            ->label(admin_t('sloth-admin.actions.update', 'Update'));
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.system', 'System');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.pages.updates', 'Updates');
+    }
+
+    public function getTitle(): string
+    {
+        return admin_t('sloth-admin.pages.updates', 'Updates');
     }
 
     public static function canAccess(): bool

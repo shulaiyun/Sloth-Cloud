@@ -27,11 +27,29 @@ class CustomPropertyResource extends Resource
 {
     protected static ?string $model = CustomProperty::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Configuration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-list-settings-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-list-settings-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.configuration', 'Configuration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.custom_property.navigation', 'Custom Properties');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.custom_property.singular', 'Custom Property');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.custom_property.plural', 'Custom Properties');
+    }
 
     public static function form(Schema $schema): Schema
     {

@@ -41,6 +41,21 @@ class ServiceResource extends Resource
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-function-fill';
 
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.service.navigation', 'Services');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.service.singular', 'Service');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.service.plural', 'Services');
+    }
+
     public static function getNavigationBadge(): ?string
     {
         return Service::where('status', 'pending')->count() ?: null;

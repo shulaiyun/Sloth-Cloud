@@ -4,9 +4,9 @@ import { useApiData } from '../lib/api';
 import { useSite } from '../lib/site-context';
 import type { CatalogCategoriesResponse, CatalogProductsResponse } from '../lib/types';
 
-function billingLabel(period: number | null, unit: string | null) {
+function billingLabel(period: number | null, unit: string | null, fallback: string) {
   if (!period || !unit) {
-    return 'Custom billing';
+    return fallback;
   }
 
   return `${period} ${unit}`;
@@ -68,16 +68,18 @@ export function CatalogPage() {
             <article className="product-card" key={product.id}>
               <div className="chip-row">
                 {product.category ? <span className="chip">{product.category.name}</span> : null}
-                <span className="chip">{text.catalog.stock}: {product.stock ?? '-'}</span>
+                <span className="chip">{text.common.stock}: {product.stock ?? '-'}</span>
               </div>
               <h3>{product.name}</h3>
               <p>{product.description}</p>
               <div className="card-footer">
                 <div>
                   <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
-                  <p className="muted">{billingLabel(product.pricing?.billingPeriod ?? null, product.pricing?.billingUnit ?? null)}</p>
+                  <p className="muted">
+                    {billingLabel(product.pricing?.billingPeriod ?? null, product.pricing?.billingUnit ?? null, text.common.customBilling)}
+                  </p>
                 </div>
-                <Link className="button ghost" to={`/product/${product.slug}`}>Inspect</Link>
+                <Link className="button ghost" to={`/product/${product.slug}`}>{text.common.inspect}</Link>
               </div>
             </article>
           ))}

@@ -75,3 +75,99 @@ if (!function_exists('hook')) {
         return EventHelper::renderEvent($event);
     }
 }
+
+if (!function_exists('admin_t')) {
+    /**
+     * Translate an admin label and gracefully fall back to the provided string.
+     */
+    function admin_t(string $key, ?string $fallback = null): string
+    {
+        $translated = __($key);
+
+        if ($translated === $key) {
+            return $fallback ?? $key;
+        }
+
+        return $translated;
+    }
+}
+
+if (!function_exists('locale_flag')) {
+    /**
+     * Resolve a flag icon for a locale code.
+     */
+    function locale_flag(string $locale): string
+    {
+        return [
+            'ar' => '🇸🇦',
+            'bn' => '🇧🇩',
+            'de' => '🇩🇪',
+            'en' => '🇺🇸',
+            'es' => '🇪🇸',
+            'fi' => '🇫🇮',
+            'fr' => '🇫🇷',
+            'he' => '🇮🇱',
+            'hi' => '🇮🇳',
+            'hu' => '🇭🇺',
+            'id' => '🇮🇩',
+            'it' => '🇮🇹',
+            'ko' => '🇰🇷',
+            'lv' => '🇱🇻',
+            'nl' => '🇳🇱',
+            'no' => '🇳🇴',
+            'pl' => '🇵🇱',
+            'pt' => '🇵🇹',
+            'sr' => '🇷🇸',
+            'sv' => '🇸🇪',
+            'tr' => '🇹🇷',
+            'uk' => '🇺🇦',
+            'zh' => '🇨🇳',
+        ][$locale] ?? '🌐';
+    }
+}
+
+if (!function_exists('locale_label')) {
+    /**
+     * Resolve a readable locale label from config.
+     */
+    function locale_label(string $locale): string
+    {
+        $labels = [
+            'ar' => 'العربية',
+            'bn' => 'বাংলা',
+            'de' => 'Deutsch',
+            'en' => 'English',
+            'es' => 'Español',
+            'fi' => 'Suomi',
+            'fr' => 'Français',
+            'he' => 'עברית',
+            'hi' => 'हिन्दी',
+            'hu' => 'Magyar',
+            'id' => 'Bahasa Indonesia',
+            'it' => 'Italiano',
+            'ko' => '한국어',
+            'lv' => 'Latviešu',
+            'nl' => 'Nederlands',
+            'no' => 'Norsk',
+            'pl' => 'Polski',
+            'pt' => 'Português',
+            'sr' => 'Српски',
+            'sv' => 'Svenska',
+            'tr' => 'Türkçe',
+            'uk' => 'Українська',
+            'zh' => '中文',
+        ];
+
+        return $labels[$locale] ?? config("app.available_locales.$locale", strtoupper($locale));
+    }
+}
+
+if (!function_exists('locale_option_label')) {
+    /**
+     * Build a combined flag + language label for selectors.
+     */
+    function locale_option_label(string $locale): string
+    {
+        return trim(locale_flag($locale) . ' ' . locale_label($locale));
+    }
+}

@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Config;
 
 class EnsureDefaults extends Command
 {
+    private const BASELINE_LOCALES = ['zh', 'en', 'de', 'fr', 'es', 'ko'];
+
     protected $signature = 'app:ensure-defaults';
 
     protected $description = 'Ensure baseline roles, settings, and currencies exist';
@@ -39,21 +41,37 @@ class EnsureDefaults extends Command
             }
         }
 
-        if (Currency::count() === 0) {
-            Currency::create([
-                'code' => 'USD',
-                'name' => 'US Dollar',
-                'prefix' => '$',
-                'suffix' => '',
-                'format' => '1,000.00',
-            ]);
-        }
+        Currency::ensureBaseline();
 
         $defaultCurrency = Currency::defaultCode() ?? 'USD';
 
         Setting::updateOrCreate(
             ['key' => 'default_currency'],
             ['value' => $defaultCurrency, 'type' => 'string']
+        );
+
+        $availableLocales = collect((array) config('app.available_locales'))
+            ->keys()
+            ->values()
+            ->all();
+
+        $baselineLocales = array_values(array_intersect(self::BASELINE_LOCALES, $availableLocales));
+
+        if ($baselineLocales === []) {
+            $baselineLocales = ['en'];
+        }
+
+        Setting::firstOrCreate(
+            ['key' => 'app_language'],
+            ['value' => 'zh', 'type' => 'string']
+        );
+
+        $allowedLanguages = Setting::query()->where('key', 'allowed_languages')->value('value');
+        $allowedLanguages = is_array($allowedLanguages) ? $allowedLanguages : [];
+
+        Setting::updateOrCreate(
+            ['key' => 'allowed_languages'],
+            ['value' => array_values(array_unique(array_merge($allowedLanguages, $baselineLocales))), 'type' => 'array']
         );
 
         SettingsProvider::flushCache();

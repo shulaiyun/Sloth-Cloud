@@ -63,11 +63,11 @@ class AdminPanelProvider extends PanelProvider
             ->discoverClusters(in: app_path('Admin/Clusters'), for: 'App\\Admin\\Clusters')
             ->userMenuItems([
                 'exit_admin' => MenuItem::make()
-                    ->label('Exit Admin')
+                    ->label(admin_t('sloth-admin.user_menu.exit_admin', 'Exit Admin'))
                     ->url('/')
                     ->icon('heroicon-s-arrow-uturn-left'),
                 'logout' => Action::make('logout')
-                    ->label('Sign out')
+                    ->label(admin_t('sloth-admin.user_menu.sign_out', 'Sign out'))
                     ->icon(FilamentIcon::resolve(PanelsIconAlias::USER_MENU_LOGOUT_BUTTON) ?? Heroicon::ArrowLeftOnRectangle)
                     ->url(fn () => $panel->getLogoutUrl())
                     ->postToUrl(),
@@ -89,10 +89,10 @@ class AdminPanelProvider extends PanelProvider
                 }
             )
             ->navigationGroups([
-                'Administration',
-                'Configuration',
-                'Extensions',
-                'System',
+                admin_t('sloth-admin.groups.administration', 'Administration'),
+                admin_t('sloth-admin.groups.configuration', 'Configuration'),
+                admin_t('sloth-admin.groups.extensions', 'Extensions'),
+                admin_t('sloth-admin.groups.system', 'System'),
             ])
             ->middleware([
                 EncryptCookies::class,

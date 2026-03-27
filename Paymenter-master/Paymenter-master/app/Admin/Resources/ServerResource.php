@@ -28,11 +28,29 @@ class ServerResource extends Resource
 {
     protected static ?string $model = Server::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Extensions';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-server-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-server-fill';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.extensions', 'Extensions');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.server.navigation', 'Servers');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.server.singular', 'Server');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.server.plural', 'Servers');
+    }
 
     public static function getGloballySearchableAttributes(): array
     {

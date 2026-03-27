@@ -51,7 +51,7 @@ export function AppShell() {
       </main>
 
       <footer className="footer">
-        <p>Sloth Cloud Headless storefront. Real auth and real catalog data now flow through the BFF.</p>
+        <p>{text.footer.statement}</p>
       </footer>
     </div>
   );

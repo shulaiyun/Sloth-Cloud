@@ -42,13 +42,31 @@ class ProductResource extends Resource
 {
     protected static ?string $model = Product::class;
 
-    protected static string|\UnitEnum|null $navigationGroup = 'Administration';
-
     protected static string|\BackedEnum|null $navigationIcon = 'ri-instance-line';
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-instance-fill';
 
     protected static ?string $recordTitleAttribute = 'name';
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.administration', 'Administration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.product.navigation', 'Products');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.product.singular', 'Product');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.product.plural', 'Products');
+    }
 
     public static function form(Schema $schema): Schema
     {
@@ -57,10 +75,11 @@ class ProductResource extends Resource
                 Tabs::make('Tabs')
                     ->persistTabInQueryString()
                     ->tabs([
-                        Tab::make('General')
+                        Tab::make(admin_t('sloth-admin.product.tabs.general', 'General'))
                             ->columns(2)
                             ->schema([
                                 TextInput::make('name')
+                                    ->label(admin_t('sloth-admin.product.fields.name', 'Name'))
                                     ->required()
                                     ->maxLength(255)
                                     ->live(onBlur: true)
@@ -71,25 +90,26 @@ class ProductResource extends Resource
 
                                         $set('slug', Str::slug($state));
                                     }),
-                                TextInput::make('slug')->required()->unique(ignoreRecord: true),
-                                TextInput::make('stock')->integer()->nullable(),
-                                TextInput::make('per_user_limit')->integer()->nullable(),
-                                Select::make('allow_quantity')->options([
-                                    'disabled' => 'No',
-                                    'separated' => 'Separated',
-                                    'combined' => 'Combined',
+                                TextInput::make('slug')->label(admin_t('sloth-admin.product.fields.slug', 'Slug'))->required()->unique(ignoreRecord: true),
+                                TextInput::make('stock')->label(admin_t('sloth-admin.product.fields.stock', 'Stock'))->integer()->nullable(),
+                                TextInput::make('per_user_limit')->label(admin_t('sloth-admin.product.fields.per_user_limit', 'Per-user limit'))->integer()->nullable(),
+                                Select::make('allow_quantity')->label(admin_t('sloth-admin.product.fields.allow_quantity', 'Quantity Mode'))->options([
+                                    'disabled' => admin_t('sloth-admin.product.options.disabled', 'No'),
+                                    'separated' => admin_t('sloth-admin.product.options.separated', 'Separated'),
+                                    'combined' => admin_t('sloth-admin.product.options.combined', 'Combined'),
                                 ])->default('separated')
                                     ->required(),
                                 Textarea::make('email_template')
-                                    ->hint('This snippet will be used in the email template.')
+                                    ->label(admin_t('sloth-admin.product.fields.email_template', 'Email Template Snippet'))
+                                    ->hint(admin_t('sloth-admin.product.hints.email_template', 'This snippet will be used in the email template.'))
                                     ->nullable(),
                                 Checkbox::make('hidden')
-                                    ->label('Hide product')
-                                    ->hint('Hide the product from the client area.'),
+                                    ->label(admin_t('sloth-admin.product.fields.hidden', 'Hide product'))
+                                    ->hint(admin_t('sloth-admin.product.hints.hidden', 'Hide the product from the client area.')),
 
                                 RichEditor::make('description')->nullable()->columnSpanFull(),
                                 FileUpload::make('image')
-                                    ->label('Image')
+                                    ->label(admin_t('sloth-admin.product.fields.image', 'Image'))
                                     ->nullable()
                                     ->visibility('public')
                                     ->imageEditor()
@@ -97,35 +117,37 @@ class ProductResource extends Resource
                                     ->disk('public')
                                     ->acceptedFileTypes(['image/*']),
                                 Select::make('category_id')
+                                    ->label(admin_t('sloth-admin.product.fields.category', 'Category'))
                                     ->relationship('category', 'name')
                                     ->searchable()
                                     ->preload()
                                     ->createOptionForm(fn (Schema $schema) => CategoryResource::form($schema))
                                     ->required(),
                             ]),
-                        Tab::make('Pricing')
+                        Tab::make(admin_t('sloth-admin.product.tabs.pricing', 'Pricing'))
                             ->schema([self::plan()]),
 
-                        Tab::make('Upgrades')
+                        Tab::make(admin_t('sloth-admin.product.tabs.upgrades', 'Upgrades'))
                             ->schema([
                                 // Select input for the products this product can upgrade to (hasmany relationship)
                                 Select::make('upgrades')
-                                    ->label('Upgrades')
+                                    ->label(admin_t('sloth-admin.product.fields.upgrades', 'Upgrades'))
                                     ->relationship('upgrades', 'name', ignoreRecord: true)
                                     ->multiple()
                                     ->preload()
-                                    ->placeholder('Select the products that this product can upgrade to'),
+                                    ->placeholder(admin_t('sloth-admin.product.hints.upgrades', 'Select which products this product can upgrade to.')),
                             ]),
 
-                        Tab::make('Server')
+                        Tab::make(admin_t('sloth-admin.product.tabs.server', 'Server'))
                             ->schema([
                                 Select::make('server_id')
+                                    ->label(admin_t('sloth-admin.product.fields.server', 'Server'))
                                     ->relationship('server', 'name')
                                     ->searchable()
                                     ->preload()
                                     ->hintAction(
                                         Action::make('refresh')
-                                            ->label('Refresh')
+                                            ->label(admin_t('sloth-admin.actions.refresh', 'Refresh'))
                                             ->action(fn () => Cache::set('product_config', null, 0))
                                             ->hidden(fn (Get $get) => $get('server_id') === null)
                                     )
@@ -170,7 +192,7 @@ class ProductResource extends Resource
     public static function plan()
     {
         return Repeater::make('plan')
-            ->addActionLabel('Add new plan')
+            ->addActionLabel(admin_t('sloth-admin.actions.add_plan', 'Add new plan'))
             ->relationship('plans')
             ->name('name')
             ->reorderable()
@@ -204,14 +226,16 @@ class ProductResource extends Resource
             ->itemLabel(fn (array $state) => $state['name'])
             ->schema([
                 TextInput::make('name')
+                    ->label(admin_t('sloth-admin.product.fields.name', 'Name'))
                     ->required()
                     ->live(onBlur: true)
                     ->maxLength(255),
                 Select::make('type')
+                    ->label(admin_t('sloth-admin.product.fields.type', 'Type'))
                     ->options([
-                        'free' => 'Free',
-                        'one-time' => 'One Time',
-                        'recurring' => 'Recurring',
+                        'free' => admin_t('sloth-admin.product.options.free', 'Free'),
+                        'one-time' => admin_t('sloth-admin.product.options.one_time', 'One Time'),
+                        'recurring' => admin_t('sloth-admin.product.options.recurring', 'Recurring'),
                     ])
                     ->required()
                     ->live(debounce: 300)
@@ -221,30 +245,30 @@ class ProductResource extends Resource
                             $set('price', 0);
                         }
                     })
-                    ->placeholder('Select the type of the price')
+                    ->placeholder(admin_t('sloth-admin.product.hints.price_type', 'Select the type of billing for this plan.'))
                     ->default('free'),
 
                 TextInput::make('billing_period')
                     ->required()
-                    ->label('Time Interval')
+                    ->label(admin_t('sloth-admin.product.fields.time_interval', 'Time Interval'))
                     ->default(1)
                     ->hidden(fn (Get $get) => $get('type') !== 'recurring'),
 
                 Select::make('billing_unit')
                     ->options([
-                        'day' => 'Day',
-                        'week' => 'Week',
-                        'month' => 'Month',
-                        'year' => 'Year',
+                        'day' => admin_t('sloth-admin.product.options.day', 'Day'),
+                        'week' => admin_t('sloth-admin.product.options.week', 'Week'),
+                        'month' => admin_t('sloth-admin.product.options.month', 'Month'),
+                        'year' => admin_t('sloth-admin.product.options.year', 'Year'),
                     ])
-                    ->label('Billing period')
+                    ->label(admin_t('sloth-admin.product.fields.billing_period', 'Billing period'))
                     ->required()
                     ->default('month')
                     ->hidden(fn (Get $get) => $get('type') !== 'recurring'),
                 Repeater::make('pricing')
                     ->hidden(fn (Get $get) => $get('type') === 'free')
                     ->columns(3)
-                    ->addActionLabel('Add new price')
+                    ->addActionLabel(admin_t('sloth-admin.actions.add_price', 'Add new price'))
                     ->reorderable(false)
                     ->relationship('prices')
                     ->columnSpanFull()
@@ -253,6 +277,7 @@ class ProductResource extends Resource
                     ->itemLabel(fn (array $state) => $state['currency_code'])
                     ->schema([
                         Select::make('currency_code')
+                            ->label(admin_t('sloth-admin.product.fields.currency_code', 'Currency code'))
                             ->options(function (Get $get, ?string $state) {
                                 $pricing = collect($get('../../pricing'))->pluck('currency_code');
                                 if ($state !== null) {
@@ -267,12 +292,12 @@ class ProductResource extends Resource
                                 return Currency::codeOptions($pricing->toArray());
                             })
                             ->live()
-                            ->helperText(fn () => Currency::codeOptions() === [] ? 'No currencies are available yet. The system will create USD automatically on startup.' : null)
+                            ->helperText(fn () => Currency::codeOptions() === [] ? admin_t('sloth-admin.product.hints.no_currencies', 'No currencies are available yet. Baseline currencies will be seeded automatically.') : null)
                             ->default(fn () => Currency::defaultCode())
                             ->required(),
                         TextInput::make('price')
                             ->required()
-                            ->label('Price')
+                            ->label(admin_t('sloth-admin.product.fields.price', 'Price'))
                             // Suffix based on chosen currency
                             ->prefix(fn (Get $get) => Currency::where('code', $get('currency_code'))->first()?->prefix)
                             ->suffix(fn (Get $get) => Currency::where('code', $get('currency_code'))->first()?->suffix)
@@ -286,7 +311,7 @@ class ProductResource extends Resource
                             ->minValue(0)
                             ->hidden(fn (Get $get) => $get('type') === 'free'),
                         TextInput::make('setup_fee')
-                            ->label('Setup fee')
+                            ->label(admin_t('sloth-admin.product.fields.setup_fee', 'Setup fee'))
                             ->live(onBlur: true)
                             ->mask(RawJs::make(
                                 <<<'JS'

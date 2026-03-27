@@ -33,8 +33,6 @@ class TicketResource extends Resource
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-customer-service-fill';
 
-    public static string|\UnitEnum|null $navigationGroup = 'Administration';
-
     public static function getNavigationBadge(): ?string
     {
         return static::getModel()::where('status', 'open')->count() ?: null;
@@ -53,6 +51,26 @@ class TicketResource extends Resource
     public static function getGlobalSearchResultTitle(Model $record): string|Htmlable
     {
         return $record->subject;
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.administration', 'Administration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.ticket.navigation', 'Tickets');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.ticket.singular', 'Ticket');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.ticket.plural', 'Tickets');
     }
 
     public static function ticketDepartments(): array

@@ -38,8 +38,6 @@ class OrderResource extends Resource
 
     protected static string|\BackedEnum|null $activeNavigationIcon = 'ri-shopping-bag-4-fill';
 
-    public static string|\UnitEnum|null $navigationGroup = 'Administration';
-
     public static function form(Schema $schema): Schema
     {
         return $schema
@@ -147,6 +145,26 @@ class OrderResource extends Resource
                             ]),
                     ]),
             ]);
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return admin_t('sloth-admin.groups.administration', 'Administration');
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return admin_t('sloth-admin.resources.order.navigation', 'Orders');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.order.singular', 'Order');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return admin_t('sloth-admin.resources.order.plural', 'Orders');
     }
 
     public static function table(Table $table): Table
