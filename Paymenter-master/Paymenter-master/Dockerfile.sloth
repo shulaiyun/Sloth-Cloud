@@ -38,11 +38,16 @@ RUN npm ci
 COPY . .
 COPY --from=composer_deps /app/vendor /app/vendor
 
-RUN npm run build \
-    && if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi \
-    && if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi \
-    && (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json) \
-    && test -f /app/public/css/filament/admin/theme.css
+RUN set -eux; \
+    node vite.js; \
+    mkdir -p /app/public/css/filament/admin; \
+    if ! npx tailwindcss@3.4.17 --input ./resources/css/filament/admin/theme.css --output ./public/css/filament/admin/theme.css --config ./resources/css/filament/admin/tailwind.config.js --minify; then \
+      cp /app/resources/css/filament/admin/theme.css /app/public/css/filament/admin/theme.css; \
+    fi; \
+    if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi; \
+    if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi; \
+    (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json); \
+    test -f /app/public/css/filament/admin/theme.css
 
 FROM php:8.3-fpm-alpine AS runtime
 

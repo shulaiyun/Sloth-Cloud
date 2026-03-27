@@ -1,4 +1,4 @@
-import { Livewire, Alpine } from '../../../vendor/livewire/livewire/dist/livewire.esm';
+import { Livewire, Alpine } from '../../../vendor/livewire/livewire/dist/livewire.esm.js';
 import anchor from '@alpinejs/anchor'
 
 document.addEventListener('livewire:init', () => {
