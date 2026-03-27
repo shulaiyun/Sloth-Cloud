@@ -50,7 +50,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
       return new Intl.NumberFormat(locale, {
         style: 'currency',
         currency,
-        maximumFractionDigits: 0,
+        maximumFractionDigits: 2,
       }).format(number);
     },
     formatDate(dateString) {
@@ -77,4 +77,3 @@ export function useSite() {
 
   return context;
 }
-

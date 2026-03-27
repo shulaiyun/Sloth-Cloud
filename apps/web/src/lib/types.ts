@@ -5,71 +5,139 @@ export interface ApiMeta {
   sourceMode: SourceMode;
 }
 
+export interface PaginationMeta {
+  currentPage: number;
+  perPage: number;
+  total: number;
+  lastPage: number;
+}
+
+export interface CurrencyInfo {
+  code: string;
+  prefix: string | null;
+  suffix: string | null;
+  format: string | null;
+}
+
 export interface CategorySummary {
   id: string;
   slug: string;
+  fullSlug: string | null;
   name: string;
   description: string;
-  accent: string;
-  heroMetric: string;
-  regionTags: string[];
+  image: string | null;
+  parentId: string | null;
+  sort: number | null;
   productCount: number;
+}
+
+export interface ProductCategoryRef {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface ProductPricing {
+  planId: string;
+  planName: string;
+  billingPeriod: number | null;
+  billingUnit: string | null;
+  price: number | null;
+  setupFee: number | null;
+  currencyCode: string;
+  currency: CurrencyInfo | null;
 }
 
 export interface ProductSummary {
   id: string;
   slug: string;
-  categoryId: string;
-  categorySlug: string;
   name: string;
-  tagline: string;
   description: string;
   image: string | null;
-  startingPrice: number | null;
-  currency: string;
-  billingLabel: string;
-  stockLabel: string;
-  featured: boolean;
-  highlights: string[];
-  regionTags: string[];
+  stock: number | null;
+  perUserLimit: number | null;
+  allowQuantity: boolean;
+  category: ProductCategoryRef | null;
+  pricing: ProductPricing | null;
+}
+
+export interface ProductPlanPrice {
+  id: string;
+  price: number | null;
+  setupFee: number | null;
+  currencyCode: string;
+  currency: CurrencyInfo | null;
 }
 
 export interface ProductPlan {
   id: string;
   name: string;
-  cycleLabel: string;
-  price: number | null;
-  setupFee: number | null;
-  currency: string;
+  type: string | null;
+  billingPeriod: number | null;
+  billingUnit: string | null;
+  sort: number | null;
+  prices: ProductPlanPrice[];
 }
 
-export interface ConfigChoice {
+export interface ConfigOptionPrice {
   id: string;
-  label: string;
-  description?: string;
-  priceDelta?: number;
+  planId: string;
+  planName: string;
+  billingPeriod: number | null;
+  billingUnit: string | null;
+  price: number | null;
+  setupFee: number | null;
+  currencyCode: string;
+}
+
+export interface ConfigOptionChoice {
+  id: string;
+  name: string;
+  description: string;
+  envVariable: string | null;
+  pricing: ConfigOptionPrice[];
 }
 
 export interface ConfigOption {
   id: string;
   name: string;
-  type: 'select' | 'radio' | 'checkbox' | 'text';
-  required: boolean;
   description: string;
-  defaultValue?: string | boolean | null;
-  choices?: ConfigChoice[];
+  envVariable: string | null;
+  type: string;
+  sort: number | null;
+  required: boolean;
+  children: ConfigOptionChoice[];
 }
 
-export interface ProductDetail extends ProductSummary {
-  sourceMode: SourceMode;
+export interface ProductDetail {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  image: string | null;
+  stock: number | null;
+  perUserLimit: number | null;
+  allowQuantity: boolean;
+  category: CategorySummary | null;
   plans: ProductPlan[];
-  features: string[];
-  purchaseNotes: string[];
-  configurableOptions: ConfigOption[];
+  configOptions: ConfigOption[];
+  operatingSystemOptions: ConfigOption[];
 }
 
-export interface CategoryDetail extends CategorySummary {
-  products: ProductSummary[];
+export interface CatalogCategoriesResponse {
+  data: CategorySummary[];
+  meta: ApiMeta;
+}
+
+export interface CatalogProductsResponse {
+  data: ProductSummary[];
+  pagination: PaginationMeta | null;
+  meta: ApiMeta;
+}
+
+export interface ProductDetailResponse {
+  data: ProductDetail;
+  meta: ApiMeta;
 }
 
 export interface HomeStat {
@@ -79,57 +147,67 @@ export interface HomeStat {
 }
 
 export interface HomeResponse {
-  brand: {
-    name: string;
-    subtitle: string;
-    statement: string;
+  data: {
+    brand: {
+      name: string;
+      subtitle: string;
+      statement: string;
+    };
+    stats: HomeStat[];
+    featuredProducts: ProductSummary[];
+    categories: CategorySummary[];
   };
-  stats: HomeStat[];
-  featuredProducts: ProductSummary[];
-  categories: CategorySummary[];
   meta: ApiMeta;
 }
 
-export interface CatalogResponse {
-  categories: CategorySummary[];
-  products: ProductSummary[];
-  meta: ApiMeta;
-}
-
-export interface ServiceProperty {
+export interface AuthUserProperty {
   key: string;
-  label: string;
+  name: string;
   value: string;
-  emphasis?: boolean;
 }
 
-export interface ServiceAction {
+export interface AuthUser {
   id: string;
-  label: string;
-  kind: 'primary' | 'secondary' | 'danger';
-  enabled: boolean;
-  description: string;
+  firstName: string;
+  lastName: string;
+  name: string;
+  email: string;
+  emailVerifiedAt: string | null;
+  avatar: string | null;
+  properties: AuthUserProperty[];
 }
 
-export interface ServiceDetail {
-  id: string;
-  label: string;
-  status: 'active' | 'pending' | 'suspended' | 'cancelled' | 'unknown';
-  productName: string;
-  productSlug?: string;
-  price: number | null;
-  currency: string;
-  billingCycleLabel: string;
-  renewalAt: string | null;
-  location: string;
-  description: string;
-  network: {
-    ipv4: string[];
-    ipv6: string[];
-    rdns: string | null;
+export interface AuthResponse {
+  message: string;
+  data: {
+    accessToken: string;
+    tokenType: string;
+    user: AuthUser;
   };
-  properties: ServiceProperty[];
-  actions: ServiceAction[];
-  sourceMode: SourceMode;
 }
 
+export interface MeResponse {
+  data: {
+    user: AuthUser;
+  };
+}
+
+export interface LogoutResponse {
+  message: string;
+}
+
+export interface LoginInput {
+  email: string;
+  password: string;
+  code?: string;
+  deviceName?: string;
+}
+
+export interface RegisterInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+  passwordConfirmation: string;
+  deviceName?: string;
+}

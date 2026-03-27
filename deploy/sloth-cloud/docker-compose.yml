@@ -34,7 +34,7 @@ services:
       - sloth-cloud-db
       - sloth-cloud-redis
     ports:
-      - "127.0.0.1:${SLOTH_PAYMENTER_PORT:-18080}:80"
+      - "${SLOTH_PAYMENTER_PORT:-18080}:80"
     volumes:
       - ../../runtime/env/paymenter.env:/var/www/html/.env
       - ../../runtime/data/paymenter/storage:/var/www/html/storage
@@ -50,7 +50,7 @@ services:
     depends_on:
       - sloth-cloud-paymenter
     ports:
-      - "127.0.0.1:${SLOTH_API_PORT:-14000}:4000"
+      - "${SLOTH_API_PORT:-14000}:4000"
     volumes:
       - ../../runtime/env/api.env:/app/apps/api/.env
     networks:
@@ -67,7 +67,7 @@ services:
     depends_on:
       - sloth-cloud-api
     ports:
-      - "127.0.0.1:${SLOTH_WEB_PORT:-13000}:80"
+      - "${SLOTH_WEB_PORT:-13000}:80"
     networks:
       - sloth-cloud-net
 

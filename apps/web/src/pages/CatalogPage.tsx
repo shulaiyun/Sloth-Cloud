@@ -2,31 +2,37 @@ import { Link, useParams } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
 import { useSite } from '../lib/site-context';
-import type { CatalogResponse, CategoryDetail } from '../lib/types';
+import type { CatalogCategoriesResponse, CatalogProductsResponse } from '../lib/types';
+
+function billingLabel(period: number | null, unit: string | null) {
+  if (!period || !unit) {
+    return 'Custom billing';
+  }
+
+  return `${period} ${unit}`;
+}
 
 export function CatalogPage() {
   const { categorySlug } = useParams();
   const { text, formatMoney } = useSite();
-  const allCatalog = useApiData<CatalogResponse>('/api/v1/catalog/categories');
-  const selectedCategory = useApiData<CategoryDetail>(
-    categorySlug ? `/api/v1/catalog/categories/${categorySlug}` : null,
+  const categoriesState = useApiData<CatalogCategoriesResponse>('/api/v1/catalog/categories');
+  const productsState = useApiData<CatalogProductsResponse>(
+    categorySlug
+      ? `/api/v1/catalog/products?category=${encodeURIComponent(categorySlug)}`
+      : '/api/v1/catalog/products',
   );
 
-  if (allCatalog.loading || selectedCategory.loading) {
+  if (categoriesState.loading || productsState.loading) {
     return <div className="loading-card">{text.common.loading}</div>;
   }
 
-  if (allCatalog.error) {
-    return <div className="error-card">{text.common.error}: {allCatalog.error}</div>;
+  if (categoriesState.error || productsState.error) {
+    return <div className="error-card">{text.common.error}: {categoriesState.error ?? productsState.error}</div>;
   }
 
-  if (!allCatalog.data) {
+  if (!categoriesState.data || !productsState.data) {
     return <div className="error-card">{text.common.error}</div>;
   }
-
-  const products = categorySlug && selectedCategory.data
-    ? selectedCategory.data.products
-    : allCatalog.data.products;
 
   return (
     <div className="stack-24">
@@ -42,7 +48,7 @@ export function CatalogPage() {
           <Link className={`filter-pill ${!categorySlug ? 'active' : ''}`} to="/catalog">
             {text.catalog.allProducts}
           </Link>
-          {allCatalog.data.categories.map((category) => (
+          {categoriesState.data.data.map((category) => (
             <Link
               className={`filter-pill ${categorySlug === category.slug ? 'active' : ''}`}
               key={category.id}
@@ -54,29 +60,29 @@ export function CatalogPage() {
         </div>
       </section>
 
-      <section className="card-grid product-grid">
-        {products.map((product) => (
-          <article className="product-card" key={product.id}>
-            <div className="chip-row">
-              {product.regionTags.map((tag) => <span className="chip" key={tag}>{tag}</span>)}
-            </div>
-            <h3>{product.name}</h3>
-            <p className="muted">{product.tagline}</p>
-            <p>{product.description}</p>
-            <div className="highlight-list">
-              {product.highlights.map((item) => <span key={item}>{item}</span>)}
-            </div>
-            <div className="card-footer">
-              <div>
-                <strong>{formatMoney(product.startingPrice, product.currency)}</strong>
-                <p className="muted">{product.billingLabel}</p>
+      {productsState.data.data.length === 0 ? (
+        <div className="callout">{text.catalog.noProducts}</div>
+      ) : (
+        <section className="card-grid product-grid">
+          {productsState.data.data.map((product) => (
+            <article className="product-card" key={product.id}>
+              <div className="chip-row">
+                {product.category ? <span className="chip">{product.category.name}</span> : null}
+                <span className="chip">{text.catalog.stock}: {product.stock ?? '-'}</span>
               </div>
-              <Link className="button ghost" to={`/product/${product.slug}`}>Inspect</Link>
-            </div>
-          </article>
-        ))}
-      </section>
+              <h3>{product.name}</h3>
+              <p>{product.description}</p>
+              <div className="card-footer">
+                <div>
+                  <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
+                  <p className="muted">{billingLabel(product.pricing?.billingPeriod ?? null, product.pricing?.billingUnit ?? null)}</p>
+                </div>
+                <Link className="button ghost" to={`/product/${product.slug}`}>Inspect</Link>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
-

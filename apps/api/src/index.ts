@@ -16,7 +16,6 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   PAYMENTER_MODE: z.enum(['mock', 'live']).default('mock'),
   PAYMENTER_API_URL: z.string().url().optional(),
-  PAYMENTER_TOKEN: z.string().optional(),
   PAYMENTER_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 });
 
@@ -29,25 +28,25 @@ const app = Fastify({
 app.log.info({
   paymenterMode: env.PAYMENTER_MODE,
   paymenterApiUrl: env.PAYMENTER_API_URL ?? null,
-  paymenterTokenDefined: Boolean(env.PAYMENTER_TOKEN),
 }, 'Sloth Cloud API environment loaded');
 
 await app.register(cors, {
   origin: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'OPTIONS'],
 });
 
 const gateway = createGateway({
   apiUrl: env.PAYMENTER_API_URL,
   mode: env.PAYMENTER_MODE,
   timeoutMs: env.PAYMENTER_TIMEOUT_MS,
-  token: env.PAYMENTER_TOKEN,
 });
 
 app.get('/api/v1/health', async () => gateway.health());
 
 app.get('/api/v1/catalog/home', async () => gateway.home());
 
-app.get('/api/v1/catalog/categories', async () => gateway.catalog());
+app.get('/api/v1/catalog/categories', async () => gateway.categories());
 
 app.get('/api/v1/catalog/categories/:categorySlug', async (request) => {
   const params = z.object({
@@ -55,6 +54,16 @@ app.get('/api/v1/catalog/categories/:categorySlug', async (request) => {
   }).parse(request.params);
 
   return gateway.category(params.categorySlug);
+});
+
+app.get('/api/v1/catalog/products', async (request) => {
+  const query = z.object({
+    category: z.string().min(1).optional(),
+    perPage: z.coerce.number().int().min(1).max(100).optional(),
+    per_page: z.coerce.number().int().min(1).max(100).optional(),
+  }).parse(request.query);
+
+  return gateway.products(query.category, query.perPage ?? query.per_page ?? 24);
 });
 
 app.get('/api/v1/catalog/products/:productSlug', async (request) => {
@@ -65,12 +74,46 @@ app.get('/api/v1/catalog/products/:productSlug', async (request) => {
   return gateway.product(params.productSlug);
 });
 
-app.get('/api/v1/client/services/:serviceId', async (request) => {
-  const params = z.object({
-    serviceId: z.string().min(1),
-  }).parse(request.params);
+app.post('/api/v1/auth/login', async (request) => {
+  const body = z.object({
+    email: z.string().email(),
+    password: z.string().min(1),
+    code: z.string().trim().min(6).max(8).optional(),
+    deviceName: z.string().trim().min(1).max(255).optional(),
+  }).parse(request.body);
 
-  return gateway.service(params.serviceId);
+  return gateway.login(body);
+});
+
+app.post('/api/v1/auth/register', async (request) => {
+  const body = z.object({
+    firstName: z.string().trim().min(1).max(255),
+    lastName: z.string().trim().min(1).max(255),
+    email: z.string().email(),
+    password: z.string().min(8),
+    passwordConfirmation: z.string().min(8),
+    deviceName: z.string().trim().min(1).max(255).optional(),
+  }).parse(request.body);
+
+  return gateway.register(body);
+});
+
+app.get('/api/v1/auth/me', async (request) => {
+  const headers = z.object({
+    authorization: z.string().optional(),
+  }).parse(request.headers);
+  const token = headers.authorization?.replace(/^Bearer\s+/i, '');
+
+  return gateway.me(token);
+});
+
+app.post('/api/v1/auth/logout', async (request) => {
+  const headers = z.object({
+    authorization: z.string().optional(),
+  }).parse(request.headers);
+  const token = headers.authorization?.replace(/^Bearer\s+/i, '');
+
+  return gateway.logout(token);
 });
 
 app.setErrorHandler((error, request, reply) => {
@@ -78,6 +121,15 @@ app.setErrorHandler((error, request, reply) => {
   const statusCode = typeof error === 'object' && error && 'statusCode' in error
     ? Number((error as { statusCode?: number }).statusCode ?? 500)
     : 500;
+  const payload = typeof error === 'object' && error && 'payload' in error
+    ? (error as { payload?: unknown }).payload
+    : undefined;
+
+  if (payload !== undefined) {
+    reply.status(statusCode).send(payload);
+    return;
+  }
+
   const message = error instanceof Error ? error.message : 'Unexpected server error';
 
   reply.status(statusCode).send({

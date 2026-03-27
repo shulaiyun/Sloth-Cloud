@@ -1,7 +1,7 @@
 import { useSite } from '../lib/site-context';
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useSite();
+  const { theme, setTheme, text } = useSite();
 
   return (
     <button
@@ -9,8 +9,7 @@ export function ThemeToggle() {
       type="button"
       onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
     >
-      {theme === 'dark' ? 'Dark' : 'Light'}
+      {theme === 'dark' ? text.common.themeDark : text.common.themeLight}
     </button>
   );
 }
-

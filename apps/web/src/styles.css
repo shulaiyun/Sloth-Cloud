@@ -146,6 +146,9 @@ select {
 .toolbar {
   display: flex;
   gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .toggle-button,
@@ -302,6 +305,14 @@ select {
   transform: none;
 }
 
+.toolbar-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 .metrics-grid,
 .card-grid,
 .service-grid,
@@ -437,6 +448,10 @@ select {
   background: var(--bg-elevated);
 }
 
+.compact {
+  padding: 14px 16px;
+}
+
 .bullet-list {
   display: grid;
   gap: 10px;
@@ -479,6 +494,48 @@ select {
 .status-cancelled { color: #ff8484; }
 
 .text-link { color: var(--accent); }
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+}
+
+.auth-card {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 24px;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.field,
+.field-row {
+  display: grid;
+  gap: 12px;
+}
+
+.field span {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.field-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 
 .footer {
   margin-top: 28px;
@@ -532,8 +589,8 @@ select {
   }
 
   .detail-grid,
-  .property-grid {
+  .property-grid,
+  .field-row {
     grid-template-columns: 1fr;
   }
 }
-

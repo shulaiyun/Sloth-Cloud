@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
+import { useAuth } from '../lib/auth-context';
 import { useSite } from '../lib/site-context';
 import type { HomeResponse } from '../lib/types';
 
 export function HomePage() {
   const { text, formatMoney } = useSite();
+  const { isAuthenticated } = useAuth();
   const { data, error, loading } = useApiData<HomeResponse>('/api/v1/catalog/home');
 
   if (loading) {
@@ -25,16 +27,16 @@ export function HomePage() {
           <p>{text.home.subtitle}</p>
           <div className="action-row">
             <Link className="button primary" to="/catalog">{text.home.primaryCta}</Link>
-            <Link className="button secondary" to="/services/10001">{text.home.secondaryCta}</Link>
+            {!isAuthenticated ? <Link className="button secondary" to="/login">{text.home.secondaryCta}</Link> : null}
           </div>
         </div>
         <div className="hero-panel">
           <div className="glass-panel">
-            <span className="panel-kicker">{data.brand.subtitle}</span>
-            <strong>{data.brand.name}</strong>
-            <p>{data.brand.statement}</p>
+            <span className="panel-kicker">{data.data.brand.subtitle}</span>
+            <strong>{data.data.brand.name}</strong>
+            <p>{data.data.brand.statement}</p>
             <div className="chip-row">
-              {data.categories.slice(0, 3).map((item) => (
+              {data.data.categories.slice(0, 3).map((item) => (
                 <span className="chip" key={item.id}>{item.name}</span>
               ))}
             </div>
@@ -43,7 +45,7 @@ export function HomePage() {
       </section>
 
       <section className="metrics-grid">
-        {data.stats.map((item) => (
+        {data.data.stats.map((item) => (
           <article className="metric-card" key={item.label}>
             <span>{item.label}</span>
             <strong>{item.value}</strong>
@@ -60,19 +62,16 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid product-grid">
-          {data.featuredProducts.map((product) => (
+          {data.data.featuredProducts.map((product) => (
             <article className="product-card" key={product.id}>
               <div className="chip-row">
-                {product.regionTags.map((tag) => <span className="chip" key={tag}>{tag}</span>)}
+                {product.category ? <span className="chip">{product.category.name}</span> : null}
+                <span className="chip">{product.pricing?.planName ?? 'Default plan'}</span>
               </div>
               <h3>{product.name}</h3>
-              <p className="muted">{product.tagline}</p>
               <p>{product.description}</p>
-              <div className="highlight-list">
-                {product.highlights.map((item) => <span key={item}>{item}</span>)}
-              </div>
               <div className="card-footer">
-                <strong>{formatMoney(product.startingPrice, product.currency)} {text.common.startingFrom}</strong>
+                <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
                 <Link className="button ghost" to={`/product/${product.slug}`}>View</Link>
               </div>
             </article>
@@ -88,15 +87,11 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid category-grid">
-          {data.categories.map((category) => (
+          {data.data.categories.map((category) => (
             <article className="category-card" key={category.id}>
-              <span className={`accent-dot accent-${category.accent}`} />
               <h3>{category.name}</h3>
               <p>{category.description}</p>
-              <strong>{category.heroMetric}</strong>
-              <div className="chip-row">
-                {category.regionTags.map((tag) => <span className="chip" key={tag}>{tag}</span>)}
-              </div>
+              <strong>{category.productCount} products</strong>
               <Link className="button ghost" to={`/catalog/${category.slug}`}>Open</Link>
             </article>
           ))}
@@ -105,4 +100,3 @@ export function HomePage() {
     </div>
   );
 }
-

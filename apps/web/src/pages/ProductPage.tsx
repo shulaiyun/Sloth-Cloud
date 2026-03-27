@@ -1,40 +1,63 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
+import { useAuth } from '../lib/auth-context';
 import { useSite } from '../lib/site-context';
-import type { ConfigOption, ProductDetail } from '../lib/types';
+import type { ConfigOption, ProductDetailResponse } from '../lib/types';
 
-function priceDelta(option: ConfigOption, currentValue: string | boolean | null | undefined) {
-  if (!option.choices?.length) {
+function optionDelta(option: ConfigOption, currentValue: string | null | undefined, planId: string | undefined) {
+  if (!planId || option.children.length === 0) {
     return 0;
   }
 
-  const selected = option.choices.find((item) => item.id === currentValue);
-  return selected?.priceDelta ?? 0;
+  const selected = option.children.find((item) => item.id === currentValue);
+  const pricing = selected?.pricing.find((entry) => entry.planId === planId);
+
+  return pricing?.price ?? 0;
+}
+
+function cycleLabel(period: number | null, unit: string | null) {
+  if (!period || !unit) {
+    return 'Custom billing';
+  }
+
+  return `${period} ${unit}`;
 }
 
 export function ProductPage() {
   const { productSlug } = useParams();
+  const location = useLocation();
   const { text, formatMoney } = useSite();
-  const { data, error, loading } = useApiData<ProductDetail>(
+  const { isAuthenticated } = useAuth();
+  const { data, error, loading } = useApiData<ProductDetailResponse>(
     productSlug ? `/api/v1/catalog/products/${productSlug}` : null,
   );
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
-  const [formState, setFormState] = useState<Record<string, string | boolean | null>>({});
+  const [formState, setFormState] = useState<Record<string, string | null>>({});
+
+  const product = data?.data ?? null;
+  const extraOptions = useMemo(() => {
+    if (!product) {
+      return [];
+    }
+
+    const operatingSystemIds = new Set(product.operatingSystemOptions.map((option) => option.id));
+    return product.configOptions.filter((option) => !operatingSystemIds.has(option.id));
+  }, [product]);
 
   useEffect(() => {
-    if (!data) {
+    if (!product) {
       return;
     }
 
-    setSelectedPlanId(data.plans[0]?.id ?? '');
-    setFormState(Object.fromEntries(data.configurableOptions.map((option) => [option.id, option.defaultValue ?? null])));
-  }, [data]);
+    setSelectedPlanId(product.plans[0]?.id ?? '');
+    setFormState(Object.fromEntries(product.configOptions.map((option) => [option.id, option.children[0]?.id ?? null])));
+  }, [product]);
 
   const selectedPlan = useMemo(
-    () => data?.plans.find((plan) => plan.id === selectedPlanId) ?? data?.plans[0],
-    [data, selectedPlanId],
+    () => product?.plans.find((plan) => plan.id === selectedPlanId) ?? product?.plans[0],
+    [product, selectedPlanId],
   );
 
   const total = useMemo(() => {
@@ -42,17 +65,23 @@ export function ProductPage() {
       return null;
     }
 
-    const configTotal = data?.configurableOptions.reduce((sum, option) => sum + priceDelta(option, formState[option.id]), 0) ?? 0;
-    return (selectedPlan.price ?? 0) + configTotal;
-  }, [data, formState, selectedPlan]);
+    const basePrice = selectedPlan.prices[0]?.price ?? 0;
+    const configTotal = product?.configOptions.reduce((sum, option) => {
+      return sum + optionDelta(option, formState[option.id], selectedPlan.id);
+    }, 0) ?? 0;
+
+    return basePrice + configTotal;
+  }, [formState, product, selectedPlan]);
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
   }
 
-  if (error || !data) {
+  if (error || !product) {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
+
+  const sourceMode = data?.meta.sourceMode ?? 'live';
 
   return (
     <div className="stack-24">
@@ -60,21 +89,26 @@ export function ProductPage() {
         <div className="stack-16">
           <Link className="text-link" to="/catalog">{text.common.backToCatalog}</Link>
           <div className="chip-row">
-            <span className="chip">{data.billingLabel}</span>
-            <span className="chip">{data.stockLabel}</span>
-            <span className="chip">{text.common.sourceMode}: {data.sourceMode === 'live' ? text.common.live : text.common.mock}</span>
+            {product.category ? <span className="chip">{product.category.name}</span> : null}
+            <span className="chip">{text.common.sourceMode}: {sourceMode === 'live' ? text.common.live : text.common.mock}</span>
+            <span className="chip">Stock: {product.stock ?? '-'}</span>
           </div>
-          <h1>{data.name}</h1>
-          <p className="lead">{data.description}</p>
-          <div className="highlight-list">
-            {data.highlights.map((item) => <span key={item}>{item}</span>)}
-          </div>
+          <h1>{product.name}</h1>
+          <p className="lead">{product.description}</p>
         </div>
         <aside className="summary-card">
           <span className="eyebrow">{text.product.summary}</span>
-          <strong className="price-large">{formatMoney(total, data.currency)}</strong>
-          <p>{selectedPlan?.cycleLabel ?? data.billingLabel}</p>
-          <button className="button primary" type="button" disabled>{text.product.provisionalAction}</button>
+          <strong className="price-large">
+            {formatMoney(total, selectedPlan?.prices[0]?.currencyCode ?? 'USD')}
+          </strong>
+          <p>{cycleLabel(selectedPlan?.billingPeriod ?? null, selectedPlan?.billingUnit ?? null)}</p>
+          {!isAuthenticated ? (
+            <Link className="button primary" to={`/login?next=${encodeURIComponent(location.pathname)}`}>
+              {text.common.loginRequired}
+            </Link>
+          ) : (
+            <div className="callout compact">{text.product.checkoutPending}</div>
+          )}
         </aside>
       </section>
 
@@ -82,10 +116,10 @@ export function ProductPage() {
         <div className="panel stack-20">
           <div>
             <p className="eyebrow">{text.product.plans}</p>
-            <h2>{text.product.choosePlan}</h2>
+            <h2>{text.product.details}</h2>
           </div>
           <div className="choice-grid">
-            {data.plans.map((plan) => (
+            {product.plans.map((plan) => (
               <button
                 className={`choice-card ${selectedPlanId === plan.id ? 'selected' : ''}`}
                 key={plan.id}
@@ -93,58 +127,75 @@ export function ProductPage() {
                 onClick={() => setSelectedPlanId(plan.id)}
               >
                 <strong>{plan.name}</strong>
-                <span>{plan.cycleLabel}</span>
-                <small>{formatMoney(plan.price, plan.currency)}</small>
+                <span>{cycleLabel(plan.billingPeriod, plan.billingUnit)}</span>
+                <small>{formatMoney(plan.prices[0]?.price ?? null, plan.prices[0]?.currencyCode ?? 'USD')}</small>
               </button>
             ))}
           </div>
 
-          <div>
-            <p className="eyebrow">{text.product.config}</p>
-            <h2>{text.product.title}</h2>
-          </div>
-
-          {data.configurableOptions.length === 0 ? (
-            <div className="callout">{text.product.noConfig}</div>
-          ) : (
+          {product.operatingSystemOptions.length > 0 ? (
             <div className="stack-16">
-              {data.configurableOptions.map((option) => (
+              <div>
+                <p className="eyebrow">{text.product.os}</p>
+                <h2>{text.product.config}</h2>
+              </div>
+              {product.operatingSystemOptions.map((option) => (
                 <div className="option-card" key={option.id}>
                   <div className="stack-8">
                     <strong>{option.name}</strong>
                     <p className="muted">{option.description}</p>
                   </div>
-                  {option.type === 'checkbox' ? (
-                    <label className="checkbox-row">
-                      <input
-                        checked={Boolean(formState[option.id])}
-                        onChange={(event) => setFormState((state) => ({ ...state, [option.id]: event.target.checked }))}
-                        type="checkbox"
-                      />
-                      <span>Enable</span>
-                    </label>
-                  ) : option.type === 'text' ? (
-                    <input
-                      className="text-input"
-                      onChange={(event) => setFormState((state) => ({ ...state, [option.id]: event.target.value }))}
-                      value={String(formState[option.id] ?? '')}
-                    />
-                  ) : (
+                  <div className="choice-grid">
+                    {option.children.map((choice) => (
+                      <button
+                        className={`choice-card compact ${formState[option.id] === choice.id ? 'selected' : ''}`}
+                        key={choice.id}
+                        type="button"
+                        onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
+                      >
+                        <strong>{choice.name}</strong>
+                        {choice.description ? <span>{choice.description}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {extraOptions.length === 0 ? (
+            <div className="callout">{text.product.configEmpty}</div>
+          ) : (
+            <div className="stack-16">
+              {extraOptions.map((option) => (
+                <div className="option-card" key={option.id}>
+                  <div className="stack-8">
+                    <strong>{option.name}</strong>
+                    <p className="muted">{option.description}</p>
+                  </div>
+                  {option.children.length > 0 ? (
                     <div className="choice-grid">
-                      {option.choices?.map((choice) => (
+                      {option.children.map((choice) => (
                         <button
                           className={`choice-card compact ${formState[option.id] === choice.id ? 'selected' : ''}`}
-                          key={choice.id}
+                          key={`${option.id}-${choice.id}`}
                           type="button"
                           onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
                         >
-                          <strong>{choice.label}</strong>
+                          <strong>{choice.name}</strong>
                           {choice.description ? <span>{choice.description}</span> : null}
-                          {choice.priceDelta ? <small>+ {formatMoney(choice.priceDelta, data.currency)}</small> : null}
+                          {selectedPlan ? (
+                            <small>
+                              + {formatMoney(
+                                choice.pricing.find((entry) => entry.planId === selectedPlan.id)?.price ?? 0,
+                                selectedPlan.prices[0]?.currencyCode ?? 'USD',
+                              )}
+                            </small>
+                          ) : null}
                         </button>
                       ))}
                     </div>
-                  )}
+                  ) : <p className="muted">{text.product.configEmpty}</p>}
                 </div>
               ))}
             </div>
@@ -153,15 +204,12 @@ export function ProductPage() {
 
         <div className="stack-20">
           <section className="panel">
-            <p className="eyebrow">{text.product.features}</p>
+            <p className="eyebrow">{text.product.details}</p>
             <div className="bullet-list">
-              {data.features.map((item) => <span key={item}>{item}</span>)}
-            </div>
-          </section>
-          <section className="panel">
-            <p className="eyebrow">{text.product.notes}</p>
-            <div className="bullet-list">
-              {data.purchaseNotes.map((item) => <span key={item}>{item}</span>)}
+              <span>Slug: {product.slug}</span>
+              <span>Allow quantity: {product.allowQuantity ? 'Yes' : 'No'}</span>
+              <span>Per-user limit: {product.perUserLimit ?? '-'}</span>
+              <span>{text.product.loginHint}</span>
             </div>
           </section>
         </div>
@@ -169,4 +217,3 @@ export function ProductPage() {
     </div>
   );
 }
-

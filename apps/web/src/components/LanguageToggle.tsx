@@ -1,7 +1,7 @@
 import { useSite } from '../lib/site-context';
 
 export function LanguageToggle() {
-  const { locale, setLocale } = useSite();
+  const { locale, setLocale, text } = useSite();
 
   return (
     <button
@@ -9,8 +9,7 @@ export function LanguageToggle() {
       type="button"
       onClick={() => setLocale(locale === 'zh-CN' ? 'en-US' : 'zh-CN')}
     >
-      {locale === 'zh-CN' ? '中文' : 'EN'}
+      {locale === 'zh-CN' ? text.common.languageZh : text.common.languageEn}
     </button>
   );
 }
-

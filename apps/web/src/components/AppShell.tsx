@@ -1,11 +1,13 @@
 import { Link, NavLink, Outlet } from 'react-router-dom';
 
+import { useAuth } from '../lib/auth-context';
 import { useSite } from '../lib/site-context';
 import { LanguageToggle } from './LanguageToggle';
 import { ThemeToggle } from './ThemeToggle';
 
 export function AppShell() {
   const { text } = useSite();
+  const { isAuthenticated, loading, logout, user } = useAuth();
 
   return (
     <div className="shell">
@@ -21,11 +23,24 @@ export function AppShell() {
         <nav className="nav-links">
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/">{text.nav.home}</NavLink>
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/catalog">{text.nav.catalog}</NavLink>
-          <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/product/hk-c2-2c4g">{text.nav.product}</NavLink>
-          <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/services/10001">{text.nav.service}</NavLink>
+          {!loading && !isAuthenticated ? (
+            <>
+              <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/login">{text.nav.login}</NavLink>
+              <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/register">{text.nav.register}</NavLink>
+            </>
+          ) : null}
         </nav>
 
         <div className="toolbar">
+          {isAuthenticated && user ? (
+            <div className="user-pill">
+              <span>{text.common.hello}</span>
+              <strong>{user.firstName || user.name}</strong>
+              <button className="toolbar-link" onClick={() => void logout()} type="button">
+                {text.nav.logout}
+              </button>
+            </div>
+          ) : null}
           <LanguageToggle />
           <ThemeToggle />
         </div>
@@ -36,7 +51,7 @@ export function AppShell() {
       </main>
 
       <footer className="footer">
-        <p>Sloth Cloud phase-one prototype. BFF first, Paymenter behind the edge.</p>
+        <p>Sloth Cloud Headless storefront. Real auth and real catalog data now flow through the BFF.</p>
       </footer>
     </div>
   );
