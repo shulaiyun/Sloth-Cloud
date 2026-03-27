@@ -1,0 +1,14 @@
+{
+  "name": "sloth-cloud-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "corepack pnpm -r --parallel --filter @sloth-cloud/* dev",
+    "build": "corepack pnpm -r --filter @sloth-cloud/* build",
+    "typecheck": "corepack pnpm -r --filter @sloth-cloud/* typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.8.3"
+  }
+}
