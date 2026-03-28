@@ -24,7 +24,7 @@ chmod -R ug+rwX /var/www/html/storage /var/www/html/bootstrap/cache
 php /var/www/html/artisan storage:link >/dev/null 2>&1 || true
 
 attempt=1
-max_attempts=20
+max_attempts=40
 while [ "$attempt" -le "$max_attempts" ]; do
   if php /var/www/html/artisan migrate --force && php /var/www/html/artisan app:ensure-defaults; then
     break
@@ -39,6 +39,9 @@ while [ "$attempt" -le "$max_attempts" ]; do
   attempt=$((attempt + 1))
   sleep 3
 done
+
+php /var/www/html/artisan app:localization:sync >/dev/null 2>&1 || true
+php /var/www/html/artisan filament:assets >/dev/null 2>&1 || true
 
 php /var/www/html/artisan config:clear >/dev/null 2>&1 || true
 php /var/www/html/artisan route:clear >/dev/null 2>&1 || true

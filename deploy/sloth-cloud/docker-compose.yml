@@ -11,6 +11,12 @@ services:
       MYSQL_ROOT_PASSWORD: ${SLOTH_DB_ROOT_PASSWORD:-replace-with-even-stronger-password}
     volumes:
       - ../../runtime/data/mariadb:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     networks:
       - sloth-cloud-net
 
@@ -21,6 +27,12 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - ../../runtime/data/redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     networks:
       - sloth-cloud-net
 
@@ -31,8 +43,10 @@ services:
     container_name: sloth-cloud-paymenter
     restart: unless-stopped
     depends_on:
-      - sloth-cloud-db
-      - sloth-cloud-redis
+      sloth-cloud-db:
+        condition: service_healthy
+      sloth-cloud-redis:
+        condition: service_healthy
     ports:
       - "${SLOTH_PAYMENTER_PORT:-18080}:80"
     volumes:

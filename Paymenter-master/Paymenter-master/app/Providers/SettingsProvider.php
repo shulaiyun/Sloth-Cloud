@@ -33,6 +33,7 @@ class SettingsProvider extends ServiceProvider
         if (config('settings') && !empty(config('settings')) && !$force) {
             return;
         }
+
         try {
             // Load settings from cache
             $settings = Cache::get('settings', []);
@@ -58,7 +59,11 @@ class SettingsProvider extends ServiceProvider
             date_default_timezone_set(config('settings.timezone', 'UTC'));
 
             Theme::set(active_theme(), 'default');
+        } catch (Exception $e) {
+            // Do nothing
+        }
 
+        try {
             $appUrl = self::resolvePublicAppUrl();
             $effectiveRootUrl = $appUrl;
 
@@ -89,7 +94,7 @@ class SettingsProvider extends ServiceProvider
 
     private static function resolvePublicAppUrl(): string
     {
-        $configured = trim((string) (config('settings.app_url') ?: config('app.url') ?: ''));
+        $configured = trim((string) (env('SLOTH_PAYMENTER_PUBLIC_URL') ?: config('settings.app_url') ?: config('app.url') ?: ''));
 
         if ($configured === '') {
             $configured = 'http://localhost';

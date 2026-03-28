@@ -50,7 +50,7 @@ class EnsureDefaults extends Command
             ['value' => $defaultCurrency, 'type' => 'string']
         );
 
-        $runtimeAppUrl = rtrim((string) (env('APP_URL') ?: env('SLOTH_PAYMENTER_PUBLIC_URL') ?: ''), '/');
+        $runtimeAppUrl = rtrim((string) (env('SLOTH_PAYMENTER_PUBLIC_URL') ?: env('APP_URL') ?: ''), '/');
         $currentAppUrl = (string) Setting::query()->where('key', 'app_url')->value('value');
 
         if ($runtimeAppUrl !== '' && !$this->isLocalhostUrl($runtimeAppUrl)) {
@@ -58,11 +58,22 @@ class EnsureDefaults extends Command
                 ['key' => 'app_url'],
                 ['value' => $runtimeAppUrl, 'type' => 'string']
             );
+        } elseif ($currentAppUrl !== '' && $this->isLocalhostUrl($currentAppUrl)) {
+            $publicFromEnv = rtrim((string) env('SLOTH_PAYMENTER_PUBLIC_URL', ''), '/');
+            if ($publicFromEnv !== '' && !$this->isLocalhostUrl($publicFromEnv)) {
+                Setting::updateOrCreate(
+                    ['key' => 'app_url'],
+                    ['value' => $publicFromEnv, 'type' => 'string']
+                );
+            }
         } elseif ($currentAppUrl === '') {
-            Setting::updateOrCreate(
-                ['key' => 'app_url'],
-                ['value' => 'http://localhost', 'type' => 'string']
-            );
+            $fallbackAppUrl = rtrim((string) (env('SLOTH_PAYMENTER_PUBLIC_URL') ?: env('APP_URL') ?: ''), '/');
+            if ($fallbackAppUrl !== '' && !$this->isLocalhostUrl($fallbackAppUrl)) {
+                Setting::updateOrCreate(
+                    ['key' => 'app_url'],
+                    ['value' => $fallbackAppUrl, 'type' => 'string']
+                );
+            }
         }
 
         Setting::firstOrCreate(
