@@ -38,14 +38,13 @@
 
 /*
  * Fail-safe: if Alpine/JS fails to boot, avoid an all-white admin page.
+ * Keep descendant [x-cloak] behavior untouched to prevent hidden panels from
+ * covering the whole screen when JavaScript is partially initialized.
  */
-body[x-cloak] {
+body[x-cloak],
+.fi-body[x-cloak],
+.fi-simple-main[x-cloak] {
     display: block !important;
-}
-
-.fi-body [x-cloak],
-.fi-simple-main [x-cloak] {
-    display: inherit !important;
 }
 
 .fi-topbar {

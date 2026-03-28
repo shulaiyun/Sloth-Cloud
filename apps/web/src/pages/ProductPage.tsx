@@ -102,6 +102,34 @@ export function ProductPage() {
     return basePrice + configTotal;
   }, [formState, product, selectedPlan]);
 
+  function buildCartPayload() {
+    if (!product || !selectedPlan) {
+      return null;
+    }
+
+    const configOptions = Object.fromEntries(
+      Object.entries(formState).filter(([, value]) => value !== null && value !== ''),
+    );
+    const checkoutConfig = Object.fromEntries(
+      Object.entries(checkoutForm).map(([key, value]) => {
+        const field = product.checkoutFields.find((entry) => entry.name === key);
+        if (!field) {
+          return [key, value];
+        }
+
+        return [key, normalizeCheckoutValue(field, value)];
+      }),
+    );
+
+    return {
+      productSlug: product.slug,
+      planId: selectedPlan.id,
+      quantity: 1,
+      configOptions,
+      checkoutConfig,
+    };
+  }
+
   async function addToCart() {
     if (!product || !selectedPlan) {
       return;
@@ -112,34 +140,61 @@ export function ProductPage() {
     setSubmitSuccess(null);
 
     try {
-      const configOptions = Object.fromEntries(
-        Object.entries(formState).filter(([, value]) => value !== null && value !== ''),
-      );
-      const checkoutConfig = Object.fromEntries(
-        Object.entries(checkoutForm).map(([key, value]) => {
-          const field = product.checkoutFields.find((entry) => entry.name === key);
-          if (!field) {
-            return [key, value];
-          }
-
-          return [key, normalizeCheckoutValue(field, value)];
-        }),
-      );
+      const payload = buildCartPayload();
+      if (!payload) {
+        return;
+      }
 
       await requestJson('/api/v1/cart/items', {
         method: 'POST',
-        body: {
-          productSlug: product.slug,
-          planId: selectedPlan.id,
-          quantity: 1,
-          configOptions,
-          checkoutConfig,
-        },
+        body: payload,
       });
 
       setSubmitSuccess(text.product.addSuccess);
     } catch (caughtError) {
       setSubmitError((caughtError as ApiError).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function goCheckoutWithCurrentConfig() {
+    if (!product || !selectedPlan) {
+      navigate('/checkout');
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+
+    try {
+      const payload = buildCartPayload();
+      if (!payload) {
+        navigate('/checkout');
+        return;
+      }
+
+      await requestJson('/api/v1/cart/items', {
+        method: 'POST',
+        body: payload,
+      });
+
+      navigate('/checkout');
+    } catch (caughtError) {
+      const message = (caughtError as ApiError).message;
+      const normalized = message.toLowerCase();
+
+      if (
+        normalized.includes('already in your cart')
+        || normalized.includes('cannot be added again')
+        || normalized.includes('already in cart')
+      ) {
+        navigate('/checkout');
+        return;
+      }
+
+      setSubmitError(message);
     } finally {
       setSubmitting(false);
     }
@@ -183,7 +238,12 @@ export function ProductPage() {
               <button className="button primary" disabled={submitting} type="button" onClick={() => void addToCart()}>
                 {submitting ? `${text.product.addToCart}...` : text.product.addToCart}
               </button>
-              <button className="button secondary" type="button" onClick={() => navigate('/checkout')}>
+              <button
+                className="button secondary"
+                disabled={submitting}
+                type="button"
+                onClick={() => void goCheckoutWithCurrentConfig()}
+              >
                 {text.product.goCheckout}
               </button>
             </div>
