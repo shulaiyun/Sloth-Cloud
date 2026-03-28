@@ -50,6 +50,26 @@ class EnsureDefaults extends Command
             ['value' => $defaultCurrency, 'type' => 'string']
         );
 
+        $runtimeAppUrl = rtrim((string) (env('APP_URL') ?: env('SLOTH_PAYMENTER_PUBLIC_URL') ?: ''), '/');
+        $currentAppUrl = (string) Setting::query()->where('key', 'app_url')->value('value');
+
+        if ($runtimeAppUrl !== '' && !$this->isLocalhostUrl($runtimeAppUrl)) {
+            Setting::updateOrCreate(
+                ['key' => 'app_url'],
+                ['value' => $runtimeAppUrl, 'type' => 'string']
+            );
+        } elseif ($currentAppUrl === '') {
+            Setting::updateOrCreate(
+                ['key' => 'app_url'],
+                ['value' => 'http://localhost', 'type' => 'string']
+            );
+        }
+
+        Setting::firstOrCreate(
+            ['key' => 'trusted_proxies'],
+            ['value' => ['*'], 'type' => 'array']
+        );
+
         $availableLocales = collect((array) config('app.available_locales'))
             ->keys()
             ->values()
@@ -80,5 +100,12 @@ class EnsureDefaults extends Command
         $this->info('Defaults ensured successfully.');
 
         return self::SUCCESS;
+    }
+
+    private function isLocalhostUrl(string $url): bool
+    {
+        $host = (string) parse_url($url, PHP_URL_HOST);
+
+        return in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true);
     }
 }

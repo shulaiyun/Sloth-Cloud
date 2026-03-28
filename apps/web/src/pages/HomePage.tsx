@@ -61,8 +61,9 @@ export function HomePage() {
                 <BrandLogo />
               </span>
               <div className="brand-feature-copy">
-                <span className="panel-kicker">SLOTH CLOUD</span>
-                <strong>树懒云</strong>
+                <span className="panel-kicker">树懒云 / SLOTH CLOUD</span>
+                <strong className="brand-feature-name">树懒云</strong>
+                <span className="brand-feature-en">Sloth Cloud</span>
                 <p>{text.footer.statement}</p>
               </div>
             </div>

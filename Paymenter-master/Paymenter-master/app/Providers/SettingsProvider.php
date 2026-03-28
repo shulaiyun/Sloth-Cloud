@@ -60,14 +60,23 @@ class SettingsProvider extends ServiceProvider
             Theme::set(active_theme(), 'default');
 
             $appUrl = self::resolvePublicAppUrl();
-            config(['app.url' => $appUrl]);
+            $effectiveRootUrl = $appUrl;
 
-            if (Str::startsWith($appUrl, 'https://')) {
+            if (!app()->runningInConsole()) {
+                $requestRootUrl = self::detectRequestRootUrl();
+                if (is_string($requestRootUrl) && $requestRootUrl !== '') {
+                    $effectiveRootUrl = $requestRootUrl;
+                }
+            }
+
+            config(['app.url' => $effectiveRootUrl]);
+
+            if (Str::startsWith($effectiveRootUrl, 'https://')) {
                 URL::forceScheme('https');
             }
-            URL::forceRootUrl($appUrl);
+            URL::forceRootUrl($effectiveRootUrl);
 
-            Config::set('filesystems.disks.public.url', $appUrl . '/storage');
+            Config::set('filesystems.disks.public.url', rtrim($effectiveRootUrl, '/') . '/storage');
         } catch (Exception $e) {
             // Do nothing
         }
@@ -75,36 +84,81 @@ class SettingsProvider extends ServiceProvider
 
     private static function resolvePublicAppUrl(): string
     {
-        $configured = (string) (config('settings.app_url') ?: config('app.url') ?: '');
-        $configured = trim($configured);
+        $configured = trim((string) (config('settings.app_url') ?: config('app.url') ?: ''));
 
         if ($configured === '') {
             $configured = 'http://localhost';
         }
 
-        // If an old setup still has localhost in settings but the request comes from a real host
-        // (e.g. behind Nginx Proxy Manager), use the incoming host to avoid localhost redirects.
-        if (!app()->runningInConsole() && request()) {
-            $request = request();
-            $forwardedHost = (string) ($request->headers->get('x-forwarded-host') ?: '');
-            $requestHost = trim(explode(',', $forwardedHost !== '' ? $forwardedHost : (string) $request->getHost())[0] ?? '');
+        if (!preg_match('#^https?://#i', $configured)) {
+            $configured = 'http://' . ltrim($configured, '/');
+        }
 
-            if ($requestHost !== '') {
-                $forwardedProto = (string) ($request->headers->get('x-forwarded-proto') ?: '');
-                $requestScheme = trim(explode(',', $forwardedProto !== '' ? $forwardedProto : $request->getScheme())[0] ?? '');
-                $requestScheme = in_array($requestScheme, ['http', 'https'], true) ? $requestScheme : 'http';
-                $requestRoot = $requestScheme . '://' . $requestHost;
-                $configuredHost = (string) parse_url($configured, PHP_URL_HOST);
-                $isConfiguredLocal = in_array($configuredHost, ['localhost', '127.0.0.1', '::1'], true);
-                $isRequestLocal = in_array($requestHost, ['localhost', '127.0.0.1', '::1'], true);
+        $requestRootUrl = self::detectRequestRootUrl();
 
-                if ($isConfiguredLocal && !$isRequestLocal) {
-                    return $requestRoot;
-                }
+        if ($requestRootUrl !== null) {
+            $configuredHost = (string) parse_url($configured, PHP_URL_HOST);
+            $requestHost = (string) parse_url($requestRootUrl, PHP_URL_HOST);
+
+            $isConfiguredLocal = self::isLocalHost($configuredHost);
+            $isRequestLocal = self::isLocalHost($requestHost);
+
+            if (!$isRequestLocal || $isConfiguredLocal) {
+                return $requestRootUrl;
             }
         }
 
         return $configured;
+    }
+
+    private static function detectRequestRootUrl(): ?string
+    {
+        if (app()->runningInConsole() || !request()) {
+            return null;
+        }
+
+        $request = request();
+        $possibleHosts = [
+            $request->headers->get('x-forwarded-host'),
+            $request->headers->get('x-original-host'),
+            $request->headers->get('x-host'),
+            $request->getHost(),
+            $request->server->get('HTTP_HOST'),
+        ];
+
+        $host = '';
+        foreach ($possibleHosts as $candidate) {
+            $candidate = trim(explode(',', (string) ($candidate ?? ''))[0] ?? '');
+            if ($candidate !== '') {
+                $host = $candidate;
+                break;
+            }
+        }
+
+        if ($host === '') {
+            return null;
+        }
+
+        $possibleSchemes = [
+            $request->headers->get('x-forwarded-proto'),
+            $request->getScheme(),
+        ];
+
+        $scheme = 'http';
+        foreach ($possibleSchemes as $candidate) {
+            $candidate = trim(explode(',', (string) ($candidate ?? ''))[0] ?? '');
+            if (in_array($candidate, ['http', 'https'], true)) {
+                $scheme = $candidate;
+                break;
+            }
+        }
+
+        return $scheme . '://' . $host;
+    }
+
+    private static function isLocalHost(string $host): bool
+    {
+        return in_array(strtolower(trim($host)), ['localhost', '127.0.0.1', '::1'], true);
     }
 
     public static function flushCache()

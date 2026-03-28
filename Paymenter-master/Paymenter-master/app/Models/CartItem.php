@@ -47,20 +47,40 @@ class CartItem extends Model
         return Attribute::make(
             get: function () {
                 $currencyCode = (string) ($this->cart?->currency_code ?? session('currency', config('settings.default_currency')));
+                $plan = $this->plan;
+                $product = $this->product;
+
+                if (!$plan || !$product) {
+                    return new Price([
+                        'price' => 0,
+                        'currency' => null,
+                        'setup_fee' => 0,
+                    ], dontShowUnavailablePrice: true);
+                }
+
                 $total = 0;
                 $setup_fee = 0;
-                $planPrice = $this->plan->price($currencyCode);
-                $total += $planPrice->price;
-                $setup_fee += $planPrice->setup_fee;
+                $planPrice = $plan->price($currencyCode);
 
-                $this->product->configOptions->each(function ($option) use (&$total, &$setup_fee, $currencyCode) {
+                if (!$planPrice) {
+                    return new Price([
+                        'price' => 0,
+                        'currency' => null,
+                        'setup_fee' => 0,
+                    ], dontShowUnavailablePrice: true);
+                }
+
+                $total += (float) ($planPrice->price ?? 0);
+                $setup_fee += (float) ($planPrice->setup_fee ?? 0);
+
+                $product->configOptions->each(function ($option) use (&$total, &$setup_fee, $currencyCode, $plan) {
                     $selected = (object) collect($this->config_options)->firstWhere('option_id', $option->id);
 
                     // If checkbox and selected, add price of first child (only one)
                     if ($option->type === 'checkbox' && $selected?->value) {
                         $childPrice = $option->children->first()?->price(
-                            billing_period: $this->plan->billing_period,
-                            billing_unit: $this->plan->billing_unit,
+                            billing_period: $plan->billing_period,
+                            billing_unit: $plan->billing_unit,
                             currency: $currencyCode
                         );
                         $total += $childPrice?->price ?? 0;
@@ -81,8 +101,8 @@ class CartItem extends Model
                     }
 
                     $selectedPrice = $option->children->where('id', $selected?->value)->first()?->price(
-                        billing_period: $this->plan->billing_period,
-                        billing_unit: $this->plan->billing_unit,
+                        billing_period: $plan->billing_period,
+                        billing_unit: $plan->billing_unit,
                         currency: $currencyCode
                     );
                     $total += $selectedPrice?->price ?? 0;

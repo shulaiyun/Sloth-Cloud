@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1\Checkout;
 
+use App\Classes\Price as PriceValue;
 use App\Exceptions\DisplayException;
 use App\Http\Controllers\Api\V1\Concerns\InteractsWithHeadlessCart;
 use App\Http\Controllers\Api\V1\Concerns\SerializesHeadlessResources;
@@ -60,9 +61,13 @@ class CheckoutController extends Controller
             [$order, $invoice, $redirect] = DB::transaction(function () use ($cart, $user) {
                 $cart = $this->loadHeadlessCart($cart->fresh());
                 $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+                $itemPrices = [];
 
                 foreach ($cart->items as $item) {
-                    if (!$item->price->available) {
+                    $itemPrice = $this->resolveCheckoutItemPrice($item, $cart->currency_code);
+                    $itemPrices[$item->id] = $itemPrice;
+
+                    if (!$itemPrice->available) {
                         throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$cart->currency_code}.");
                     }
 
@@ -95,7 +100,11 @@ class CheckoutController extends Controller
                 ]);
 
                 $invoice = null;
-                $cartTotal = $cart->items->sum(fn (CartItem $item) => $item->price->total * $item->quantity);
+                $cartTotal = $cart->items->sum(function (CartItem $item) use ($itemPrices) {
+                    $itemPrice = $itemPrices[$item->id] ?? null;
+
+                    return ((float) ($itemPrice?->total ?? 0)) * $item->quantity;
+                });
 
                 if ($cartTotal > 0) {
                     $invoice = Invoice::create([
@@ -106,10 +115,11 @@ class CheckoutController extends Controller
                 }
 
                 foreach ($cart->items as $item) {
-                    $servicePrice = $item->price->price;
+                    $itemPrice = $itemPrices[$item->id] ?? $this->resolveCheckoutItemPrice($item, $cart->currency_code);
+                    $servicePrice = $itemPrice->price;
 
                     if ($cart->coupon && ($cart->coupon->recurring === null || (int) $cart->coupon->recurring === 1)) {
-                        $servicePrice = $item->price->original_price;
+                        $servicePrice = $itemPrice->original_price;
                     }
 
                     $service = $order->services()->create([
@@ -158,11 +168,11 @@ class CheckoutController extends Controller
                         ]);
                     }
 
-                    if ($invoice && $item->price->total > 0) {
+                    if ($invoice && $itemPrice->total > 0) {
                         $invoice->items()->create([
                             'reference_id' => $service->id,
                             'reference_type' => Service::class,
-                            'price' => $item->price->total,
+                            'price' => $itemPrice->total,
                             'quantity' => $item->quantity,
                             'description' => $service->description,
                         ]);
@@ -231,5 +241,21 @@ class CheckoutController extends Controller
                 'redirect' => $redirect,
             ],
         ], 201);
+    }
+
+    protected function resolveCheckoutItemPrice(CartItem $item, string $currencyCode): PriceValue
+    {
+        try {
+            $price = $item->price;
+        } catch (Exception $exception) {
+            report($exception);
+            $price = null;
+        }
+
+        if ($price instanceof PriceValue) {
+            return $price;
+        }
+
+        throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$currencyCode}.");
     }
 }

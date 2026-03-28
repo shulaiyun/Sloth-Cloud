@@ -43,6 +43,8 @@ trait SerializesHeadlessResources
             return null;
         }
 
+        $formatted = is_object($price->formatted ?? null) ? $price->formatted : (object) [];
+
         return [
             'subtotal' => (float) $price->subtotal,
             'price' => (float) $price->price,
@@ -56,12 +58,25 @@ trait SerializesHeadlessResources
             'currency' => $this->serializeCurrency($price->currency),
             'formatted' => [
                 'subtotal' => $price->format($price->subtotal),
-                'price' => $price->formatted->price ?? $price->format($price->price),
-                'setup_fee' => $price->formatted->setup_fee ?? $price->format($price->setup_fee),
-                'tax' => $price->formatted->tax ?? $price->format($price->tax),
-                'total' => $price->formatted->total ?? $price->format($price->total),
+                'price' => $formatted->price ?? $price->format($price->price),
+                'setup_fee' => $formatted->setup_fee ?? $price->format($price->setup_fee),
+                'tax' => $formatted->tax ?? $price->format($price->tax),
+                'total' => $formatted->total ?? $price->format($price->total),
             ],
         ];
+    }
+
+    protected function resolveCartItemPrice(CartItem $item): ?PriceValue
+    {
+        try {
+            $price = $item->price;
+
+            return $price instanceof PriceValue ? $price : null;
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return null;
+        }
     }
 
     protected function serializeCategory(Category $category): array
@@ -275,6 +290,8 @@ trait SerializesHeadlessResources
 
     protected function serializeCartItem(CartItem $item): array
     {
+        $itemPrice = $this->resolveCartItemPrice($item);
+
         return [
             'id' => $item->id,
             'quantity' => $item->quantity,
@@ -288,15 +305,21 @@ trait SerializesHeadlessResources
             ],
             'config_options' => $item->config_options ?? [],
             'checkout_config' => $item->checkout_config ?? [],
-            'price' => $this->serializePriceObject($item->price),
+            'price' => $this->serializePriceObject($itemPrice),
         ];
     }
 
     protected function serializeCart(Cart $cart, ?Credit $credit = null): array
     {
         $currency = $cart->currency ?: Currency::query()->find($cart->currency_code);
+        $cartTotal = $cart->items->sum(function (CartItem $item) {
+            $itemPrice = $this->resolveCartItemPrice($item);
+
+            return ((float) ($itemPrice?->total ?? 0)) * max((int) $item->quantity, 1);
+        });
+
         $totalPrice = new PriceValue([
-            'price' => $cart->items->sum(fn (CartItem $item) => $item->price->total * $item->quantity),
+            'price' => $cartTotal,
             'currency' => $currency,
         ]);
         $gateways = ExtensionHelper::getCheckoutGateways($totalPrice->total, $currency?->code, 'cart', $cart->items);

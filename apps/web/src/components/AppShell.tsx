@@ -18,8 +18,8 @@ export function AppShell() {
             <BrandLogo />
           </span>
           <span className="brand-copy">
-            <small className="brand-name-en">SLOTH CLOUD</small>
             <strong className="brand-name-cn">树懒云</strong>
+            <small className="brand-name-en">SLOTH CLOUD</small>
             <span className="brand-tag">Premium headless VPS cloud</span>
           </span>
         </Link>

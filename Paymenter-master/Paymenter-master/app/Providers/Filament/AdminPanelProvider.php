@@ -120,7 +120,8 @@ class AdminPanelProvider extends PanelProvider
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
             ])
-            ->theme(asset('css/filament/admin/theme.css'))
+            // Use a root-relative path so admin assets don't break when app_url is stale.
+            ->theme('/css/filament/admin/theme.css')
             ->authMiddleware([
                 Authenticate::class,
             ]);
