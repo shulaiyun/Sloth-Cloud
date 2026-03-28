@@ -42,6 +42,12 @@ class AdminPanelProvider extends PanelProvider
         // Filament loads before the settings provider, so we need to load the settings here
         SettingsProvider::getSettings();
 
+        $adminThemeUrl = '/css/filament/admin/theme.css';
+        $adminThemePath = public_path('css/filament/admin/theme.css');
+        if (File::exists($adminThemePath)) {
+            $adminThemeUrl .= '?v=' . substr((string) md5_file($adminThemePath), 0, 12);
+        }
+
         Notifications::alignment(Alignment::Center);
 
         $panel
@@ -120,11 +126,14 @@ class AdminPanelProvider extends PanelProvider
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
             ])
-            // Use a root-relative path so admin assets don't break when app_url is stale.
-            ->theme('/css/filament/admin/theme.css')
             ->authMiddleware([
                 Authenticate::class,
             ]);
+
+        // If the custom admin theme is missing, fall back to Filament's default theme.
+        if (File::exists($adminThemePath) && File::size($adminThemePath) > 1024) {
+            $panel->theme($adminThemeUrl);
+        }
 
         try {
             foreach (collect(Extension::where(function ($query) {

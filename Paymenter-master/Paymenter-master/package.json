@@ -4,10 +4,11 @@
     "scripts": {
         "dev": "node vite.js dev",
         "build": "node vite.js && npm run build:admin",
-        "dev:admin": "npx tailwindcss@3.4.17 --input ./resources/css/filament/admin/theme.css --output ./public/css/filament/admin/theme.css --config ./resources/css/filament/admin/tailwind.config.js --watch",
-        "build:admin": "npx tailwindcss@3.4.17 --input ./resources/css/filament/admin/theme.css --output ./public/css/filament/admin/theme.css --config ./resources/css/filament/admin/tailwind.config.js --minify"
+        "dev:admin": "npx @tailwindcss/cli@4.1.11 -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --watch",
+        "build:admin": "npx @tailwindcss/cli@4.1.11 -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --minify"
     },
     "devDependencies": {
+        "@tailwindcss/cli": "^4.1.11",
         "@tailwindcss/forms": "^0.5.10",
         "@tailwindcss/typography": "^0.5.16",
         "@tailwindcss/vite": "^4.1.11",
