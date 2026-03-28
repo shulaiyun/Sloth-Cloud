@@ -68,15 +68,15 @@ class AdminPanelProvider extends PanelProvider
                     ->icon('heroicon-s-arrow-uturn-left'),
                 'language_zh' => MenuItem::make()
                     ->label(admin_t('sloth-admin.user_menu.lang_zh', 'Chinese (Simplified)'))
-                    ->url(route('locale.switch', ['locale' => 'zh']))
+                    ->url('/locale/zh')
                     ->icon('heroicon-s-language'),
                 'language_zh_tw' => MenuItem::make()
                     ->label(admin_t('sloth-admin.user_menu.lang_zh_tw', 'Chinese (Traditional)'))
-                    ->url(route('locale.switch', ['locale' => 'zh_TW']))
+                    ->url('/locale/zh_TW')
                     ->icon('heroicon-s-language'),
                 'language_en' => MenuItem::make()
                     ->label(admin_t('sloth-admin.user_menu.lang_en', 'English'))
-                    ->url(route('locale.switch', ['locale' => 'en']))
+                    ->url('/locale/en')
                     ->icon('heroicon-s-language'),
                 'logout' => Action::make('logout')
                     ->label(admin_t('sloth-admin.user_menu.sign_out', 'Sign out'))
