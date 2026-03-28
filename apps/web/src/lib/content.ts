@@ -1,5 +1,5 @@
 export const localeMeta = {
-  'zh-CN': { code: 'CN', label: '中文' },
+  'zh-CN': { code: 'CN', label: '简体中文' },
   'zh-TW': { code: 'TW', label: '繁體中文' },
   'en-US': { code: 'US', label: 'English' },
   'ja-JP': { code: 'JP', label: '日本語' },

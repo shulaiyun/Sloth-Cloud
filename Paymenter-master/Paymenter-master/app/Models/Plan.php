@@ -46,13 +46,15 @@ class Plan extends Model implements Auditable
     /**
      * Get the price of the plan.
      */
-    public function price()
+    public function price(?string $currency = null)
     {
         if ($this->type === 'free') {
-            return new PriceClass(['currency' => Currency::find(session('currency', config('settings.default_currency')))], free: true);
+            $resolvedCurrency = $currency ?: (string) session('currency', config('settings.default_currency'));
+            return new PriceClass(['currency' => Currency::find($resolvedCurrency)], free: true);
         }
-        $currency = (string) session('currency', config('settings.default_currency'));
-        $price = $this->prices->where('currency_code', $currency)->first();
+
+        $resolvedCurrency = $currency ?: (string) session('currency', config('settings.default_currency'));
+        $price = $this->prices->where('currency_code', $resolvedCurrency)->first();
 
         if (!$price) {
             // Return an unavailable price object instead of throwing null dereference errors.

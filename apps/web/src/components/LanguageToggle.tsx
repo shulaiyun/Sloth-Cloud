@@ -1,4 +1,4 @@
-import { FlagIcon } from './FlagIcon';
+﻿import { FlagIcon } from './FlagIcon';
 import { localeMeta, type Locale } from '../lib/content';
 import { useSite } from '../lib/site-context';
 

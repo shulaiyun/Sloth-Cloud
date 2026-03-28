@@ -145,6 +145,16 @@ button {
   height: 100%;
 }
 
+.brand-mark--hero {
+  width: 78px;
+  height: 78px;
+  border-radius: 24px;
+}
+
+.brand-mark--hero svg {
+  filter: drop-shadow(0 10px 22px rgba(3, 12, 20, 0.35));
+}
+
 .brand-copy {
   display: grid;
   gap: 2px;
@@ -302,6 +312,8 @@ button {
   gap: 8px;
   min-width: 260px;
   max-width: min(320px, calc(100vw - 24px));
+  max-height: min(76vh, 560px);
+  overflow: auto;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 22px;
@@ -595,12 +607,47 @@ button {
   padding: 22px;
 }
 
+.section-frame {
+  --section-accent: var(--accent);
+  border-color: color-mix(in srgb, var(--section-accent) 20%, var(--border));
+  background:
+    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--section-accent) 14%, transparent), transparent 26%),
+    radial-gradient(circle at 90% 8%, rgba(108, 174, 252, 0.08), transparent 24%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, white 4%), color-mix(in srgb, var(--bg-elevated) 82%, black));
+}
+
+.section-frame::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--section-accent) 8%, transparent), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(255, 255, 255, 0.04), transparent 36%);
+  opacity: 0.75;
+}
+
+.section-products {
+  --section-accent: var(--accent);
+}
+
+.section-categories {
+  --section-accent: var(--accent-2);
+}
+
+.section-heading {
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--section-accent) 18%, var(--border));
+}
+
 .section-products .product-card {
   position: relative;
   overflow: hidden;
   background:
-    radial-gradient(circle at 10% 10%, rgba(122, 246, 221, 0.12), transparent 35%),
-    linear-gradient(180deg, var(--bg-elevated), color-mix(in srgb, var(--bg-elevated) 82%, black));
+    radial-gradient(circle at 10% 10%, color-mix(in srgb, var(--section-accent) 14%, transparent), transparent 35%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, white 4%), color-mix(in srgb, var(--bg-elevated) 84%, black));
+  border-color: color-mix(in srgb, var(--section-accent) 18%, var(--border));
 }
 
 .section-products .product-card h3 {
@@ -624,8 +671,9 @@ button {
   position: relative;
   overflow: hidden;
   background:
-    radial-gradient(circle at 88% 10%, rgba(108, 174, 252, 0.12), transparent 35%),
-    linear-gradient(180deg, var(--bg-elevated), color-mix(in srgb, var(--bg-elevated) 82%, black));
+    radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--section-accent) 14%, transparent), transparent 35%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, white 4%), color-mix(in srgb, var(--bg-elevated) 84%, black));
+  border-color: color-mix(in srgb, var(--section-accent) 18%, var(--border));
 }
 
 .section-categories .category-card h3 {
@@ -636,6 +684,9 @@ button {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background:
+    radial-gradient(circle at 16% 12%, rgba(122, 246, 221, 0.08), transparent 24%),
+    linear-gradient(180deg, var(--bg-elevated), color-mix(in srgb, var(--bg-elevated) 86%, black));
 }
 
 .metric-card::before {
@@ -664,10 +715,10 @@ button {
   display: grid;
   gap: 10px;
   align-content: start;
-  border-color: color-mix(in srgb, var(--accent-2) 28%, var(--border));
+  border-color: color-mix(in srgb, var(--accent-2) 30%, var(--border));
   background:
-    radial-gradient(circle at 85% 12%, rgba(108, 174, 252, 0.12), transparent 30%),
-    linear-gradient(180deg, var(--bg-elevated), color-mix(in srgb, var(--bg-elevated) 84%, black));
+    radial-gradient(circle at 85% 12%, rgba(108, 174, 252, 0.14), transparent 30%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, white 4%), color-mix(in srgb, var(--bg-elevated) 84%, black));
 }
 
 .price-large {
@@ -692,6 +743,7 @@ button {
   border-radius: 20px;
   text-align: left;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .choice-card.compact {
@@ -728,6 +780,50 @@ button {
   border: 1px solid var(--border);
   background: linear-gradient(180deg, var(--bg-soft), color-mix(in srgb, var(--bg-soft) 88%, black));
   color: var(--text);
+}
+
+select.text-input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 44px;
+  color-scheme: dark;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 14px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+select.text-input option {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+.select-input {
+  color-scheme: dark;
+  appearance: none;
+  -webkit-appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%) calc(100% - 20px) calc(50% - 2px) / 7px 7px no-repeat,
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%) calc(100% - 15px) calc(50% - 2px) / 7px 7px no-repeat,
+    linear-gradient(180deg, var(--bg-soft), color-mix(in srgb, var(--bg-soft) 88%, black));
+  padding-right: 42px;
+}
+
+.select-input option {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-panel) 94%, black);
+}
+
+:root[data-theme='light'] .select-input {
+  color-scheme: light;
+}
+
+:root[data-theme='light'] .select-input option {
+  color: var(--text);
+  background: #ffffff;
 }
 
 .text-input:focus,
@@ -867,6 +963,28 @@ button {
   border-radius: 22px;
   background: var(--bg-elevated);
   color: var(--muted);
+}
+
+.brand-panel {
+  gap: 18px;
+}
+
+.brand-feature {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand-feature-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand-feature-copy strong {
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  letter-spacing: -0.03em;
 }
 
 @media (max-width: 1180px) {

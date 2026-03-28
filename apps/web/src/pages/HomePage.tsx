@@ -1,5 +1,6 @@
-import { Link } from 'react-router-dom';
+﻿import { Link } from 'react-router-dom';
 
+import { BrandLogo } from '../components/BrandLogo';
 import { useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { localizeText } from '../lib/localized-text';
@@ -52,14 +53,24 @@ export function HomePage() {
             {!isAuthenticated ? <Link className="button secondary" to="/login">{text.home.secondaryCta}</Link> : null}
           </div>
         </div>
+
         <div className="hero-panel">
-          <div className="glass-panel">
-            <span className="panel-kicker">Sloth Cloud</span>
-            <strong>树懒云</strong>
-            <p>{text.footer.statement}</p>
+          <div className="glass-panel brand-panel">
+            <div className="brand-feature">
+              <span className="brand-mark brand-mark--hero">
+                <BrandLogo />
+              </span>
+              <div className="brand-feature-copy">
+                <span className="panel-kicker">Sloth Cloud</span>
+                <strong>树懒云</strong>
+                <p>{text.footer.statement}</p>
+              </div>
+            </div>
             <div className="chip-row">
               {data.data.categories.slice(0, 3).map((item) => (
-                <span className="chip" key={item.id}>{localizeText(item.name, locale, item.name)}</span>
+                <span className="chip" key={item.id}>
+                  {localizeText(item.name, locale, item.name)}
+                </span>
               ))}
             </div>
           </div>
@@ -108,7 +119,7 @@ export function HomePage() {
           )) : (
             <article className="product-card">
               <h3>暂无可售商品</h3>
-              <p>请在管理后台创建商品并确保“隐藏产品”未勾选，同时至少配置一个可用价格。</p>
+              <p>请在管理后台创建商品并确保未勾选“隐藏产品”，同时至少配置一个可用价格。</p>
               <div className="card-footer">
                 <Link className="button secondary" to="/catalog">刷新商店视图</Link>
               </div>

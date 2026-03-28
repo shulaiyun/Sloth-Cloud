@@ -10,6 +10,7 @@ use App\Models\Currency;
 use App\Models\Plan;
 use App\Models\Product;
 use App\Models\User;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -30,7 +31,7 @@ trait InteractsWithHeadlessCart
             ]);
         }
 
-        return $this->loadHeadlessCart($cart);
+        return $this->synchronizeCartCurrency($this->loadHeadlessCart($cart));
     }
 
     protected function loadHeadlessCart(Cart $cart): Cart
@@ -43,6 +44,57 @@ trait InteractsWithHeadlessCart
             'items.product.category',
             'items.product.configOptions.children.plans.prices.currency',
         ]);
+    }
+
+    protected function synchronizeCartCurrency(Cart $cart): Cart
+    {
+        if ($cart->items->isEmpty()) {
+            return $cart;
+        }
+
+        $currentCurrency = (string) $cart->currency_code;
+        $compatibleCodes = $this->resolveCompatibleCurrencyCodes($cart);
+
+        if ($compatibleCodes->isEmpty() || $compatibleCodes->contains($currentCurrency)) {
+            return $cart;
+        }
+
+        $sessionCurrency = session('currency');
+        $targetCurrency = is_string($sessionCurrency) && $compatibleCodes->contains($sessionCurrency)
+            ? $sessionCurrency
+            : (string) $compatibleCodes->sort()->first();
+
+        if ($targetCurrency === '' || $targetCurrency === $currentCurrency) {
+            return $cart;
+        }
+
+        $cart->currency_code = $targetCurrency;
+        $cart->save();
+
+        return $this->loadHeadlessCart($cart->fresh());
+    }
+
+    protected function resolveCompatibleCurrencyCodes(Cart $cart): Collection
+    {
+        $currencySets = $cart->items
+            ->map(function ($item) {
+                return $item->plan?->prices
+                    ?->pluck('currency_code')
+                    ->filter(fn ($code) => is_string($code) && $code !== '')
+                    ->unique()
+                    ->values() ?? collect();
+            })
+            ->filter(fn (Collection $codes) => $codes->isNotEmpty())
+            ->values();
+
+        if ($currencySets->isEmpty() || $currencySets->count() !== $cart->items->count()) {
+            return collect();
+        }
+
+        return $currencySets->reduce(
+            fn (?Collection $carry, Collection $codes) => $carry === null ? $codes : $carry->intersect($codes)->values(),
+            null
+        ) ?? collect();
     }
 
     protected function buildConfigOptionsPayload(Product $product, Plan $plan, array $configOptions): array

@@ -72,7 +72,7 @@ class Settings
                 [
                     'name' => 'app_url',
                     'label' => 'App URL',
-                    'default' => 'http://localhost',
+                    'default' => env('APP_URL', 'http://localhost'),
                     'type' => 'text',
                     'required' => true,
                     'validation' => 'url',

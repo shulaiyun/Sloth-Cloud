@@ -59,15 +59,52 @@ class SettingsProvider extends ServiceProvider
 
             Theme::set(active_theme(), 'default');
 
-            if (Str::startsWith(config('app.url') ?? '', 'https://')) {
+            $appUrl = self::resolvePublicAppUrl();
+            config(['app.url' => $appUrl]);
+
+            if (Str::startsWith($appUrl, 'https://')) {
                 URL::forceScheme('https');
             }
-            URL::forceRootUrl(config('app.url'));
+            URL::forceRootUrl($appUrl);
 
-            Config::set('filesystems.disks.public.url', config('app.url') . '/storage');
+            Config::set('filesystems.disks.public.url', $appUrl . '/storage');
         } catch (Exception $e) {
             // Do nothing
         }
+    }
+
+    private static function resolvePublicAppUrl(): string
+    {
+        $configured = (string) (config('settings.app_url') ?: config('app.url') ?: '');
+        $configured = trim($configured);
+
+        if ($configured === '') {
+            $configured = 'http://localhost';
+        }
+
+        // If an old setup still has localhost in settings but the request comes from a real host
+        // (e.g. behind Nginx Proxy Manager), use the incoming host to avoid localhost redirects.
+        if (!app()->runningInConsole() && request()) {
+            $request = request();
+            $forwardedHost = (string) ($request->headers->get('x-forwarded-host') ?: '');
+            $requestHost = trim(explode(',', $forwardedHost !== '' ? $forwardedHost : (string) $request->getHost())[0] ?? '');
+
+            if ($requestHost !== '') {
+                $forwardedProto = (string) ($request->headers->get('x-forwarded-proto') ?: '');
+                $requestScheme = trim(explode(',', $forwardedProto !== '' ? $forwardedProto : $request->getScheme())[0] ?? '');
+                $requestScheme = in_array($requestScheme, ['http', 'https'], true) ? $requestScheme : 'http';
+                $requestRoot = $requestScheme . '://' . $requestHost;
+                $configuredHost = (string) parse_url($configured, PHP_URL_HOST);
+                $isConfiguredLocal = in_array($configuredHost, ['localhost', '127.0.0.1', '::1'], true);
+                $isRequestLocal = in_array($requestHost, ['localhost', '127.0.0.1', '::1'], true);
+
+                if ($isConfiguredLocal && !$isRequestLocal) {
+                    return $requestRoot;
+                }
+            }
+        }
+
+        return $configured;
     }
 
     public static function flushCache()

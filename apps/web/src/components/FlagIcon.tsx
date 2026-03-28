@@ -60,17 +60,17 @@ export function FlagIcon({ locale }: FlagIconProps) {
         <FlagSvg>
           <rect fill="#ffffff" height="16" rx="3" width="24" />
           <path
-            d="M12 3.6a4.4 4.4 0 0 1 0 8.8 2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 1 1 0-4.4Z"
+            d="M12 3.7a4.3 4.3 0 0 1 0 8.6 2.15 2.15 0 1 0 0-4.3 2.15 2.15 0 1 1 0-4.3Z"
             fill="#d81e06"
           />
           <path
-            d="M12 12.4a4.4 4.4 0 0 1 0-8.8 2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 1 1 0 4.4Z"
+            d="M12 12.3a4.3 4.3 0 0 1 0-8.6 2.15 2.15 0 1 0 0 4.3 2.15 2.15 0 1 1 0 4.3Z"
             fill="#0f5db7"
           />
-          <path d="M4.3 5.1h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
-          <path d="M4.7 7h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
-          <path d="M16.5 9h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
-          <path d="M16.1 10.9h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M4.4 5.1h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M4.8 7h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M16.4 9h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M16 10.9h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
         </FlagSvg>
       );
     case 'de-DE':

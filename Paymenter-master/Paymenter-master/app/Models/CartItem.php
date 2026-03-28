@@ -46,17 +46,25 @@ class CartItem extends Model
     {
         return Attribute::make(
             get: function () {
+                $currencyCode = (string) ($this->cart?->currency_code ?? session('currency', config('settings.default_currency')));
                 $total = 0;
                 $setup_fee = 0;
-                $total += $this->plan->price()->price;
-                $setup_fee += $this->plan->price()->setup_fee;
-                $this->product->configOptions->each(function ($option) use (&$total, &$setup_fee) {
+                $planPrice = $this->plan->price($currencyCode);
+                $total += $planPrice->price;
+                $setup_fee += $planPrice->setup_fee;
+
+                $this->product->configOptions->each(function ($option) use (&$total, &$setup_fee, $currencyCode) {
                     $selected = (object) collect($this->config_options)->firstWhere('option_id', $option->id);
 
                     // If checkbox and selected, add price of first child (only one)
                     if ($option->type === 'checkbox' && $selected?->value) {
-                        $total += $option->children->first()?->price(billing_period: $this->plan->billing_period, billing_unit: $this->plan->billing_unit)->price;
-                        $setup_fee += $option->children->first()?->price(billing_period: $this->plan->billing_period, billing_unit: $this->plan->billing_unit)->setup_fee;
+                        $childPrice = $option->children->first()?->price(
+                            billing_period: $this->plan->billing_period,
+                            billing_unit: $this->plan->billing_unit,
+                            currency: $currencyCode
+                        );
+                        $total += $childPrice?->price ?? 0;
+                        $setup_fee += $childPrice?->setup_fee ?? 0;
 
                         return;
                     }
@@ -72,13 +80,18 @@ class CartItem extends Model
                         return;
                     }
 
-                    $total += $option->children->where('id', $selected?->value)->first()?->price(billing_period: $this->plan->billing_period, billing_unit: $this->plan->billing_unit)->price;
-                    $setup_fee += $option->children->where('id', $selected?->value)->first()?->price(billing_period: $this->plan->billing_period, billing_unit: $this->plan->billing_unit)->setup_fee;
+                    $selectedPrice = $option->children->where('id', $selected?->value)->first()?->price(
+                        billing_period: $this->plan->billing_period,
+                        billing_unit: $this->plan->billing_unit,
+                        currency: $currencyCode
+                    );
+                    $total += $selectedPrice?->price ?? 0;
+                    $setup_fee += $selectedPrice?->setup_fee ?? 0;
                 });
 
                 $price = new Price([
                     'price' => $total,
-                    'currency' => $this->plan->price()->currency,
+                    'currency' => $planPrice->currency,
                     'setup_fee' => $setup_fee,
                 ], apply_exclusive_tax: true);
 

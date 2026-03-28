@@ -254,7 +254,7 @@ export function ProductPage() {
                   <span>{localizeText(field.label, locale, field.label)}</span>
                   {field.type === 'select' ? (
                     <select
-                      className="text-input"
+                      className="text-input select-input"
                       value={checkoutForm[field.name] ?? ''}
                       onChange={(event) => setCheckoutForm((state) => ({ ...state, [field.name]: event.target.value }))}
                     >
