@@ -61,7 +61,6 @@ class AdminPanelProvider extends PanelProvider
             ->darkModeBrandLogo(config('settings.logo_dark') ? Storage::url(config('settings.logo_dark')) : null)
             ->brandName(config('settings.logo') || config('settings.logo_dark') ? null : config('app.name'))
             ->brandLogoHeight('2rem')
-            ->viteTheme('resources/css/filament/admin/theme.css')
             ->discoverResources(in: app_path('Admin/Resources'), for: 'App\\Admin\\Resources')
             ->discoverPages(in: app_path('Admin/Pages'), for: 'App\\Admin\\Pages')
             ->discoverClusters(in: app_path('Admin/Clusters'), for: 'App\\Admin\\Clusters')
@@ -100,8 +99,11 @@ class AdminPanelProvider extends PanelProvider
                     $activeThemePath = base_path("themes/{$activeTheme}/views/layouts/colors.blade.php");
                     $defaultThemePath = base_path('themes/default/views/layouts/colors.blade.php');
                     $pathToUse = File::exists($activeThemePath) ? $activeThemePath : $defaultThemePath;
+                    $adminThemeTag = File::exists(public_path('css/filament/admin/theme.css'))
+                        ? '<link rel="stylesheet" href="' . asset('css/filament/admin/theme.css') . '">'
+                        : '';
 
-                    return Blade::render(File::get($pathToUse));
+                    return $adminThemeTag . Blade::render(File::get($pathToUse));
                 }
             )
             ->navigationGroups([
