@@ -858,7 +858,8 @@ export function createGateway(config: GatewayConfig) {
         };
       }
 
-      const response = await requestPaymenter<{ data: unknown[] }>(config, '/catalog/categories');
+      // Force full category list to avoid upstream defaults that only return non-empty categories.
+      const response = await requestPaymenter<{ data: unknown[] }>(config, '/catalog/categories?only_with_products=0');
 
       return {
         data: readArray<unknown>(response.data).map(normalizeCategory),

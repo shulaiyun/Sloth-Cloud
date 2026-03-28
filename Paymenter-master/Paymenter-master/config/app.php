@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 use App\Classes\Cart;
 use App\Helpers\ExtensionHelper;

@@ -43,6 +43,11 @@ body[x-cloak] {
     display: block !important;
 }
 
+.fi-body [x-cloak],
+.fi-simple-main [x-cloak] {
+    display: inherit !important;
+}
+
 .fi-topbar {
     position: sticky;
     top: 0;
