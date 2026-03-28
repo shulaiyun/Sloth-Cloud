@@ -1,6 +1,7 @@
-﻿import { Link, NavLink, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 
 import { useAuth } from '../lib/auth-context';
+import { brand } from '../lib/brand';
 import { useSite } from '../lib/site-context';
 import { BrandLogo } from './BrandLogo';
 import { LanguageToggle } from './LanguageToggle';
@@ -13,14 +14,14 @@ export function AppShell() {
   return (
     <div className="shell">
       <header className="topbar">
-        <Link className="brand" aria-label="Sloth Cloud 树懒云" to="/">
+        <Link className="brand" aria-label={brand.ariaLabel} to="/">
           <span className="brand-mark">
             <BrandLogo />
           </span>
           <span className="brand-copy">
-            <strong className="brand-name-cn">树懒云</strong>
-            <small className="brand-name-en">SLOTH CLOUD</small>
-            <span className="brand-tag">Premium headless VPS cloud</span>
+            <strong className="brand-name-cn">{brand.nameCn}</strong>
+            <small className="brand-name-en">{brand.nameEn}</small>
+            <span className="brand-tag">{brand.topbarTag}</span>
           </span>
         </Link>
 

@@ -35,11 +35,16 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema as DatabaseSchema;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
 class ProductResource extends Resource
 {
+    protected static ?bool $catalogTranslationColumnsAvailable = null;
+
+    protected static ?bool $planTranslationColumnAvailable = null;
+
     protected static ?string $model = Product::class;
 
     protected static string|\BackedEnum|null $navigationIcon = 'ri-instance-line';
@@ -110,32 +115,7 @@ class ProductResource extends Resource
                                     ->hint(admin_t('sloth-admin.product.hints.hidden', 'Hide the product from the client area.')),
 
                                 RichEditor::make('description')->nullable()->columnSpanFull(),
-                                Grid::make()
-                                    ->columns(3)
-                                    ->schema([
-                                        TextInput::make('name_translations.zh-CN')
-                                            ->label('Name (zh-CN)')
-                                            ->maxLength(255),
-                                        TextInput::make('name_translations.zh-TW')
-                                            ->label('Name (zh-TW)')
-                                            ->maxLength(255),
-                                        TextInput::make('name_translations.en-US')
-                                            ->label('Name (en-US)')
-                                            ->maxLength(255),
-                                    ]),
-                                Grid::make()
-                                    ->columns(3)
-                                    ->schema([
-                                        Textarea::make('description_translations.zh-CN')
-                                            ->label('Description (zh-CN)')
-                                            ->rows(4),
-                                        Textarea::make('description_translations.zh-TW')
-                                            ->label('Description (zh-TW)')
-                                            ->rows(4),
-                                        Textarea::make('description_translations.en-US')
-                                            ->label('Description (en-US)')
-                                            ->rows(4),
-                                    ]),
+                                ...self::productTranslationFields(),
                                 FileUpload::make('image')
                                     ->label(admin_t('sloth-admin.product.fields.image', 'Image'))
                                     ->nullable()
@@ -258,19 +238,7 @@ class ProductResource extends Resource
                     ->required()
                     ->live(onBlur: true)
                     ->maxLength(255),
-                Grid::make()
-                    ->columns(3)
-                    ->schema([
-                        TextInput::make('name_translations.zh-CN')
-                            ->label('Name (zh-CN)')
-                            ->maxLength(255),
-                        TextInput::make('name_translations.zh-TW')
-                            ->label('Name (zh-TW)')
-                            ->maxLength(255),
-                        TextInput::make('name_translations.en-US')
-                            ->label('Name (en-US)')
-                            ->maxLength(255),
-                    ]),
+                ...self::planTranslationFields(),
                 Select::make('type')
                     ->label(admin_t('sloth-admin.product.fields.type', 'Type'))
                     ->options([
@@ -364,6 +332,84 @@ class ProductResource extends Resource
                             ->hidden(fn (Get $get) => $get('type') === 'free'),
                     ]),
             ]);
+    }
+
+    private static function hasCatalogTranslations(): bool
+    {
+        if (self::$catalogTranslationColumnsAvailable === null) {
+            self::$catalogTranslationColumnsAvailable = DatabaseSchema::hasColumn('products', 'name_translations')
+                && DatabaseSchema::hasColumn('products', 'description_translations');
+        }
+
+        return self::$catalogTranslationColumnsAvailable;
+    }
+
+    private static function hasPlanTranslations(): bool
+    {
+        if (self::$planTranslationColumnAvailable === null) {
+            self::$planTranslationColumnAvailable = DatabaseSchema::hasColumn('plans', 'name_translations');
+        }
+
+        return self::$planTranslationColumnAvailable;
+    }
+
+    private static function productTranslationFields(): array
+    {
+        if (!self::hasCatalogTranslations()) {
+            return [];
+        }
+
+        return [
+            Grid::make()
+                ->columns(3)
+                ->schema([
+                    TextInput::make('name_translations.zh-CN')
+                        ->label('Name (zh-CN)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.zh-TW')
+                        ->label('Name (zh-TW)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.en-US')
+                        ->label('Name (en-US)')
+                        ->maxLength(255),
+                ]),
+            Grid::make()
+                ->columns(3)
+                ->schema([
+                    Textarea::make('description_translations.zh-CN')
+                        ->label('Description (zh-CN)')
+                        ->rows(4),
+                    Textarea::make('description_translations.zh-TW')
+                        ->label('Description (zh-TW)')
+                        ->rows(4),
+                    Textarea::make('description_translations.en-US')
+                        ->label('Description (en-US)')
+                        ->rows(4),
+                ]),
+        ];
+    }
+
+    private static function planTranslationFields(): array
+    {
+        if (!self::hasPlanTranslations()) {
+            return [];
+        }
+
+        return [
+            Grid::make()
+                ->columns(3)
+                ->schema([
+                    TextInput::make('name_translations.zh-CN')
+                        ->label('Name (zh-CN)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.zh-TW')
+                        ->label('Name (zh-TW)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.en-US')
+                        ->label('Name (en-US)')
+                        ->maxLength(255),
+                ]),
+        ];
     }
 
     public static function table(Table $table): Table

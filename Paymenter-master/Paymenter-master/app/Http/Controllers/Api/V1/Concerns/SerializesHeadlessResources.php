@@ -19,6 +19,7 @@ use App\Models\InvoiceTransaction;
 use App\Models\Plan;
 use App\Models\Product;
 use App\Models\Service;
+use Illuminate\Support\Collection;
 
 trait SerializesHeadlessResources
 {
@@ -75,8 +76,88 @@ trait SerializesHeadlessResources
         } catch (\Throwable $exception) {
             report($exception);
 
+            $recovered = $this->recoverCartCurrencyAndResolvePrice($item);
+            if ($recovered instanceof PriceValue) {
+                return $recovered;
+            }
+
             return null;
         }
+    }
+
+    protected function recoverCartCurrencyAndResolvePrice(CartItem $item): ?PriceValue
+    {
+        $cart = $item->cart;
+        if (!$cart) {
+            return null;
+        }
+
+        $items = $cart->relationLoaded('items')
+            ? $cart->items
+            : $cart->items()->with(['plan.prices.currency', 'product', 'cart'])->get();
+
+        $fallbackCurrency = $this->resolveCartFallbackCurrency($items);
+        if (!$fallbackCurrency) {
+            return null;
+        }
+
+        if ((string) $cart->currency_code !== $fallbackCurrency) {
+            $cart->currency_code = $fallbackCurrency;
+            $cart->save();
+        }
+
+        $freshItem = $item->fresh(['plan.prices.currency', 'product', 'cart']);
+        if (!$freshItem) {
+            return null;
+        }
+
+        try {
+            $price = $freshItem->price;
+
+            return $price instanceof PriceValue ? $price : null;
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return null;
+        }
+    }
+
+    protected function resolveCartFallbackCurrency(Collection $items): ?string
+    {
+        if ($items->isEmpty()) {
+            return null;
+        }
+
+        $intersection = null;
+
+        /** @var CartItem $cartItem */
+        foreach ($items as $cartItem) {
+            $plan = $cartItem->plan;
+            if (!$plan) {
+                return null;
+            }
+
+            $codes = $plan->prices
+                ->pluck('currency_code')
+                ->filter(fn ($code) => is_string($code) && $code !== '')
+                ->values();
+
+            if ($codes->isEmpty()) {
+                return null;
+            }
+
+            if ($intersection === null) {
+                $intersection = $codes;
+                continue;
+            }
+
+            $intersection = $intersection->intersect($codes)->values();
+            if ($intersection->isEmpty()) {
+                return null;
+            }
+        }
+
+        return $intersection?->first();
     }
 
     protected function serializeCategory(Category $category): array

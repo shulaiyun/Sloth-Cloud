@@ -65,7 +65,12 @@ class SettingsProvider extends ServiceProvider
             if (!app()->runningInConsole()) {
                 $requestRootUrl = self::detectRequestRootUrl();
                 if (is_string($requestRootUrl) && $requestRootUrl !== '') {
-                    $effectiveRootUrl = $requestRootUrl;
+                    $requestHost = (string) parse_url($requestRootUrl, PHP_URL_HOST);
+                    $appHost = (string) parse_url($appUrl, PHP_URL_HOST);
+
+                    if (!self::isLocalHost($requestHost) || self::isLocalHost($appHost)) {
+                        $effectiveRootUrl = $requestRootUrl;
+                    }
                 }
             }
 

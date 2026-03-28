@@ -24,10 +24,13 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Schema as DatabaseSchema;
 use Illuminate\Support\Str;
 
 class CategoryResource extends Resource
 {
+    protected static ?bool $translationColumnsAvailable = null;
+
     protected static ?string $model = Category::class;
 
     protected static string|\BackedEnum|null $navigationIcon = 'ri-folder-6-line';
@@ -75,32 +78,7 @@ class CategoryResource extends Resource
                     ->required(),
                 RichEditor::make('description')
                     ->required(),
-                Grid::make()
-                    ->columns(3)
-                    ->schema([
-                        TextInput::make('name_translations.zh-CN')
-                            ->label('Name (zh-CN)')
-                            ->maxLength(255),
-                        TextInput::make('name_translations.zh-TW')
-                            ->label('Name (zh-TW)')
-                            ->maxLength(255),
-                        TextInput::make('name_translations.en-US')
-                            ->label('Name (en-US)')
-                            ->maxLength(255),
-                    ]),
-                Grid::make()
-                    ->columns(3)
-                    ->schema([
-                        Textarea::make('description_translations.zh-CN')
-                            ->label('Description (zh-CN)')
-                            ->rows(4),
-                        Textarea::make('description_translations.zh-TW')
-                            ->label('Description (zh-TW)')
-                            ->rows(4),
-                        Textarea::make('description_translations.en-US')
-                            ->label('Description (en-US)')
-                            ->rows(4),
-                    ]),
+                ...self::translationFields(),
                 Select::make('parent_id')
                     ->relationship('parent', 'name')
                     ->searchable()
@@ -116,6 +94,52 @@ class CategoryResource extends Resource
                     ->acceptedFileTypes(['image/*'])
                     ->columnSpanFull(),
             ])->columns(2);
+    }
+
+    private static function hasTranslations(): bool
+    {
+        if (self::$translationColumnsAvailable === null) {
+            self::$translationColumnsAvailable = DatabaseSchema::hasColumn('categories', 'name_translations')
+                && DatabaseSchema::hasColumn('categories', 'description_translations');
+        }
+
+        return self::$translationColumnsAvailable;
+    }
+
+    private static function translationFields(): array
+    {
+        if (!self::hasTranslations()) {
+            return [];
+        }
+
+        return [
+            Grid::make()
+                ->columns(3)
+                ->schema([
+                    TextInput::make('name_translations.zh-CN')
+                        ->label('Name (zh-CN)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.zh-TW')
+                        ->label('Name (zh-TW)')
+                        ->maxLength(255),
+                    TextInput::make('name_translations.en-US')
+                        ->label('Name (en-US)')
+                        ->maxLength(255),
+                ]),
+            Grid::make()
+                ->columns(3)
+                ->schema([
+                    Textarea::make('description_translations.zh-CN')
+                        ->label('Description (zh-CN)')
+                        ->rows(4),
+                    Textarea::make('description_translations.zh-TW')
+                        ->label('Description (zh-TW)')
+                        ->rows(4),
+                    Textarea::make('description_translations.en-US')
+                        ->label('Description (en-US)')
+                        ->rows(4),
+                ]),
+        ];
     }
 
     public static function table(Table $table): Table

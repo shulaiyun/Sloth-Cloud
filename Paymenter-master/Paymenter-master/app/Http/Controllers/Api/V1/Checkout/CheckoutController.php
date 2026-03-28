@@ -66,9 +66,10 @@ class CheckoutController extends Controller
                 foreach ($cart->items as $item) {
                     $itemPrice = $this->resolveCheckoutItemPrice($item, $cart->currency_code);
                     $itemPrices[$item->id] = $itemPrice;
+                    $resolvedCurrencyCode = $itemPrice->currency?->code ?: $cart->currency_code;
 
                     if (!$itemPrice->available) {
-                        throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$cart->currency_code}.");
+                        throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$resolvedCurrencyCode}.");
                     }
 
                     $lockedProduct = Product::query()->whereKey($item->product_id)->lockForUpdate()->firstOrFail();
@@ -93,6 +94,9 @@ class CheckoutController extends Controller
                         $lockedProduct->save();
                     }
                 }
+
+                // Currency may be auto-healed during price resolution when cart contains legacy mismatched items.
+                $cart = $this->loadHeadlessCart($cart->fresh());
 
                 $order = Order::create([
                     'user_id' => $lockedUser->id,
@@ -254,6 +258,11 @@ class CheckoutController extends Controller
 
         if ($price instanceof PriceValue) {
             return $price;
+        }
+
+        $recovered = $this->recoverCartCurrencyAndResolvePrice($item);
+        if ($recovered instanceof PriceValue) {
+            return $recovered;
         }
 
         throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$currencyCode}.");

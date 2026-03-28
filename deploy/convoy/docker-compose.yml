@@ -1,0 +1,116 @@
+name: sloth-convoy
+
+services:
+  sloth-convoy-db:
+    image: mysql:8.0
+    container_name: sloth-convoy-db
+    restart: unless-stopped
+    command: ["mysqld", "--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_DATABASE: ${CONVOY_DB_DATABASE}
+      MYSQL_USER: ${CONVOY_DB_USERNAME}
+      MYSQL_PASSWORD: ${CONVOY_DB_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -u$$MYSQL_USER -p$$MYSQL_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - sloth_convoy_db_data:/var/lib/mysql
+    networks:
+      - sloth-convoy-net
+
+  sloth-convoy-redis:
+    image: redis:7-alpine
+    container_name: sloth-convoy-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${CONVOY_REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$CONVOY_REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - sloth_convoy_redis_data:/data
+    networks:
+      - sloth-convoy-net
+
+  sloth-convoy-php:
+    build:
+      context: ../../Convoy panel-develop/panel-develop
+      dockerfile: dockerfiles/php/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV}
+        PHP_XDEBUG: "false"
+    container_name: sloth-convoy-php
+    restart: unless-stopped
+    env_file:
+      - ../../runtime/env/convoy.env
+    depends_on:
+      sloth-convoy-db:
+        condition: service_healthy
+      sloth-convoy-redis:
+        condition: service_healthy
+    volumes:
+      - ../../Convoy panel-develop/panel-develop:/var/www
+    networks:
+      - sloth-convoy-net
+
+  sloth-convoy-workers:
+    build:
+      context: ../../Convoy panel-develop/panel-develop
+      dockerfile: dockerfiles/workers/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV}
+    container_name: sloth-convoy-workers
+    restart: unless-stopped
+    env_file:
+      - ../../runtime/env/convoy.env
+    depends_on:
+      sloth-convoy-db:
+        condition: service_healthy
+      sloth-convoy-redis:
+        condition: service_healthy
+    volumes:
+      - ../../Convoy panel-develop/panel-develop:/var/www
+    networks:
+      - sloth-convoy-net
+
+  sloth-convoy-web:
+    build:
+      context: ../../Convoy panel-develop/panel-develop/dockerfiles/caddy
+      dockerfile: Dockerfile
+      args:
+        APP_ENV: ${APP_ENV}
+        APP_URL: ${APP_URL}
+    container_name: sloth-convoy-web
+    restart: unless-stopped
+    env_file:
+      - ../../runtime/env/convoy.env
+    depends_on:
+      - sloth-convoy-php
+    ports:
+      - "${CONVOY_HTTP_BIND}:80"
+    volumes:
+      - ../../Convoy panel-develop/panel-develop:/var/www
+      - sloth_convoy_caddy_config:/config
+      - sloth_convoy_caddy_data:/data
+    networks:
+      - sloth-convoy-net
+
+networks:
+  sloth-convoy-net:
+    name: sloth-convoy-net
+    driver: bridge
+
+volumes:
+  sloth_convoy_db_data:
+    name: sloth-convoy-db-data
+  sloth_convoy_redis_data:
+    name: sloth-convoy-redis-data
+  sloth_convoy_caddy_config:
+    name: sloth-convoy-caddy-config
+  sloth_convoy_caddy_data:
+    name: sloth-convoy-caddy-data
+

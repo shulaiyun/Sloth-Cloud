@@ -39,6 +39,10 @@ class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
     {
+        if (!function_exists('admin_t')) {
+            require_once app_path('Classes/helpers.php');
+        }
+
         // Filament loads before the settings provider, so we need to load the settings here
         SettingsProvider::getSettings();
 
@@ -57,6 +61,7 @@ class AdminPanelProvider extends PanelProvider
             ->darkModeBrandLogo(config('settings.logo_dark') ? Storage::url(config('settings.logo_dark')) : null)
             ->brandName(config('settings.logo') || config('settings.logo_dark') ? null : config('app.name'))
             ->brandLogoHeight('2rem')
+            ->viteTheme('resources/css/filament/admin/theme.css')
             ->discoverResources(in: app_path('Admin/Resources'), for: 'App\\Admin\\Resources')
             ->discoverPages(in: app_path('Admin/Pages'), for: 'App\\Admin\\Pages')
             ->discoverClusters(in: app_path('Admin/Clusters'), for: 'App\\Admin\\Clusters')

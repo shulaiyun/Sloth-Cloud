@@ -11,7 +11,7 @@ return [
         'exit_admin' => '退出管理端',
         'language' => '语言',
         'lang_zh' => '简体中文',
-        'lang_zh_tw' => '繁体中文',
+        'lang_zh_tw' => '繁體中文',
         'lang_en' => 'English',
         'sign_out' => '退出登录',
     ],
@@ -102,11 +102,11 @@ return [
             'year' => '年',
         ],
         'hints' => [
-            'email_template' => '此片段会插入到邮件模板中。',
+            'email_template' => '此片段将插入到邮件模板中。',
             'hidden' => '在客户端前台隐藏该产品。',
             'upgrades' => '选择该产品可升级到的目标产品。',
             'price_type' => '选择此方案的计费类型。',
-            'no_currencies' => '尚未可用货币，系统启动时会自动初始化基础货币。',
+            'no_currencies' => '尚无可用货币，系统启动时会自动初始化基础货币。',
         ],
     ],
 ];
