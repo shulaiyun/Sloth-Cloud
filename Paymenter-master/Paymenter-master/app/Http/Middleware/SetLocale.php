@@ -17,7 +17,25 @@ class SetLocale
             $locale = config('app.locale');
         }
 
-        App::setLocale($locale);
+        $runtimeLocale = match ($locale) {
+            'zh', 'zh-CN', 'zh_CN' => 'zh_CN',
+            'zh-TW', 'zh_TW' => 'zh_TW',
+            default => $locale,
+        };
+
+        App::setLocale($runtimeLocale);
+
+        $fallbackLocale = config('app.fallback_locale', 'en');
+
+        if ($runtimeLocale === 'zh_CN') {
+            $fallbackLocale = 'zh';
+        } elseif ($runtimeLocale === 'zh_TW') {
+            // Keep Traditional as first choice, but gracefully fall back to Simplified
+            // if a key only exists in lang/zh.
+            $fallbackLocale = 'zh';
+        }
+
+        App::setFallbackLocale($fallbackLocale);
         session(['locale' => $locale]);
 
         return $next($request);

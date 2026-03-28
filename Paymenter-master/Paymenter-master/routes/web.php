@@ -32,6 +32,19 @@ Route::get('/locale/{locale}', function (Request $request, string $locale) {
         $target = '/';
     }
 
+    $targetHost = parse_url($target, PHP_URL_HOST);
+    $currentHost = $request->getHost();
+    $targetHost = is_string($targetHost) ? strtolower(trim($targetHost)) : '';
+    $currentHost = is_string($currentHost) ? strtolower(trim($currentHost)) : '';
+
+    if ($targetHost !== '' && in_array($targetHost, ['localhost', '127.0.0.1', '::1'], true)) {
+        $target = '/';
+    }
+
+    if ($targetHost !== '' && $currentHost !== '' && $targetHost !== $currentHost) {
+        $target = '/';
+    }
+
     return redirect()->to($target);
 })->name('locale.switch');
 
