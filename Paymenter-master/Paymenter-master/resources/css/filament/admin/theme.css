@@ -36,6 +36,13 @@
     overflow: visible !important;
 }
 
+/*
+ * Fail-safe: if Alpine/JS fails to boot, avoid an all-white admin page.
+ */
+body[x-cloak] {
+    display: block !important;
+}
+
 .fi-topbar {
     position: sticky;
     top: 0;

@@ -42,7 +42,6 @@
 </head>
 
 <body class="w-full bg-background text-base min-h-screen flex flex-col antialiased"
-    x-cloak
     x-data="{
         theme: $persist('system').as('theme_mode'),
         systemDark: window.matchMedia('(prefers-color-scheme: dark)').matches,
