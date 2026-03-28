@@ -23,9 +23,22 @@ chmod -R ug+rwX /var/www/html/storage /var/www/html/bootstrap/cache
 
 php /var/www/html/artisan storage:link >/dev/null 2>&1 || true
 
-if ! php /var/www/html/artisan app:ensure-defaults; then
-  echo "Sloth Cloud: app:ensure-defaults failed. Check the command output above."
-fi
+attempt=1
+max_attempts=20
+while [ "$attempt" -le "$max_attempts" ]; do
+  if php /var/www/html/artisan app:ensure-defaults; then
+    break
+  fi
+
+  if [ "$attempt" -eq "$max_attempts" ]; then
+    echo "Sloth Cloud: app:ensure-defaults failed after ${max_attempts} attempts."
+    break
+  fi
+
+  echo "Sloth Cloud: waiting for database (${attempt}/${max_attempts})..."
+  attempt=$((attempt + 1))
+  sleep 3
+done
 
 php /var/www/html/artisan config:clear >/dev/null 2>&1 || true
 php /var/www/html/artisan route:clear >/dev/null 2>&1 || true
