@@ -48,7 +48,6 @@ class AdminPanelProvider extends PanelProvider
             ->default()
             ->id('admin')
             ->path('admin')
-            ->spa()
             ->colors([
                 'primary' => Color::Blue,
             ])

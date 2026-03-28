@@ -7,47 +7,41 @@ import { ThemeToggle } from './ThemeToggle';
 
 function BrandMark() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 64 64">
+    <svg aria-hidden="true" viewBox="0 0 84 84">
       <defs>
-        <linearGradient id="sloth-cloud-logo" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stopColor="#79f5dd" />
-          <stop offset="52%" stopColor="#70c2ff" />
-          <stop offset="100%" stopColor="#6a7cff" />
+        <linearGradient id="sloth-core" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stopColor="#74f4dd" />
+          <stop offset="48%" stopColor="#67b8ff" />
+          <stop offset="100%" stopColor="#7886ff" />
         </linearGradient>
-        <radialGradient id="sloth-cloud-glow" cx="50%" cy="34%" r="72%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.2" />
+        <radialGradient id="sloth-aura" cx="22%" cy="20%" r="85%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.35" />
           <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
         </radialGradient>
       </defs>
-      <rect fill="url(#sloth-cloud-logo)" height="64" rx="20" width="64" />
-      <rect fill="url(#sloth-cloud-glow)" height="64" rx="20" width="64" />
+
+      <rect fill="url(#sloth-core)" height="84" rx="26" width="84" />
+      <rect fill="url(#sloth-aura)" height="84" rx="26" width="84" />
+
       <path
-        d="M16.5 35.2c0-8.2 6.5-14.9 14.8-14.9 3.7 0 7.1 1.3 9.8 3.5a11.9 11.9 0 0 1 6.6-2c6.4 0 11.6 5.1 11.6 11.4 0 6.3-5.2 11.4-11.6 11.4H29.7c-7.3 0-13.2-5.5-13.2-12.4Z"
+        d="M16 43c0-13.7 11.2-24.8 25-24.8 5.8 0 11.1 2 15.3 5.5 2.7-1.8 5.9-2.9 9.4-2.9 9.2 0 16.6 7.3 16.6 16.3 0 9-7.4 16.3-16.6 16.3H38.6C26 53.4 16 49 16 43Z"
         fill="#071622"
         opacity="0.92"
       />
       <path
-        d="M22 33.8c0-5.5 4.4-10 9.9-10 2.8 0 5.3 1.1 7.1 2.9 1.8-1.9 4.4-3 7.3-3 5.2 0 9.4 4.2 9.4 9.3 0 5.2-4.2 9.4-9.4 9.4H31.2c-5.1 0-9.2-3.9-9.2-8.6Z"
+        d="M23.6 41.1c0-9.3 7.6-16.8 16.9-16.8 4.9 0 9.3 2 12.4 5.1 3.2-3.2 7.6-5.2 12.6-5.2 8.9 0 16 7.1 16 15.8 0 8.7-7.1 15.8-16 15.8H39.2c-8.6 0-15.6-6.5-15.6-14.7Z"
         fill="none"
+        opacity="0.95"
         stroke="#dffcff"
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="2"
-        opacity="0.95"
+        strokeWidth="2.4"
       />
-      <path
-        d="M25.5 24.7c1.8-2.2 4.5-3.5 7.6-3.5 3 0 5.8 1.2 7.8 3.3"
-        fill="none"
-        stroke="#0b2534"
-        strokeLinecap="round"
-        strokeWidth="4.5"
-        opacity="0.8"
-      />
-      <circle cx="31" cy="33.5" fill="#071622" r="2.2" />
-      <circle cx="39.2" cy="33.5" fill="#071622" r="2.2" />
-      <path d="M30.8 39.3c1.6 1.7 3.4 2.6 5.4 2.6 2.1 0 3.9-.9 5.5-2.7" fill="none" stroke="#071622" strokeLinecap="round" strokeWidth="2.2" />
-      <path d="M15 20.4c3.1-3.2 6.3-5.1 9.8-5.8" fill="none" stroke="#dffcff" strokeLinecap="round" strokeWidth="2.2" opacity="0.8" />
-      <circle cx="47.7" cy="19.6" fill="#dffcff" r="1.4" opacity="0.85" />
+      <circle cx="39.4" cy="40.8" fill="#06131f" r="2.8" />
+      <circle cx="51.4" cy="40.8" fill="#06131f" r="2.8" />
+      <path d="M39.2 48.8c2.2 2.2 4.6 3.3 7.2 3.3 2.7 0 5.1-1.2 7.4-3.4" fill="none" stroke="#06131f" strokeLinecap="round" strokeWidth="2.5" />
+      <path d="M20.2 25.9c4.2-4.4 8.7-7 13.4-8" fill="none" opacity="0.82" stroke="#dffcff" strokeLinecap="round" strokeWidth="2.6" />
+      <circle cx="64.8" cy="24.8" fill="#dffcff" opacity="0.9" r="1.7" />
     </svg>
   );
 }
@@ -66,7 +60,7 @@ export function AppShell() {
           <span className="brand-copy">
             <strong className="brand-name-cn">树懒云</strong>
             <small className="brand-name-en">Sloth Cloud</small>
-            <span className="brand-tag">Headless VPS cloud</span>
+            <span className="brand-tag">Premium Headless VPS Cloud</span>
           </span>
         </Link>
 

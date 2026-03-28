@@ -19,6 +19,9 @@ export function HomePage() {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
 
+  const hasProducts = data.data.featuredProducts.length > 0;
+  const hasCategories = data.data.categories.length > 0;
+
   const metricCards = [
     {
       label: text.home.categoryTitle,
@@ -89,7 +92,7 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid product-grid">
-          {data.data.featuredProducts.map((product) => (
+          {hasProducts ? data.data.featuredProducts.map((product) => (
             <article className="product-card" key={product.id}>
               <div className="chip-row">
                 {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
@@ -102,7 +105,15 @@ export function HomePage() {
                 <Link className="button ghost" to={`/product/${product.slug}`}>{text.common.view}</Link>
               </div>
             </article>
-          ))}
+          )) : (
+            <article className="product-card">
+              <h3>暂无可售商品</h3>
+              <p>请在管理后台创建商品并确保“隐藏产品”未勾选，同时至少配置一个可用价格。</p>
+              <div className="card-footer">
+                <Link className="button secondary" to="/catalog">刷新商店视图</Link>
+              </div>
+            </article>
+          )}
         </div>
       </section>
 
@@ -114,14 +125,19 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid category-grid">
-          {data.data.categories.map((category) => (
+          {hasCategories ? data.data.categories.map((category) => (
             <article className="category-card" key={category.id}>
               <h3>{localizeText(category.name, locale, category.name)}</h3>
               <p>{localizeText(category.description, locale, category.description)}</p>
               <strong>{category.productCount} {text.common.products}</strong>
               <Link className="button ghost" to={`/catalog/${category.slug}`}>{text.common.open}</Link>
             </article>
-          ))}
+          )) : (
+            <article className="category-card">
+              <h3>暂无可见分类</h3>
+              <p>分类已经对接真实 API。若仍为 0，请检查分类下是否绑定了可见商品。</p>
+            </article>
+          )}
         </div>
       </section>
     </div>

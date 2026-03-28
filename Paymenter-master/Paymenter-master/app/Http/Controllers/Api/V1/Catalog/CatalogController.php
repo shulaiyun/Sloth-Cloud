@@ -15,11 +15,16 @@ class CatalogController extends Controller
 
     public function categories(): JsonResponse
     {
+        $onlyWithProducts = request()->boolean('only_with_products', false);
+
         $categories = Category::query()
             ->withCount([
                 'products as visible_products_count' => fn ($query) => $query->where('hidden', false),
             ])
-            ->whereHas('products', fn ($query) => $query->where('hidden', false))
+            ->when(
+                $onlyWithProducts,
+                fn ($query) => $query->whereHas('products', fn ($productQuery) => $productQuery->where('hidden', false))
+            )
             ->orderBy('sort')
             ->orderBy('id')
             ->get();
