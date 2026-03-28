@@ -118,22 +118,21 @@ class SettingsProvider extends ServiceProvider
         }
 
         $request = request();
-        $possibleHosts = [
+        $possibleHosts = collect([
             $request->headers->get('x-forwarded-host'),
             $request->headers->get('x-original-host'),
             $request->headers->get('x-host'),
             $request->getHost(),
             $request->server->get('HTTP_HOST'),
-        ];
+        ])
+            ->map(fn ($candidate) => trim(explode(',', (string) ($candidate ?? ''))[0] ?? ''))
+            ->filter(fn (string $candidate) => $candidate !== '')
+            ->values();
 
-        $host = '';
-        foreach ($possibleHosts as $candidate) {
-            $candidate = trim(explode(',', (string) ($candidate ?? ''))[0] ?? '');
-            if ($candidate !== '') {
-                $host = $candidate;
-                break;
-            }
-        }
+        $host = $possibleHosts
+            ->first(fn (string $candidate) => !self::isLocalHost((string) parse_url('http://' . $candidate, PHP_URL_HOST)))
+            ?? $possibleHosts->first()
+            ?? '';
 
         if ($host === '') {
             return null;
