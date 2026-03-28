@@ -2,13 +2,17 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasOptionalTranslationColumns;
 use App\Models\Traits\HasPlans;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use OwenIt\Auditing\Contracts\Auditable;
 
 class ConfigOption extends Model implements Auditable
 {
-    use HasFactory, HasPlans, Traits\Auditable;
+    use HasFactory;
+    use HasOptionalTranslationColumns;
+    use HasPlans;
+    use Traits\Auditable;
 
     protected $dontShowUnavailablePrice = true;
 
@@ -60,5 +64,10 @@ class ConfigOption extends Model implements Auditable
     public function serviceConfigs()
     {
         return $this->hasMany(ServiceConfig::class, 'config_option_id');
+    }
+
+    protected function optionalTranslationColumns(): array
+    {
+        return ['name_translations', 'description_translations'];
     }
 }

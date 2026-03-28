@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasOptionalTranslationColumns;
 use App\Observers\CategoryObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -12,7 +13,9 @@ use OwenIt\Auditing\Contracts\Auditable;
 #[ObservedBy(CategoryObserver::class)]
 class Category extends Model implements Auditable
 {
-    use HasFactory, Traits\Auditable;
+    use HasFactory;
+    use HasOptionalTranslationColumns;
+    use Traits\Auditable;
 
     protected $guarded = [];
 
@@ -48,4 +51,9 @@ class Category extends Model implements Auditable
     protected $auditExclude = [
         'remember_token',
     ];
+
+    protected function optionalTranslationColumns(): array
+    {
+        return ['name_translations', 'description_translations'];
+    }
 }

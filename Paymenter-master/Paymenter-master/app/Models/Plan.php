@@ -3,13 +3,16 @@
 namespace App\Models;
 
 use App\Classes\Price as PriceClass;
+use App\Models\Concerns\HasOptionalTranslationColumns;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use OwenIt\Auditing\Contracts\Auditable;
 
 class Plan extends Model implements Auditable
 {
-    use HasFactory, Traits\Auditable;
+    use HasFactory;
+    use HasOptionalTranslationColumns;
+    use Traits\Auditable;
 
     public $timestamps = false;
 
@@ -93,5 +96,10 @@ class Plan extends Model implements Auditable
     public function services()
     {
         return $this->hasMany(Service::class);
+    }
+
+    protected function optionalTranslationColumns(): array
+    {
+        return ['name_translations'];
     }
 }

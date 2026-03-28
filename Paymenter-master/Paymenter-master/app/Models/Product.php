@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasOptionalTranslationColumns;
 use App\Models\Traits\HasPlans;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,7 +13,10 @@ use OwenIt\Auditing\Contracts\Auditable;
 
 class Product extends Model implements Auditable
 {
-    use HasFactory, HasPlans, Traits\Auditable;
+    use HasFactory;
+    use HasOptionalTranslationColumns;
+    use HasPlans;
+    use Traits\Auditable;
 
     protected $guarded = [];
 
@@ -84,5 +88,10 @@ class Product extends Model implements Auditable
     public function upgradableConfigOptions(): HasManyThrough
     {
         return $this->hasManyThrough(ConfigOption::class, ConfigOptionProduct::class, 'product_id', 'id', 'id', 'config_option_id')->where('config_options.hidden', false)->where('config_options.upgradable', true)->orderBy('config_options.sort', 'asc')->orderBy('config_options.id', 'desc');
+    }
+
+    protected function optionalTranslationColumns(): array
+    {
+        return ['name_translations', 'description_translations'];
     }
 }

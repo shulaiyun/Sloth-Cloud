@@ -26,12 +26,12 @@ php /var/www/html/artisan storage:link >/dev/null 2>&1 || true
 attempt=1
 max_attempts=20
 while [ "$attempt" -le "$max_attempts" ]; do
-  if php /var/www/html/artisan app:ensure-defaults; then
+  if php /var/www/html/artisan migrate --force && php /var/www/html/artisan app:ensure-defaults; then
     break
   fi
 
   if [ "$attempt" -eq "$max_attempts" ]; then
-    echo "Sloth Cloud: app:ensure-defaults failed after ${max_attempts} attempts."
+    echo "Sloth Cloud: migration/default setup failed after ${max_attempts} attempts."
     break
   fi
 
