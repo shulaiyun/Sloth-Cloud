@@ -9,6 +9,10 @@ return [
     ],
     'user_menu' => [
         'exit_admin' => 'Exit Admin',
+        'language' => 'Language',
+        'lang_zh' => 'Chinese (Simplified)',
+        'lang_zh_tw' => 'Chinese (Traditional)',
+        'lang_en' => 'English',
         'sign_out' => 'Sign out',
     ],
     'pages' => [

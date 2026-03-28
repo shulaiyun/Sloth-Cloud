@@ -9,11 +9,20 @@ export function LanguageToggle() {
   return (
     <details className="locale-menu">
       <summary className="toggle-button locale-trigger">
-        <FlagIcon locale={locale} />
-        <span>{localeMeta[locale].code} {localeMeta[locale].label}</span>
+        <span className="locale-trigger-meta">
+          <FlagIcon locale={locale} />
+          <span className="locale-trigger-copy">
+            <span className="locale-code">{localeMeta[locale].code}</span>
+            <span>{localeMeta[locale].label}</span>
+          </span>
+        </span>
         <span className="locale-caret">▾</span>
       </summary>
       <div className="locale-menu-list">
+        <div className="locale-menu-head">
+          <span>界面语言</span>
+          <small>选择前台显示语言</small>
+        </div>
         {entries.map(([code, meta]) => (
           <button
             className={`locale-option ${code === locale ? 'active' : ''}`}

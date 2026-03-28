@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { InvoicePayResponse, InvoiceResponse } from '../lib/types';
 
 export function InvoiceDetailPage() {
   const { invoiceId } = useParams();
-  const { text } = useSite();
+  const { text, locale } = useSite();
   const { data, error, loading } = useApiData<InvoiceResponse>(
     invoiceId ? `/api/v1/invoices/${invoiceId}` : null,
   );
@@ -77,7 +78,7 @@ export function InvoiceDetailPage() {
         <article className="panel stack-16">
           {invoice.items.map((item) => (
             <div className="callout compact" key={item.id}>
-              <strong>{item.description}</strong>
+              <strong>{localizeText(item.description, locale, item.description)}</strong>
               <p>{item.formattedTotal}</p>
             </div>
           ))}

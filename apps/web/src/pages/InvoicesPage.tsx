@@ -29,7 +29,7 @@ export function InvoicesPage() {
       {data.data.length === 0 ? (
         <div className="callout">{text.invoices.noInvoices}</div>
       ) : (
-        <section className="card-grid">
+        <section className="card-grid section-products">
           {data.data.map((invoice) => (
             <article className="panel stack-12" key={invoice.id}>
               <h3>#{invoice.number ?? invoice.id}</h3>

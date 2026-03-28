@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { CheckoutField, ConfigOption, ProductDetailResponse } from '../lib/types';
 
@@ -45,7 +46,7 @@ export function ProductPage() {
   const { productSlug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { text, formatMoney } = useSite();
+  const { text, formatMoney, locale } = useSite();
   const { isAuthenticated } = useAuth();
   const { data, error, loading } = useApiData<ProductDetailResponse>(
     productSlug ? `/api/v1/catalog/products/${productSlug}` : null,
@@ -157,15 +158,15 @@ export function ProductPage() {
   return (
     <div className="stack-24">
       <section className="detail-hero">
-        <div className="stack-16">
+        <div className="stack-16 detail-copy">
           <Link className="text-link" to="/catalog">{text.common.backToCatalog}</Link>
           <div className="chip-row">
-            {product.category ? <span className="chip">{product.category.name}</span> : null}
+            {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
             <span className="chip">{text.common.sourceMode}: {sourceMode === 'live' ? text.common.live : text.common.mock}</span>
             <span className="chip">{text.common.stock}: {product.stock ?? '-'}</span>
           </div>
-          <h1>{product.name}</h1>
-          <p className="lead">{product.description}</p>
+          <h1>{localizeText(product.name, locale, product.name)}</h1>
+          <p className="lead">{localizeText(product.description, locale, product.description)}</p>
         </div>
         <aside className="summary-card">
           <span className="eyebrow">{text.product.summary}</span>
@@ -193,7 +194,7 @@ export function ProductPage() {
       </section>
 
       <section className="two-column">
-        <div className="panel stack-20">
+        <div className="section-frame stack-20">
           <div>
             <p className="eyebrow">{text.product.plans}</p>
             <h2>{text.product.details}</h2>
@@ -206,7 +207,7 @@ export function ProductPage() {
                 type="button"
                 onClick={() => setSelectedPlanId(plan.id)}
               >
-                <strong>{plan.name}</strong>
+                <strong>{localizeText(plan.name, locale, plan.name)}</strong>
                 <span>{cycleLabel(plan.billingPeriod, plan.billingUnit, text.common.customBilling)}</span>
                 <small>{formatMoney(plan.prices[0]?.price ?? null, plan.prices[0]?.currencyCode ?? 'USD')}</small>
               </button>
@@ -216,8 +217,8 @@ export function ProductPage() {
           {[...product.operatingSystemOptions, ...extraOptions].map((option) => (
             <div className="option-card" key={option.id}>
               <div className="stack-8">
-                <strong>{option.name}</strong>
-                <p className="muted">{option.description}</p>
+                <strong>{localizeText(option.name, locale, option.name)}</strong>
+                <p className="muted">{localizeText(option.description, locale, option.description)}</p>
               </div>
               {option.children.length > 0 ? (
                 <div className="choice-grid">
@@ -228,8 +229,8 @@ export function ProductPage() {
                       type="button"
                       onClick={() => setFormState((state) => ({ ...state, [option.id]: choice.id }))}
                     >
-                      <strong>{choice.name}</strong>
-                      {choice.description ? <span>{choice.description}</span> : null}
+                      <strong>{localizeText(choice.name, locale, choice.name)}</strong>
+                      {choice.description ? <span>{localizeText(choice.description, locale, choice.description)}</span> : null}
                       {selectedPlan ? (
                         <small>
                           + {formatMoney(
@@ -250,7 +251,7 @@ export function ProductPage() {
               <p className="eyebrow">{text.product.config}</p>
               {product.checkoutFields.map((field) => (
                 <label className="field" key={field.name}>
-                  <span>{field.label}</span>
+                  <span>{localizeText(field.label, locale, field.label)}</span>
                   {field.type === 'select' ? (
                     <select
                       className="text-input"
@@ -259,7 +260,7 @@ export function ProductPage() {
                     >
                       <option value="">-</option>
                       {field.options.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
+                        <option key={option.value} value={option.value}>{localizeText(option.label, locale, option.label)}</option>
                       ))}
                     </select>
                   ) : (
@@ -267,7 +268,7 @@ export function ProductPage() {
                       className="text-input"
                       type={field.type === 'number' ? 'number' : 'text'}
                       required={field.required}
-                      placeholder={field.placeholder ?? ''}
+                      placeholder={localizeText(field.placeholder, locale, field.placeholder ?? '')}
                       value={checkoutForm[field.name] ?? ''}
                       onChange={(event) => setCheckoutForm((state) => ({ ...state, [field.name]: event.target.value }))}
                     />
@@ -279,7 +280,7 @@ export function ProductPage() {
         </div>
 
         <div className="stack-20">
-          <section className="panel">
+          <section className="panel stack-12">
             <p className="eyebrow">{text.product.details}</p>
             <div className="bullet-list">
               <span>{text.common.slug}: {product.slug}</span>
@@ -287,6 +288,16 @@ export function ProductPage() {
               <span>{text.common.perUserLimit}: {product.perUserLimit ?? '-'}</span>
               <span>{text.product.loginHint}</span>
             </div>
+          </section>
+
+          <section className="panel stack-12">
+            <p className="eyebrow">{text.product.summary}</p>
+            <div className="chip-row">
+              {product.operatingSystemOptions.slice(0, 3).map((option) => (
+                <span className="chip" key={option.id}>{localizeText(option.name, locale, option.name)}</span>
+              ))}
+            </div>
+            <p className="muted">{text.footer.statement}</p>
           </section>
         </div>
       </section>

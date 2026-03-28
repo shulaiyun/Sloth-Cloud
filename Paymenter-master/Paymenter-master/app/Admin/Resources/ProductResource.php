@@ -110,6 +110,32 @@ class ProductResource extends Resource
                                     ->hint(admin_t('sloth-admin.product.hints.hidden', 'Hide the product from the client area.')),
 
                                 RichEditor::make('description')->nullable()->columnSpanFull(),
+                                Grid::make()
+                                    ->columns(3)
+                                    ->schema([
+                                        TextInput::make('name_translations.zh-CN')
+                                            ->label('Name (zh-CN)')
+                                            ->maxLength(255),
+                                        TextInput::make('name_translations.zh-TW')
+                                            ->label('Name (zh-TW)')
+                                            ->maxLength(255),
+                                        TextInput::make('name_translations.en-US')
+                                            ->label('Name (en-US)')
+                                            ->maxLength(255),
+                                    ]),
+                                Grid::make()
+                                    ->columns(3)
+                                    ->schema([
+                                        Textarea::make('description_translations.zh-CN')
+                                            ->label('Description (zh-CN)')
+                                            ->rows(4),
+                                        Textarea::make('description_translations.zh-TW')
+                                            ->label('Description (zh-TW)')
+                                            ->rows(4),
+                                        Textarea::make('description_translations.en-US')
+                                            ->label('Description (en-US)')
+                                            ->rows(4),
+                                    ]),
                                 FileUpload::make('image')
                                     ->label(admin_t('sloth-admin.product.fields.image', 'Image'))
                                     ->nullable()
@@ -232,6 +258,19 @@ class ProductResource extends Resource
                     ->required()
                     ->live(onBlur: true)
                     ->maxLength(255),
+                Grid::make()
+                    ->columns(3)
+                    ->schema([
+                        TextInput::make('name_translations.zh-CN')
+                            ->label('Name (zh-CN)')
+                            ->maxLength(255),
+                        TextInput::make('name_translations.zh-TW')
+                            ->label('Name (zh-TW)')
+                            ->maxLength(255),
+                        TextInput::make('name_translations.en-US')
+                            ->label('Name (en-US)')
+                            ->maxLength(255),
+                    ]),
                 Select::make('type')
                     ->label(admin_t('sloth-admin.product.fields.type', 'Type'))
                     ->options([

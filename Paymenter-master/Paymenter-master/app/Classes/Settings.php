@@ -652,11 +652,15 @@ class Settings
 
     private static function getAvailableLanguages(): array
     {
-        return once(
-            fn () => glob(base_path('lang/*'), GLOB_ONLYDIR)
-            ? array_map('basename', glob(base_path('lang/*'), GLOB_ONLYDIR))
-            : ['en']
-        );
+        return once(function () {
+            $fromLangFolder = glob(base_path('lang/*'), GLOB_ONLYDIR)
+                ? array_map('basename', glob(base_path('lang/*'), GLOB_ONLYDIR))
+                : ['en'];
+
+            $fromConfig = array_keys((array) config('app.available_locales', []));
+
+            return array_values(array_unique(array_merge($fromLangFolder, $fromConfig, ['en', 'zh'])));
+        });
     }
 
     private static function getAvailableLanguageOptions(): array

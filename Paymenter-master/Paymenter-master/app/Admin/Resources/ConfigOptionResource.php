@@ -10,8 +10,10 @@ use Filament\Actions\EditAction;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
@@ -66,6 +68,32 @@ class ConfigOptionResource extends Resource
                                 ->columnSpanFull()
                                 ->maxLength(255)
                                 ->placeholder('Enter the description of the configuration option'),
+                            Grid::make()
+                                ->columns(3)
+                                ->schema([
+                                    TextInput::make('name_translations.zh-CN')
+                                        ->label('Name (zh-CN)')
+                                        ->maxLength(255),
+                                    TextInput::make('name_translations.zh-TW')
+                                        ->label('Name (zh-TW)')
+                                        ->maxLength(255),
+                                    TextInput::make('name_translations.en-US')
+                                        ->label('Name (en-US)')
+                                        ->maxLength(255),
+                                ]),
+                            Grid::make()
+                                ->columns(3)
+                                ->schema([
+                                    Textarea::make('description_translations.zh-CN')
+                                        ->label('Description (zh-CN)')
+                                        ->rows(4),
+                                    Textarea::make('description_translations.zh-TW')
+                                        ->label('Description (zh-TW)')
+                                        ->rows(4),
+                                    Textarea::make('description_translations.en-US')
+                                        ->label('Description (en-US)')
+                                        ->rows(4),
+                                ]),
                             TextInput::make('env_variable')
                                 ->label('Environment Variable')
                                 ->maxLength(255)
@@ -127,6 +155,37 @@ class ConfigOptionResource extends Resource
                                             ->live()
                                             ->maxLength(255)
                                             ->placeholder('Enter the name of the configuration option'),
+                                        Grid::make()
+                                            ->columns(3)
+                                            ->schema([
+                                                TextInput::make('name_translations.zh-CN')
+                                                    ->label('Name (zh-CN)')
+                                                    ->maxLength(255),
+                                                TextInput::make('name_translations.zh-TW')
+                                                    ->label('Name (zh-TW)')
+                                                    ->maxLength(255),
+                                                TextInput::make('name_translations.en-US')
+                                                    ->label('Name (en-US)')
+                                                    ->maxLength(255),
+                                            ]),
+                                        Textarea::make('description')
+                                            ->label('Description')
+                                            ->columnSpanFull()
+                                            ->maxLength(255)
+                                            ->placeholder('Enter the description of the configuration option'),
+                                        Grid::make()
+                                            ->columns(3)
+                                            ->schema([
+                                                Textarea::make('description_translations.zh-CN')
+                                                    ->label('Description (zh-CN)')
+                                                    ->rows(4),
+                                                Textarea::make('description_translations.zh-TW')
+                                                    ->label('Description (zh-TW)')
+                                                    ->rows(4),
+                                                Textarea::make('description_translations.en-US')
+                                                    ->label('Description (en-US)')
+                                                    ->rows(4),
+                                            ]),
                                         TextInput::make('env_variable')
                                             ->label('Environment Variable')
                                             ->required()

@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Config;
 
 class EnsureDefaults extends Command
 {
-    private const BASELINE_LOCALES = ['zh', 'en', 'de', 'fr', 'es', 'ko'];
+    private const BASELINE_LOCALES = ['zh', 'zh_TW', 'en', 'de', 'fr', 'es', 'ko', 'ja', 'pt', 'ru'];
 
     protected $signature = 'app:ensure-defaults';
 
@@ -61,9 +61,10 @@ class EnsureDefaults extends Command
             $baselineLocales = ['en'];
         }
 
+        $defaultLanguage = in_array('zh', $availableLocales, true) ? 'zh' : 'en';
         Setting::firstOrCreate(
             ['key' => 'app_language'],
-            ['value' => 'zh', 'type' => 'string']
+            ['value' => $defaultLanguage, 'type' => 'string']
         );
 
         $allowedLanguages = Setting::query()->where('key', 'allowed_languages')->value('value');

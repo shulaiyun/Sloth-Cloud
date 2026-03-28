@@ -13,9 +13,27 @@ use App\Livewire\Products;
 use App\Livewire\Services;
 use App\Livewire\Tickets;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', Home::class)->name('home');
+
+Route::get('/locale/{locale}', function (Request $request, string $locale) {
+    $available = array_keys((array) config('app.available_locales', []));
+
+    if (!in_array($locale, $available, true)) {
+        abort(404);
+    }
+
+    session(['locale' => $locale]);
+
+    $target = url()->previous();
+    if (!is_string($target) || $target === '' || $target === url()->current()) {
+        $target = '/';
+    }
+
+    return redirect()->to($target);
+})->name('locale.switch');
 
 // Destroy the session and log out the user.
 // auth()->logout();

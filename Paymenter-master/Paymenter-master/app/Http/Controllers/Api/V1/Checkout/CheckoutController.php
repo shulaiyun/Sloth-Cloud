@@ -62,6 +62,10 @@ class CheckoutController extends Controller
                 $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
 
                 foreach ($cart->items as $item) {
+                    if (!$item->price->available) {
+                        throw new DisplayException("The selected plan for {$item->product->name} is not available in currency {$cart->currency_code}.");
+                    }
+
                     $lockedProduct = Product::query()->whereKey($item->product_id)->lockForUpdate()->firstOrFail();
 
                     $cartQuantity = $cart->items

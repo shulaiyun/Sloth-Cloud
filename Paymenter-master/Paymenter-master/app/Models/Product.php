@@ -19,8 +19,15 @@ class Product extends Model implements Auditable
     protected $auditInclude = [
         'name',
         'description',
+        'name_translations',
+        'description_translations',
         'category_id',
         'enabled',
+    ];
+
+    protected $casts = [
+        'name_translations' => 'array',
+        'description_translations' => 'array',
     ];
 
     /**

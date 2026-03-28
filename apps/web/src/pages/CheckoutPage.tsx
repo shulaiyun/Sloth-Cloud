@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { CartResponse, CheckoutResponse } from '../lib/types';
 
 export function CheckoutPage() {
-  const { text, formatMoney } = useSite();
+  const { text, formatMoney, locale } = useSite();
   const { data, error, loading } = useApiData<CartResponse>('/api/v1/cart');
   const [coupon, setCoupon] = useState('');
   const [pending, setPending] = useState(false);
@@ -69,11 +70,18 @@ export function CheckoutPage() {
         </div>
       ) : (
         <>
-          <section className="panel stack-16">
+          <section className="section-frame section-shell section-products">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{text.nav.checkout}</p>
+                <h2>{text.checkout.subtitle}</h2>
+              </div>
+              <span className="chip">{cart.items.length} {text.common.products}</span>
+            </div>
             {cart.items.map((item) => (
               <article className="product-card" key={item.id}>
-                <h3>{item.product.name}</h3>
-                <p>{item.plan.name}</p>
+                <h3>{localizeText(item.product.name, locale, item.product.name)}</h3>
+                <p>{localizeText(item.plan.name, locale, item.plan.name)}</p>
                 <div className="card-footer">
                   <strong>{item.price?.formatted.total ?? formatMoney(item.price?.total ?? null, cart.currencyCode)}</strong>
                   <div className="action-row">
@@ -109,7 +117,7 @@ export function CheckoutPage() {
           </section>
 
           <section className="two-column">
-            <div className="panel stack-12">
+            <div className="section-frame stack-12">
               <p className="eyebrow">{text.checkout.coupon}</p>
               <p className="muted">{text.checkout.couponHint}</p>
               <div className="action-row">

@@ -66,6 +66,14 @@ class AdminPanelProvider extends PanelProvider
                     ->label(admin_t('sloth-admin.user_menu.exit_admin', 'Exit Admin'))
                     ->url('/')
                     ->icon('heroicon-s-arrow-uturn-left'),
+                'language_zh' => MenuItem::make()
+                    ->label(admin_t('sloth-admin.user_menu.lang_zh', 'Chinese (Simplified)'))
+                    ->url(route('locale.switch', ['locale' => 'zh']))
+                    ->icon('heroicon-s-language'),
+                'language_en' => MenuItem::make()
+                    ->label(admin_t('sloth-admin.user_menu.lang_en', 'English'))
+                    ->url(route('locale.switch', ['locale' => 'en']))
+                    ->icon('heroicon-s-language'),
                 'logout' => Action::make('logout')
                     ->label(admin_t('sloth-admin.user_menu.sign_out', 'Sign out'))
                     ->icon(FilamentIcon::resolve(PanelsIconAlias::USER_MENU_LOGOUT_BUTTON) ?? Heroicon::ArrowLeftOnRectangle)

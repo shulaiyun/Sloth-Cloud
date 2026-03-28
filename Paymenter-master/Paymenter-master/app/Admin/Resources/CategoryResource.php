@@ -11,11 +11,13 @@ use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
@@ -73,6 +75,32 @@ class CategoryResource extends Resource
                     ->required(),
                 RichEditor::make('description')
                     ->required(),
+                Grid::make()
+                    ->columns(3)
+                    ->schema([
+                        TextInput::make('name_translations.zh-CN')
+                            ->label('Name (zh-CN)')
+                            ->maxLength(255),
+                        TextInput::make('name_translations.zh-TW')
+                            ->label('Name (zh-TW)')
+                            ->maxLength(255),
+                        TextInput::make('name_translations.en-US')
+                            ->label('Name (en-US)')
+                            ->maxLength(255),
+                    ]),
+                Grid::make()
+                    ->columns(3)
+                    ->schema([
+                        Textarea::make('description_translations.zh-CN')
+                            ->label('Description (zh-CN)')
+                            ->rows(4),
+                        Textarea::make('description_translations.zh-TW')
+                            ->label('Description (zh-TW)')
+                            ->rows(4),
+                        Textarea::make('description_translations.en-US')
+                            ->label('Description (en-US)')
+                            ->rows(4),
+                    ]),
                 Select::make('parent_id')
                     ->relationship('parent', 'name')
                     ->searchable()

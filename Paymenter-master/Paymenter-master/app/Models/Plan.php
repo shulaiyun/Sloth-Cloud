@@ -15,6 +15,7 @@ class Plan extends Model implements Auditable
 
     protected $fillable = [
         'name',
+        'name_translations',
         'type',
         'billing_period',
         'billing_unit',
@@ -23,6 +24,7 @@ class Plan extends Model implements Auditable
 
     protected $casts = [
         'billing_period' => 'integer',
+        'name_translations' => 'array',
     ];
 
     /**
@@ -49,8 +51,17 @@ class Plan extends Model implements Auditable
         if ($this->type === 'free') {
             return new PriceClass(['currency' => Currency::find(session('currency', config('settings.default_currency')))], free: true);
         }
-        $currency = session('currency', config('settings.default_currency'));
+        $currency = (string) session('currency', config('settings.default_currency'));
         $price = $this->prices->where('currency_code', $currency)->first();
+
+        if (!$price) {
+            // Return an unavailable price object instead of throwing null dereference errors.
+            return new PriceClass((object) [
+                'price' => 0,
+                'setup_fee' => 0,
+                'currency' => null,
+            ], dontShowUnavailablePrice: true);
+        }
 
         return new PriceClass((object) [
             'price' => $price,

@@ -52,13 +52,24 @@
 .fi-dropdown-panel,
 [data-floating-ui-portal],
 [x-ref="panel"] {
-    z-index: 200 !important;
+    z-index: 9999 !important;
     max-width: calc(100vw - 1rem);
 }
 
 .fi-topbar .fi-dropdown-panel,
 .fi-topbar [x-ref="panel"] {
     inset-inline-end: 0.75rem !important;
+    max-height: min(70vh, 560px) !important;
+    overflow: auto !important;
+}
+
+.fi-topbar .fi-dropdown-panel [role="menu"],
+.fi-topbar [x-ref="panel"] [role="menu"] {
+    max-width: min(340px, calc(100vw - 2rem)) !important;
+}
+
+.fi-topbar [x-ref="panel"] {
+    transform: translateX(-0.35rem);
 }
 
 /*

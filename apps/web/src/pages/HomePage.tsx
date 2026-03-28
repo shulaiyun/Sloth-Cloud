@@ -2,11 +2,12 @@ import { Link } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { HomeResponse } from '../lib/types';
 
 export function HomePage() {
-  const { text, formatMoney } = useSite();
+  const { text, formatMoney, locale } = useSite();
   const { isAuthenticated } = useAuth();
   const { data, error, loading } = useApiData<HomeResponse>('/api/v1/catalog/home');
 
@@ -17,6 +18,24 @@ export function HomePage() {
   if (error || !data) {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
+
+  const metricCards = [
+    {
+      label: text.home.categoryTitle,
+      value: String(data.data.categories.length),
+      hint: text.home.categorySubtitle,
+    },
+    {
+      label: text.home.featuredTitle,
+      value: String(data.data.featuredProducts.length),
+      hint: text.home.featuredSubtitle,
+    },
+    {
+      label: text.common.sourceMode,
+      value: data.meta.sourceMode === 'live' ? text.common.live : text.common.mock,
+      hint: text.footer.statement,
+    },
+  ];
 
   return (
     <div className="stack-24">
@@ -32,29 +51,37 @@ export function HomePage() {
         </div>
         <div className="hero-panel">
           <div className="glass-panel">
-            <span className="panel-kicker">树懒云</span>
-            <strong>Sloth Cloud</strong>
-            <p>Headless 计费核心，现代化 VPS 客户端体验。</p>
+            <span className="panel-kicker">Sloth Cloud</span>
+            <strong>树懒云</strong>
+            <p>{text.footer.statement}</p>
             <div className="chip-row">
               {data.data.categories.slice(0, 3).map((item) => (
-                <span className="chip" key={item.id}>{item.name}</span>
+                <span className="chip" key={item.id}>{localizeText(item.name, locale, item.name)}</span>
               ))}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="metrics-grid">
-        {data.data.stats.map((item) => (
-          <article className="metric-card" key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-            <p>{item.hint}</p>
-          </article>
-        ))}
+      <section className="section-frame section-shell">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">{text.common.sourceMode}</p>
+            <h2>{text.home.kicker}</h2>
+          </div>
+        </div>
+        <div className="metrics-grid">
+          {metricCards.map((item) => (
+            <article className="metric-card" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <p>{item.hint}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
-      <section className="section-block">
+      <section className="section-frame section-shell section-products">
         <div className="section-heading">
           <div>
             <p className="eyebrow">{text.home.featuredTitle}</p>
@@ -65,11 +92,11 @@ export function HomePage() {
           {data.data.featuredProducts.map((product) => (
             <article className="product-card" key={product.id}>
               <div className="chip-row">
-                {product.category ? <span className="chip">{product.category.name}</span> : null}
-                <span className="chip">{product.pricing?.planName ?? text.common.defaultPlan}</span>
+                {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
+                <span className="chip">{localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}</span>
               </div>
-              <h3>{product.name}</h3>
-              <p>{product.description}</p>
+              <h3>{localizeText(product.name, locale, product.name)}</h3>
+              <p>{localizeText(product.description, locale, product.description)}</p>
               <div className="card-footer">
                 <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
                 <Link className="button ghost" to={`/product/${product.slug}`}>{text.common.view}</Link>
@@ -79,7 +106,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <section className="section-block">
+      <section className="section-frame section-shell section-categories">
         <div className="section-heading">
           <div>
             <p className="eyebrow">{text.home.categoryTitle}</p>
@@ -89,8 +116,8 @@ export function HomePage() {
         <div className="card-grid category-grid">
           {data.data.categories.map((category) => (
             <article className="category-card" key={category.id}>
-              <h3>{category.name}</h3>
-              <p>{category.description}</p>
+              <h3>{localizeText(category.name, locale, category.name)}</h3>
+              <p>{localizeText(category.description, locale, category.description)}</p>
               <strong>{category.productCount} {text.common.products}</strong>
               <Link className="button ghost" to={`/catalog/${category.slug}`}>{text.common.open}</Link>
             </article>

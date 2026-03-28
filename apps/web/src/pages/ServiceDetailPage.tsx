@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { ServiceResponse } from '../lib/types';
 
 export function ServiceDetailPage() {
   const { serviceId } = useParams();
-  const { text } = useSite();
+  const { text, locale } = useSite();
   const { data, error, loading } = useApiData<ServiceResponse>(
     serviceId ? `/api/v1/services/${serviceId}` : null,
   );
@@ -73,8 +74,8 @@ export function ServiceDetailPage() {
       <section className="section-heading">
         <div>
           <p className="eyebrow">{text.nav.services}</p>
-          <h1>{service.label || service.baseLabel}</h1>
-          <p className="muted">{service.product?.name ?? '-'}</p>
+          <h1>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h1>
+          <p className="muted">{service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}</p>
         </div>
         <Link className="button ghost" to="/services">{text.nav.services}</Link>
       </section>

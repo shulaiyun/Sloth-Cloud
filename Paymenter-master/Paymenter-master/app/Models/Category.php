@@ -16,6 +16,11 @@ class Category extends Model implements Auditable
 
     protected $guarded = [];
 
+    protected $casts = [
+        'name_translations' => 'array',
+        'description_translations' => 'array',
+    ];
+
     /**
      * Get the products of the category.
      */

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use App\Classes\Cart;
 use App\Helpers\ExtensionHelper;
@@ -94,30 +94,30 @@ return [
     'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
 
     'available_locales' => [
-        'ar' => 'العربية',
-        'bn' => 'বাংলা',
+        'ar' => 'Arabic',
+        'bn' => 'Bengali',
         'de' => 'Deutsch',
         'en' => 'English',
-        'es' => 'Español',
+        'es' => 'Espanol',
         'fi' => 'Suomi',
-        'fr' => 'Français',
-        'he' => 'עברית',
-        'hi' => 'हिन्दी',
+        'fr' => 'Francais',
+        'he' => 'Hebrew',
+        'hi' => 'Hindi',
         'hu' => 'Magyar',
         'id' => 'Bahasa Indonesia',
         'it' => 'Italiano',
-        'sv' => 'Svenska',
-        'uk' => 'Українська',
-        'ko' => '한국어',
-        'lv' => 'Latviešu',
+        'ko' => 'Korean',
+        'lv' => 'Latvian',
         'nl' => 'Nederlands',
         'no' => 'Norsk',
-        'pt' => 'Português',
         'pl' => 'Polski',
-        'sr' => 'Српски',
-        'tr' => 'Türkçe',
-        'zh' => '中文',
-
+        'pt' => 'Portugues',
+        'sr' => 'Serbian',
+        'sv' => 'Svenska',
+        'tr' => 'Turkce',
+        'uk' => 'Ukrainian',
+        'zh' => 'Chinese (Simplified)',
+        'zh_TW' => 'Chinese (Traditional)',
     ],
 
     'rtl_locales' => [

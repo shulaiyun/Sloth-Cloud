@@ -48,8 +48,6 @@ if (!function_exists('theme')) {
     /**
      * Get the specified configuration value.
      *
-     * If an array is passed as the key, we will assume you want to set an array of values.
-     *
      * @param  array|string  $key
      * @param  mixed  $default
      * @return mixed|Repository
@@ -58,17 +56,15 @@ if (!function_exists('theme')) {
     {
         $current_theme = active_theme();
 
-        return config("settings.theme_$current_theme" . "_$key", $default) ?? $default;
+        return config("settings.theme_{$current_theme}_{$key}", $default) ?? $default;
     }
 }
 
 if (!function_exists('hook')) {
     /**
-     * Dispatch an event and return the items
+     * Dispatch an event and return the items.
      *
      * @param  string  $event
-     * @param  array  $items
-     * @return array
      */
     function hook($event)
     {
@@ -94,37 +90,37 @@ if (!function_exists('admin_t')) {
 
 if (!function_exists('locale_flag')) {
     /**
-     * Resolve a flag icon for a locale code.
+     * Resolve a simple ascii flag marker for a locale code.
      */
     function locale_flag(string $locale): string
     {
         return [
-            'ar' => '🇸🇦',
-            'bn' => '🇧🇩',
-            'de' => '🇩🇪',
-            'en' => '🇺🇸',
-            'es' => '🇪🇸',
-            'fi' => '🇫🇮',
-            'fr' => '🇫🇷',
-            'he' => '🇮🇱',
-            'hi' => '🇮🇳',
-            'hu' => '🇭🇺',
-            'id' => '🇮🇩',
-            'it' => '🇮🇹',
-            'ko' => '🇰🇷',
-            'lv' => '🇱🇻',
-            'nl' => '🇳🇱',
-            'no' => '🇳🇴',
-            'pl' => '🇵🇱',
-            'pt' => '🇵🇹',
-            'sr' => '🇷🇸',
-            'sv' => '🇸🇪',
-            'tr' => '🇹🇷',
-            'uk' => '🇺🇦',
-            'zh' => '🇨🇳',
-            'zh_TW' => '🇹🇼',
-            'zh-TW' => '🇹🇼',
-        ][$locale] ?? '🌐';
+            'ar' => '[SA]',
+            'bn' => '[BD]',
+            'de' => '[DE]',
+            'en' => '[US]',
+            'es' => '[ES]',
+            'fi' => '[FI]',
+            'fr' => '[FR]',
+            'he' => '[IL]',
+            'hi' => '[IN]',
+            'hu' => '[HU]',
+            'id' => '[ID]',
+            'it' => '[IT]',
+            'ko' => '[KR]',
+            'lv' => '[LV]',
+            'nl' => '[NL]',
+            'no' => '[NO]',
+            'pl' => '[PL]',
+            'pt' => '[PT]',
+            'sr' => '[RS]',
+            'sv' => '[SE]',
+            'tr' => '[TR]',
+            'uk' => '[UA]',
+            'zh' => '[CN]',
+            'zh_TW' => '[TW]',
+            'zh-TW' => '[TW]',
+        ][$locale] ?? '[--]';
     }
 }
 
@@ -135,31 +131,31 @@ if (!function_exists('locale_label')) {
     function locale_label(string $locale): string
     {
         $labels = [
-            'ar' => 'العربية',
-            'bn' => 'বাংলা',
+            'ar' => 'Arabic',
+            'bn' => 'Bengali',
             'de' => 'Deutsch',
             'en' => 'English',
-            'es' => 'Español',
+            'es' => 'Espanol',
             'fi' => 'Suomi',
-            'fr' => 'Français',
-            'he' => 'עברית',
-            'hi' => 'हिन्दी',
+            'fr' => 'Francais',
+            'he' => 'Hebrew',
+            'hi' => 'Hindi',
             'hu' => 'Magyar',
             'id' => 'Bahasa Indonesia',
             'it' => 'Italiano',
-            'ko' => '한국어',
-            'lv' => 'Latviešu',
+            'ko' => 'Korean',
+            'lv' => 'Latvian',
             'nl' => 'Nederlands',
             'no' => 'Norsk',
             'pl' => 'Polski',
-            'pt' => 'Português',
-            'sr' => 'Српски',
+            'pt' => 'Portugues',
+            'sr' => 'Serbian',
             'sv' => 'Svenska',
-            'tr' => 'Türkçe',
-            'uk' => 'Українська',
-            'zh' => '中文',
-            'zh_TW' => '繁體中文',
-            'zh-TW' => '繁體中文',
+            'tr' => 'Turkce',
+            'uk' => 'Ukrainian',
+            'zh' => 'Chinese (Simplified)',
+            'zh_TW' => 'Chinese (Traditional)',
+            'zh-TW' => 'Chinese (Traditional)',
         ];
 
         return $labels[$locale] ?? config("app.available_locales.$locale", strtoupper($locale));
@@ -173,5 +169,56 @@ if (!function_exists('locale_option_label')) {
     function locale_option_label(string $locale): string
     {
         return trim(locale_flag($locale) . ' ' . locale_label($locale));
+    }
+}
+
+if (!function_exists('localized_text_payload')) {
+    /**
+     * Build a JSON string that front-end locale helpers can read.
+     *
+     * The base text is used as a fallback for missing translations so existing
+     * single-language content continues to work without additional editing.
+     */
+    function localized_text_payload(?string $baseText, ?array $translations = null): string
+    {
+        $baseText = trim((string) $baseText);
+        $translations = is_array($translations) ? $translations : [];
+
+        $normalized = [];
+        foreach ($translations as $locale => $value) {
+            if (!is_string($locale)) {
+                continue;
+            }
+
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $value = trim($value);
+            if ($value === '') {
+                continue;
+            }
+
+            $normalized[$locale] = $value;
+        }
+
+        if ($baseText === '' && $normalized === []) {
+            return '';
+        }
+
+        $payload = [];
+        foreach (['zh-CN', 'zh-TW', 'en-US'] as $locale) {
+            $payload[$locale] = $normalized[$locale] ?? $baseText;
+        }
+
+        foreach ($normalized as $locale => $value) {
+            $payload[$locale] = $value;
+        }
+
+        $payload['default'] = $baseText !== '' ? $baseText : (reset($normalized) ?: '');
+
+        $encoded = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return is_string($encoded) ? $encoded : $baseText;
     }
 }

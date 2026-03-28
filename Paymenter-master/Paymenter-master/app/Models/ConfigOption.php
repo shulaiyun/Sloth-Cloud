@@ -15,12 +15,19 @@ class ConfigOption extends Model implements Auditable
     protected $fillable = [
         'name',
         'description',
+        'name_translations',
+        'description_translations',
         'env_variable',
         'type',
         'sort',
         'hidden',
         'parent_id',
         'upgradable',
+    ];
+
+    protected $casts = [
+        'name_translations' => 'array',
+        'description_translations' => 'array',
     ];
 
     /**

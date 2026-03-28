@@ -70,8 +70,8 @@ trait SerializesHeadlessResources
             'id' => $category->id,
             'slug' => $category->slug,
             'full_slug' => $category->full_slug,
-            'name' => $category->name,
-            'description' => $category->description,
+            'name' => localized_text_payload($category->name, $category->name_translations),
+            'description' => localized_text_payload($category->description, $category->description_translations),
             'image' => $category->image,
             'parent_id' => $category->parent_id,
             'sort' => $category->sort,
@@ -84,7 +84,7 @@ trait SerializesHeadlessResources
         $lowestPlan = $product->plans
             ->flatMap(fn (Plan $plan) => $plan->prices->map(fn ($price) => [
                 'plan_id' => $plan->id,
-                'plan_name' => $plan->name,
+                'plan_name' => localized_text_payload($plan->name, $plan->name_translations),
                 'billing_period' => $plan->billing_period,
                 'billing_unit' => $plan->billing_unit,
                 'price' => $price->price,
@@ -98,8 +98,8 @@ trait SerializesHeadlessResources
         return [
             'id' => $product->id,
             'slug' => $product->slug,
-            'name' => $product->name,
-            'description' => $product->description,
+            'name' => localized_text_payload($product->name, $product->name_translations),
+            'description' => localized_text_payload($product->description, $product->description_translations),
             'image' => $product->image,
             'stock' => $product->stock,
             'per_user_limit' => $product->per_user_limit,
@@ -107,7 +107,7 @@ trait SerializesHeadlessResources
             'category' => $product->category ? [
                 'id' => $product->category->id,
                 'slug' => $product->category->slug,
-                'name' => $product->category->name,
+                'name' => localized_text_payload($product->category->name, $product->category->name_translations),
             ] : null,
             'pricing' => $lowestPlan,
         ];
@@ -117,7 +117,7 @@ trait SerializesHeadlessResources
     {
         return [
             'id' => $plan->id,
-            'name' => $plan->name,
+            'name' => localized_text_payload($plan->name, $plan->name_translations),
             'type' => $plan->type,
             'billing_period' => $plan->billing_period,
             'billing_unit' => $plan->billing_unit,
@@ -161,8 +161,8 @@ trait SerializesHeadlessResources
     {
         return [
             'id' => $option->id,
-            'name' => $option->name,
-            'description' => $option->description,
+            'name' => localized_text_payload($option->name, $option->name_translations),
+            'description' => localized_text_payload($option->description, $option->description_translations),
             'env_variable' => $option->env_variable,
             'type' => $option->type,
             'sort' => $option->sort,
@@ -170,12 +170,12 @@ trait SerializesHeadlessResources
             'children' => $option->children->map(function (ConfigOption $child) {
                 return [
                     'id' => $child->id,
-                    'name' => $child->name,
-                    'description' => $child->description,
+                    'name' => localized_text_payload($child->name, $child->name_translations),
+                    'description' => localized_text_payload($child->description, $child->description_translations),
                     'env_variable' => $child->env_variable,
                     'prices' => $child->plans->map(fn (Plan $plan) => [
                         'plan_id' => $plan->id,
-                        'plan_name' => $plan->name,
+                        'plan_name' => localized_text_payload($plan->name, $plan->name_translations),
                         'billing_period' => $plan->billing_period,
                         'billing_unit' => $plan->billing_unit,
                         'prices' => $plan->prices->map(fn ($price) => [
@@ -192,15 +192,16 @@ trait SerializesHeadlessResources
 
     protected function serializeProductDetail(Product $product): array
     {
-        $configOptions = $product->configOptions->map(fn (ConfigOption $option) => $this->serializeConfigOption($option))->values();
+        $rawConfigOptions = $product->configOptions->values();
+        $configOptions = $rawConfigOptions->map(fn (ConfigOption $option) => $this->serializeConfigOption($option))->values();
         $checkoutFields = collect(ExtensionHelper::getCheckoutConfig($product, []))
             ->map(fn ($field) => is_array($field) ? $this->serializeCheckoutField($field) : null)
             ->filter()
             ->values();
 
-        $operatingSystemOptions = $configOptions
-            ->filter(function (array $option) {
-                $haystack = strtolower(($option['name'] ?? '') . ' ' . ($option['env_variable'] ?? ''));
+        $operatingSystemOptions = $rawConfigOptions
+            ->filter(function (ConfigOption $option) {
+                $haystack = strtolower(($option->name ?? '') . ' ' . ($option->env_variable ?? ''));
 
                 return str_contains($haystack, 'os')
                     || str_contains($haystack, 'system')
@@ -209,13 +210,14 @@ trait SerializesHeadlessResources
                     || str_contains($haystack, '系统')
                     || str_contains($haystack, '鏡像');
             })
+            ->map(fn (ConfigOption $option) => $this->serializeConfigOption($option))
             ->values();
 
         return [
             'id' => $product->id,
             'slug' => $product->slug,
-            'name' => $product->name,
-            'description' => $product->description,
+            'name' => localized_text_payload($product->name, $product->name_translations),
+            'description' => localized_text_payload($product->description, $product->description_translations),
             'image' => $product->image,
             'stock' => $product->stock,
             'per_user_limit' => $product->per_user_limit,
@@ -279,7 +281,7 @@ trait SerializesHeadlessResources
             'product' => $this->serializeProductCard($item->product),
             'plan' => [
                 'id' => $item->plan->id,
-                'name' => $item->plan->name,
+                'name' => localized_text_payload($item->plan->name, $item->plan->name_translations),
                 'type' => $item->plan->type,
                 'billing_period' => $item->plan->billing_period,
                 'billing_unit' => $item->plan->billing_unit,
@@ -339,7 +341,7 @@ trait SerializesHeadlessResources
             'product' => $service->product ? $this->serializeProductCard($service->product) : null,
             'plan' => $service->plan ? [
                 'id' => $service->plan->id,
-                'name' => $service->plan->name,
+                'name' => localized_text_payload($service->plan->name, $service->plan->name_translations),
                 'type' => $service->plan->type,
                 'billing_period' => $service->plan->billing_period,
                 'billing_unit' => $service->plan->billing_unit,
@@ -365,12 +367,12 @@ trait SerializesHeadlessResources
                 'id' => $config->id,
                 'option' => $config->configOption ? [
                     'id' => $config->configOption->id,
-                    'name' => $config->configOption->name,
+                    'name' => localized_text_payload($config->configOption->name, $config->configOption->name_translations),
                     'env_variable' => $config->configOption->env_variable,
                 ] : null,
                 'value' => $config->configValue ? [
                     'id' => $config->configValue->id,
-                    'name' => $config->configValue->name,
+                    'name' => localized_text_payload($config->configValue->name, $config->configValue->name_translations),
                     'env_variable' => $config->configValue->env_variable,
                 ] : null,
             ])
@@ -391,7 +393,7 @@ trait SerializesHeadlessResources
     {
         return [
             'id' => $item->id,
-            'description' => $item->description,
+            'description' => localized_text_payload($item->description, null),
             'price' => (float) $item->price,
             'quantity' => $item->quantity,
             'total' => (float) $item->total(),

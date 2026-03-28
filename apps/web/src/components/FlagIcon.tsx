@@ -1,30 +1,123 @@
+import type { ReactNode } from 'react';
+
 type FlagIconProps = {
   locale: string;
 };
 
-const flags: Record<string, string> = {
-  'zh-CN': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#DE2910"/><polygon points="15,9 17.8,17 26.2,17 19.4,21.9 22,30 15,24.8 8,30 10.6,21.9 3.8,17 12.2,17" fill="#FFDE00"/></svg>`,
-  'zh-TW': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#FE0000"/><rect width="28" height="22" rx="6" fill="#000095"/><circle cx="14" cy="11" r="5.2" fill="#fff"/></svg>`,
-  'en-US': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#fff"/><path d="M0 0h64v4H0zm0 8h64v4H0zm0 8h64v4H0zm0 8h64v4H0zm0 8h64v4H0zm0 8h64v4H0z" fill="#B22234"/><rect width="28" height="20" rx="6" fill="#3C3B6E"/></svg>`,
-  'de-DE': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#FFCE00"/><path d="M0 0h64v16H0z" fill="#000"/><path d="M0 16h64v16H0z" fill="#DD0000"/></svg>`,
-  'fr-FR': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#ED2939"/><rect width="42.7" height="48" fill="#fff"/><rect width="21.3" height="48" fill="#002395"/></svg>`,
-  'es-ES': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#AA151B"/><rect y="12" width="64" height="24" fill="#F1BF00"/></svg>`,
-  'ko-KR': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" rx="8" fill="#fff"/><g fill="#111"><rect x="10" y="9" width="9" height="1.8" rx=".9"/><rect x="10" y="12" width="9" height="1.8" rx=".9"/><rect x="10" y="15" width="9" height="1.8" rx=".9"/><rect x="45" y="31" width="9" height="1.8" rx=".9"/><rect x="45" y="34" width="9" height="1.8" rx=".9"/><rect x="45" y="37" width="9" height="1.8" rx=".9"/><rect x="45" y="9" width="9" height="1.8" rx=".9"/><rect x="45" y="13" width="9" height="1.8" rx=".9"/><rect x="10" y="31" width="9" height="1.8" rx=".9"/><rect x="10" y="35" width="9" height="1.8" rx=".9"/></g><path d="M24 24a8 8 0 1 1 16 0 8 8 0 0 0-16 0z" fill="#CD2E3A"/><path d="M40 24a8 8 0 1 1-16 0 8 8 0 0 0 16 0z" fill="#0047A0"/></svg>`,
-};
-
-function toDataUri(svg: string) {
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+function FlagSvg({ children }: { children: ReactNode }) {
+  return (
+    <svg aria-hidden="true" className="flag-icon" viewBox="0 0 24 16">
+      {children}
+    </svg>
+  );
 }
 
 export function FlagIcon({ locale }: FlagIconProps) {
-  const svg = flags[locale] ?? flags['en-US'];
-
-  return (
-    <img
-      alt=""
-      aria-hidden="true"
-      className="flag-icon"
-      src={toDataUri(svg)}
-    />
-  );
+  switch (locale) {
+    case 'zh-CN':
+      return (
+        <FlagSvg>
+          <rect fill="#d81e06" height="16" rx="3" width="24" />
+          <circle cx="6" cy="5" fill="#ffd84d" r="1.4" />
+          <circle cx="8.5" cy="3.4" fill="#ffd84d" r="0.5" />
+          <circle cx="9.2" cy="6.6" fill="#ffd84d" r="0.5" />
+        </FlagSvg>
+      );
+    case 'zh-TW':
+      return (
+        <FlagSvg>
+          <rect fill="#d81e06" height="16" rx="3" width="24" />
+          <rect fill="#1f4aa8" height="8" rx="3" width="11" />
+          <circle cx="5.2" cy="4" fill="#ffffff" r="1.8" />
+        </FlagSvg>
+      );
+    case 'en-US':
+      return (
+        <FlagSvg>
+          <rect fill="#ffffff" height="16" rx="3" width="24" />
+          <rect fill="#c81e2a" height="1.65" width="24" y="0" />
+          <rect fill="#c81e2a" height="1.65" width="24" y="3.3" />
+          <rect fill="#c81e2a" height="1.65" width="24" y="6.6" />
+          <rect fill="#c81e2a" height="1.65" width="24" y="9.9" />
+          <rect fill="#c81e2a" height="1.65" width="24" y="13.2" />
+          <rect fill="#21468b" height="7.2" rx="3" width="10.6" />
+          <circle cx="2.2" cy="1.8" fill="#ffffff" r="0.55" />
+          <circle cx="4.1" cy="1.8" fill="#ffffff" r="0.55" />
+          <circle cx="6" cy="1.8" fill="#ffffff" r="0.55" />
+          <circle cx="3.2" cy="3.7" fill="#ffffff" r="0.55" />
+          <circle cx="5.1" cy="3.7" fill="#ffffff" r="0.55" />
+        </FlagSvg>
+      );
+    case 'ja-JP':
+      return (
+        <FlagSvg>
+          <rect fill="#ffffff" height="16" rx="3" width="24" />
+          <circle cx="12" cy="8" fill="#d81e06" r="4.4" />
+        </FlagSvg>
+      );
+    case 'ko-KR':
+      return (
+        <FlagSvg>
+          <rect fill="#ffffff" height="16" rx="3" width="24" />
+          <path
+            d="M12 3.6a4.4 4.4 0 0 1 0 8.8 2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 1 1 0-4.4Z"
+            fill="#d81e06"
+          />
+          <path
+            d="M12 12.4a4.4 4.4 0 0 1 0-8.8 2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 1 1 0 4.4Z"
+            fill="#0f5db7"
+          />
+          <path d="M4.3 5.1h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M4.7 7h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M16.5 9h3" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+          <path d="M16.1 10.9h2.8" stroke="#1a1a1a" strokeLinecap="round" strokeWidth="1" />
+        </FlagSvg>
+      );
+    case 'de-DE':
+      return (
+        <FlagSvg>
+          <rect fill="#000000" height="5.4" rx="3" width="24" y="0" />
+          <rect fill="#dd0000" height="5.4" rx="3" width="24" y="5.3" />
+          <rect fill="#ffce00" height="5.4" rx="3" width="24" y="10.6" />
+        </FlagSvg>
+      );
+    case 'fr-FR':
+      return (
+        <FlagSvg>
+          <rect fill="#ffffff" height="16" rx="3" width="24" />
+          <rect fill="#1d4ed8" height="16" rx="3" width="8" />
+          <rect fill="#e11d48" height="16" rx="3" width="8" x="16" />
+        </FlagSvg>
+      );
+    case 'es-ES':
+      return (
+        <FlagSvg>
+          <rect fill="#c81e2a" height="16" rx="3" width="24" />
+          <rect fill="#ffcf4d" height="8" rx="2" width="24" y="4" />
+        </FlagSvg>
+      );
+    case 'ru-RU':
+      return (
+        <FlagSvg>
+          <rect fill="#ffffff" height="5.4" rx="3" width="24" y="0" />
+          <rect fill="#1d4ed8" height="5.4" rx="3" width="24" y="5.3" />
+          <rect fill="#d81e06" height="5.4" rx="3" width="24" y="10.6" />
+        </FlagSvg>
+      );
+    case 'pt-BR':
+      return (
+        <FlagSvg>
+          <rect fill="#1f9d55" height="16" rx="3" width="24" />
+          <path d="M12 3.2 19.6 8 12 12.8 4.4 8 12 3.2Z" fill="#ffd84d" />
+          <circle cx="12" cy="8" fill="#1e40af" r="2.7" />
+        </FlagSvg>
+      );
+    default:
+      return (
+        <FlagSvg>
+          <rect fill="#6fb4ff" height="16" rx="3" width="24" />
+          <rect fill="#6cf2d1" height="8" rx="3" width="24" y="8" />
+        </FlagSvg>
+      );
+  }
 }

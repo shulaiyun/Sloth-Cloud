@@ -58,6 +58,26 @@ class CartController extends Controller
             ]);
         }
 
+        if ($plan->type !== 'free' && !$plan->prices->contains('currency_code', $cart->currency_code)) {
+            $fallbackCurrency = $plan->prices->first()?->currency_code;
+
+            if (!$fallbackCurrency) {
+                throw ValidationException::withMessages([
+                    'plan_id' => ['The selected billing plan does not have any price configured.'],
+                ]);
+            }
+
+            if ($cart->items->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'plan_id' => ["The selected billing plan is unavailable in {$cart->currency_code}. Empty your cart first or choose another plan."],
+                ]);
+            }
+
+            $cart->currency_code = $fallbackCurrency;
+            $cart->save();
+            $cart = $this->loadHeadlessCart($cart->fresh());
+        }
+
         $quantity = (int) ($validated['quantity'] ?? 1);
         if ($product->allow_quantity === 'disabled') {
             $quantity = 1;

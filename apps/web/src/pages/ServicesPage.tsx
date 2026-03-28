@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
+import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { ServicesResponse } from '../lib/types';
 
 export function ServicesPage() {
-  const { text } = useSite();
+  const { text, locale } = useSite();
   const { data, error, loading } = useApiData<ServicesResponse>('/api/v1/services');
 
   if (loading) {
@@ -32,8 +33,8 @@ export function ServicesPage() {
         <section className="service-grid">
           {data.data.map((service) => (
             <article className="panel stack-12" key={service.id}>
-              <h3>{service.label || service.baseLabel}</h3>
-              <p className="muted">{service.product?.name ?? '-'}</p>
+              <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
+              <p className="muted">{service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}</p>
               <div className="detail-grid">
                 <div><span>{text.common.status}</span><strong>{service.status}</strong></div>
                 <div><span>{text.common.total}</span><strong>{service.formattedPrice}</strong></div>
