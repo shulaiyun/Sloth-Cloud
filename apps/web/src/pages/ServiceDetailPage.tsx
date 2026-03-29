@@ -160,6 +160,27 @@ function extractRevealedPassword(payload: unknown) {
   ]);
 }
 
+function friendlyServerError(rawError: string | null | undefined, locale: string) {
+  if (!rawError) {
+    return null;
+  }
+
+  const lower = rawError.toLowerCase();
+  if (lower.includes('409') || lower.includes('service_convoy_mapping_missing')) {
+    return locale.startsWith('zh')
+      ? '该服务尚未绑定 Convoy 服务器映射（server_uuid）。请在 Paymenter 产品中绑定 Convoy Server 扩展并创建新服务，或补写该服务的 server_uuid 属性后再试。'
+      : 'This service is not mapped to a Convoy server reference (server_uuid). Bind a Convoy server extension to the product and reprovision, or backfill server_uuid in service properties.';
+  }
+
+  if (lower.includes('convoy integration is disabled') || lower.includes('convoy_disabled')) {
+    return locale.startsWith('zh')
+      ? 'BFF 里未启用 Convoy（CONVOY_ENABLED=false）。请在 apps/api 环境变量中启用并重启 API 容器。'
+      : 'Convoy is disabled in BFF (CONVOY_ENABLED=false). Enable it in apps/api env and restart the API container.';
+  }
+
+  return rawError;
+}
+
 export function ServiceDetailPage() {
   const { serviceId } = useParams();
   const { text, locale } = useSite();
@@ -380,7 +401,7 @@ export function ServiceDetailPage() {
           {serverLoading ? (
             <div className="loading-card">{text.common.loading}</div>
           ) : serverError ? (
-            <div className="callout">{serverError}</div>
+            <div className="callout">{friendlyServerError(serverError, locale)}</div>
           ) : (
             <div className="detail-grid">
               <div><span>{zh ? 'Server Ref' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>

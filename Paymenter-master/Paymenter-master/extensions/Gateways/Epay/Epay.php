@@ -220,7 +220,9 @@ class Epay extends Gateway
         $payload = $request->all();
         $hasValidSignature = $this->hasValidSignature($payload);
         $tradeStatus = strtoupper((string) ($payload['trade_status'] ?? ''));
-        $paymentState = ($hasValidSignature && in_array($tradeStatus, ['TRADE_SUCCESS', 'TRADE_FINISHED'], true))
+        $invoice->refresh();
+        $invoicePaid = strtolower((string) $invoice->status) === 'paid';
+        $paymentState = (($hasValidSignature && in_array($tradeStatus, ['TRADE_SUCCESS', 'TRADE_FINISHED'], true)) || $invoicePaid)
             ? 'success'
             : 'pending';
 
@@ -228,6 +230,15 @@ class Epay extends Gateway
             'payment' => $paymentState,
             'trade_no' => (string) ($payload['trade_no'] ?? ''),
             'out_trade_no' => (string) ($payload['out_trade_no'] ?? $invoice->id),
+        ]);
+
+        Log::info('Epay return redirect', [
+            'invoice_id' => $invoice->id,
+            'invoice_status' => $invoice->status,
+            'has_valid_signature' => $hasValidSignature,
+            'trade_status' => $tradeStatus,
+            'target' => $target,
+            'query' => Arr::except($payload, ['sign']),
         ]);
 
         return redirect()->away($target);

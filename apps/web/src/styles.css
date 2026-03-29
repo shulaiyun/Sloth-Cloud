@@ -956,27 +956,40 @@ select.text-input option {
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .status-active {
-  color: #67f4b5;
+  color: #8af7bf;
+  border-color: rgba(80, 205, 134, 0.55);
+  background: linear-gradient(180deg, rgba(23, 80, 52, 0.72), rgba(15, 55, 38, 0.82));
 }
 
 .status-pending {
-  color: #ffd76e;
+  color: #ffe28b;
+  border-color: rgba(212, 171, 66, 0.58);
+  background: linear-gradient(180deg, rgba(86, 65, 17, 0.74), rgba(61, 45, 12, 0.84));
 }
 
 .status-suspended,
 .status-cancelled {
-  color: #ff8484;
+  color: #ff9c9c;
+  border-color: rgba(228, 102, 102, 0.58);
+  background: linear-gradient(180deg, rgba(92, 28, 28, 0.72), rgba(67, 20, 20, 0.84));
 }
 
 .status-overdue {
-  color: #ffb15f;
+  color: #ffc37f;
+  border-color: rgba(211, 127, 61, 0.58);
+  background: linear-gradient(180deg, rgba(96, 49, 16, 0.72), rgba(71, 35, 11, 0.84));
 }
 
 .status-unknown {
-  color: color-mix(in srgb, var(--muted-strong) 75%, var(--text));
+  color: color-mix(in srgb, var(--muted-strong) 80%, var(--text));
+  border-color: color-mix(in srgb, var(--muted) 48%, var(--border));
+  background: linear-gradient(180deg, rgba(41, 56, 68, 0.7), rgba(28, 40, 50, 0.82));
 }
 
 .action-grid {
