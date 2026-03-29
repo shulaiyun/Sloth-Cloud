@@ -31,9 +31,9 @@ docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml
 docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml ps
 ```
 
-## 4) Configure Nginx Proxy Manager (NPM) correctly
+## 4) Configure Nginx Proxy Manager (NPM) for Convoy
 
-Use **HTTP** upstream only (NPM does TLS, internal container does not):
+Use HTTP upstream only (NPM does TLS, internal convoy web is plain HTTP):
 
 - Domain: `con.jxjvip.help`
 - Scheme: `http`
@@ -42,19 +42,38 @@ Use **HTTP** upstream only (NPM does TLS, internal container does not):
 - Websocket Support: `ON`
 - Block Common Exploits: `ON`
 
-Do not use `127.0.0.1` when NPM runs in docker bridge mode, because that points to the NPM container itself instead of the host.
+If your NPM container cannot reach host public IP, use `172.17.0.1` instead.
 
 ## 5) Validate Convoy upstream from host
 
 ```bash
 curl -I http://127.0.0.1:18181
-docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml logs --tail=120 sloth-convoy-web sloth-convoy-php
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml logs --tail=200 sloth-convoy-web
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml logs --tail=200 sloth-convoy-php
 ```
 
 Expected:
 
 - `curl` returns `HTTP/1.1 200` or `302`.
 - `sloth-convoy-web` has no `connect: connection refused` to php-fpm.
+
+If curl fails, check bind setting:
+
+```bash
+grep -n "CONVOY_HTTP_BIND" /opt/sloth-cloud/deploy/convoy/.env
+```
+
+Must be:
+
+```bash
+CONVOY_HTTP_BIND=0.0.0.0:18181
+```
+
+Then rebuild convoy services:
+
+```bash
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml up -d --build sloth-convoy-web sloth-convoy-php sloth-convoy-workers
+```
 
 ## 6) Epay gateway setup in Paymenter admin
 
@@ -63,23 +82,23 @@ Create/update gateway with:
 - `API URL`: `https://yzf.shulaiyun.top`
 - `App ID`: your merchant ID
 - `App Key`: your merchant key
-- `Upstream Channel Type`: `alipay` or `wxpay` (as needed)
+- `Upstream Channel Type`: `alipay` or `wxpay`
 - `Frontend Return URL`: `https://app.jxjvip.help/invoices/{invoice}`
-- `Allowed Currencies`: include `CNY` (and `USD` only if upstream supports it)
+- `Allowed Currencies`: include `CNY`
 
-## 7) V免签/Epay merchant callback setup (must be reachable from internet)
+## 7) V免签/Epay callback setup (official-style path)
 
-- Notify URL: `https://bill.jxjvip.help/extensions/gateways/epay/notify`
-- Return URL: `https://bill.jxjvip.help/extensions/gateways/epay/return`
+Use Paymenter domain with official callback path style:
 
-If your V免签 backend only supports a fixed global callback URL, use the two URLs above.
-This repo now supports resolving the invoice from callback payload fields, so the return URL no longer has to contain `{invoice}`.
+- Notify URL: `https://bill.jxjvip.help/example/notify.php`
+- Return URL: `https://bill.jxjvip.help/example/return.php`
 
-The notify URL is still the most important one. Invoice paid state depends on notify.
+Important:
+
+- Do not use `https://azj.jxjvip.help/example/*.php` unless that service forwards callback to Paymenter.
+- Invoice paid state depends on notify callback hitting Paymenter.
 
 ## 8) Verify callback traffic in runtime logs
-
-Paymenter in this stack logs to container stdout/stderr, not necessarily `storage/logs/laravel.log`.
 
 ```bash
 docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs -f sloth-cloud-paymenter | grep -E "Epay notify|Epay return"
@@ -91,10 +110,9 @@ Expected after a test payment:
 - `Epay notify accepted: payment recorded`
 - `Epay return redirect`
 
-If notify lines never appear, the payment provider is not calling your notify URL.
-Before this patch, Epay logs only went to Laravel daily files; now they are also mirrored to container stderr so `docker compose logs` can see them after rebuild.
+If notify lines never appear, provider is not calling your Paymenter notify URL.
 
-## 9) Check BFF and frontend if invoice stays pending
+## 9) Check BFF/frontend if invoice stays pending
 
 ```bash
 docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs --tail=200 sloth-cloud-api
@@ -103,7 +121,7 @@ docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-c
 
 Invoice detail page should poll status every 5 seconds after opening gateway payment.
 
-## 10) Convoy control in service detail shows HTTP 409
+## 10) Service detail shows HTTP 409 for server panel
 
 `HTTP 409` means service has no mapped Convoy server reference yet.
 You need one of these keys in Paymenter service properties/config:

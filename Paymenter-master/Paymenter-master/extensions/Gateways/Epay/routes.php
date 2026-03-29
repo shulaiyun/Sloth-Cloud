@@ -8,6 +8,14 @@ Route::match(['GET', 'POST'], '/extensions/gateways/epay/notify', [Epay::class, 
     ->withoutMiddleware([VerifyCsrfToken::class])
     ->name('extensions.gateways.epay.notify');
 
+Route::match(['GET', 'POST'], '/example/notify.php', [Epay::class, 'notify'])
+    ->withoutMiddleware([VerifyCsrfToken::class])
+    ->name('extensions.gateways.epay.notify.official');
+
 Route::get('/extensions/gateways/epay/return/{invoice?}', [Epay::class, 'return'])
     ->middleware(['web'])
     ->name('extensions.gateways.epay.return');
+
+Route::get('/example/return.php', [Epay::class, 'return'])
+    ->middleware(['web'])
+    ->name('extensions.gateways.epay.return.official');

@@ -115,8 +115,9 @@ class Epay extends Gateway
         $params = [
             'pid' => (string) $this->config('app_id'),
             'type' => (string) ($this->config('payment_type') ?: 'alipay'),
-            'notify_url' => route('extensions.gateways.epay.notify'),
-            'return_url' => route('extensions.gateways.epay.return', ['invoice' => $invoice->id]),
+            // Keep callback paths compatible with the common "official doc" format.
+            'notify_url' => route('extensions.gateways.epay.notify.official'),
+            'return_url' => route('extensions.gateways.epay.return.official'),
             'out_trade_no' => (string) $invoice->id,
             'name' => 'Invoice #' . ($invoice->number ?: $invoice->id),
             'money' => number_format((float) $total, 2, '.', ''),
