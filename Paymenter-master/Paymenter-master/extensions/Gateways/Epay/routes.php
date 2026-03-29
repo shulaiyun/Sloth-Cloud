@@ -4,7 +4,7 @@ use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Support\Facades\Route;
 use Paymenter\Extensions\Gateways\Epay\Epay;
 
-Route::post('/extensions/gateways/epay/notify', [Epay::class, 'notify'])
+Route::match(['GET', 'POST'], '/extensions/gateways/epay/notify', [Epay::class, 'notify'])
     ->withoutMiddleware([VerifyCsrfToken::class])
     ->name('extensions.gateways.epay.notify');
 

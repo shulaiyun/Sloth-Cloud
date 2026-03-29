@@ -6,8 +6,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
+import { createConvoyClient } from './lib/convoy.js';
 import { createGateway, GatewayError } from './lib/paymenter.js';
 import { SessionStore } from './lib/session-store.js';
+import type { ServiceDetail } from './lib/types.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 loadEnv({
@@ -22,10 +24,22 @@ const envSchema = z.object({
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 7),
   SESSION_COOKIE_NAME: z.string().min(1).default('sloth_sid'),
   SESSION_COOKIE_SECURE: z.string().optional().default('false'),
+  CONVOY_ENABLED: z.string().optional().default('false'),
+  CONVOY_MODE: z.enum(['mock', 'live']).default('live'),
+  CONVOY_BASE_URL: z.string().url().optional(),
+  CONVOY_APPLICATION_KEY: z.string().optional(),
+  CONVOY_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  CONVOY_APPLICATION_PREFIX: z.string().min(1).default('/api/application'),
+  CONVOY_SERVER_REF_KEYS: z.string().optional().default('convoy_server_uuid,convoy_server_id,convoy_server_short_id,server_uuid'),
 });
 
 const env = envSchema.parse(process.env);
 const isSecureCookie = env.SESSION_COOKIE_SECURE.toLowerCase() === 'true';
+const convoyEnabled = env.CONVOY_ENABLED.toLowerCase() === 'true';
+const convoyRefKeys = env.CONVOY_SERVER_REF_KEYS.split(',')
+  .map((key) => key.trim())
+  .filter((key) => key.length > 0);
+const convoyRefKeysLower = convoyRefKeys.map((key) => key.toLowerCase());
 
 const app = Fastify({
   logger: true,
@@ -34,6 +48,8 @@ const app = Fastify({
 app.log.info({
   paymenterMode: env.PAYMENTER_MODE,
   paymenterApiUrl: env.PAYMENTER_API_URL ?? null,
+  convoyEnabled,
+  convoyBaseUrl: env.CONVOY_BASE_URL ?? null,
 }, 'Sloth Cloud API environment loaded');
 
 await app.register(cors, {
@@ -51,6 +67,14 @@ const gateway = createGateway({
   apiUrl: env.PAYMENTER_API_URL,
   mode: env.PAYMENTER_MODE,
   timeoutMs: env.PAYMENTER_TIMEOUT_MS,
+});
+const convoy = createConvoyClient({
+  enabled: convoyEnabled,
+  mode: env.CONVOY_MODE,
+  baseUrl: env.CONVOY_BASE_URL,
+  applicationKey: env.CONVOY_APPLICATION_KEY,
+  timeoutMs: env.CONVOY_TIMEOUT_MS,
+  applicationPrefix: env.CONVOY_APPLICATION_PREFIX,
 });
 
 const sessionStore = new SessionStore(env.SESSION_TTL_SECONDS * 1000);
@@ -91,6 +115,117 @@ function requireToken(request: FastifyRequest) {
   }
 
   return token;
+}
+
+function getStringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readActionName(action: Record<string, unknown>) {
+  const candidates = [
+    getStringValue(action.function),
+    getStringValue(action.action),
+    getStringValue(action.name),
+    getStringValue(action.label),
+  ];
+
+  return candidates.find((entry) => entry !== '') ?? '';
+}
+
+function normalizeActionValue(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function findActionName(
+  buttons: Array<Record<string, unknown>>,
+  aliases: readonly string[],
+) {
+  const normalizedAliases = aliases.map((alias) => normalizeActionValue(alias));
+
+  for (const button of buttons) {
+    const actionName = readActionName(button);
+    if (!actionName) {
+      continue;
+    }
+
+    const normalizedAction = normalizeActionValue(actionName);
+    if (normalizedAliases.some((alias) => normalizedAction.includes(alias))) {
+      return actionName;
+    }
+  }
+
+  return null;
+}
+
+function resolveConvoyServerRef(service: ServiceDetail) {
+  const propertyMap = new Map<string, string>();
+  for (const property of service.properties ?? []) {
+    if (!property?.key) {
+      continue;
+    }
+    const value = getStringValue(property.value);
+    if (value !== '') {
+      propertyMap.set(property.key.toLowerCase(), value);
+    }
+  }
+
+  for (const key of convoyRefKeys) {
+    const hit = propertyMap.get(key.toLowerCase());
+    if (hit) {
+      return hit;
+    }
+  }
+
+  for (const configEntry of service.configs ?? []) {
+    const optionKey = getStringValue(configEntry.option?.envVariable).toLowerCase();
+    if (!optionKey) {
+      continue;
+    }
+    if (!convoyRefKeysLower.includes(optionKey)) {
+      continue;
+    }
+
+    const value = getStringValue(configEntry.value?.envVariable) || getStringValue(configEntry.value?.name);
+    if (value !== '') {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function buildCapabilities(buttons: Array<Record<string, unknown>>, hasServerRef: boolean) {
+  const lookup = (aliases: string[]) => findActionName(buttons, aliases) !== null;
+
+  return {
+    application: {
+      read: hasServerRef && convoyEnabled,
+      patch: hasServerRef && convoyEnabled,
+      build: hasServerRef && convoyEnabled,
+      suspend: hasServerRef && convoyEnabled,
+      unsuspend: hasServerRef && convoyEnabled,
+      destroy: hasServerRef && convoyEnabled,
+    },
+    actionBridge: {
+      power: lookup(['start', 'stop', 'restart', 'reboot', 'power']),
+      reinstall: lookup(['reinstall', 'rebuild', 'reset-os']),
+      revealPassword: lookup(['password', 'reveal', 'show-password']),
+    },
+  };
+}
+
+async function getServiceWithActions(token: string, serviceId: string) {
+  const serviceResponse = await gateway.service(token, serviceId);
+  const service = serviceResponse.data.service;
+  const buttons = (serviceResponse.data.actions?.buttons ?? []) as Array<Record<string, unknown>>;
+  const serverRef = resolveConvoyServerRef(service);
+
+  return {
+    service,
+    buttons,
+    serverRef,
+    capabilities: buildCapabilities(buttons, serverRef !== null),
+  };
 }
 
 app.get('/api/v1/health', async () => gateway.health());
@@ -265,6 +400,229 @@ app.post('/api/v1/services/:serviceId/actions/:action', async (request) => {
   const body = z.record(z.unknown()).parse(request.body ?? {});
 
   return gateway.serviceAction(requireToken(request), params.serviceId, params.action, body);
+});
+
+app.get('/api/v1/services/:serviceId/server', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+  const { service, buttons, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  const convoyResponse = await convoy.getServer(serverRef);
+
+  return {
+    data: {
+      service,
+      mapping: {
+        serverRef,
+        expectedKeys: convoyRefKeys,
+      },
+      capabilities,
+      actions: {
+        buttons,
+      },
+      convoy: convoyResponse.data ?? {},
+    },
+    meta: {
+      generatedAt: new Date().toISOString(),
+      sourceMode: env.PAYMENTER_MODE,
+    },
+  };
+});
+
+app.get('/api/v1/services/:serviceId/server/capabilities', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+  const { serverRef, capabilities, buttons } = await getServiceWithActions(token, params.serviceId);
+
+  return {
+    data: {
+      mapped: serverRef !== null,
+      serverRef,
+      expectedKeys: convoyRefKeys,
+      capabilities,
+      actions: {
+        buttons,
+      },
+    },
+    meta: {
+      generatedAt: new Date().toISOString(),
+      sourceMode: env.PAYMENTER_MODE,
+    },
+  };
+});
+
+app.patch('/api/v1/services/:serviceId/server', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.record(z.unknown()).parse(request.body ?? {});
+  const token = requireToken(request);
+  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  const response = await convoy.patchServer(serverRef, body);
+  return {
+    message: 'Server settings updated successfully.',
+    data: response.data ?? {},
+  };
+});
+
+app.patch('/api/v1/services/:serviceId/server/build', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.record(z.unknown()).parse(request.body ?? {});
+  const token = requireToken(request);
+  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  const response = await convoy.patchBuild(serverRef, body);
+  return {
+    message: 'Server build updated successfully.',
+    data: response.data ?? {},
+  };
+});
+
+app.post('/api/v1/services/:serviceId/server/suspend', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  await convoy.suspend(serverRef);
+  return { message: 'Server suspended successfully.' };
+});
+
+app.post('/api/v1/services/:serviceId/server/unsuspend', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  await convoy.unsuspend(serverRef);
+  return { message: 'Server unsuspended successfully.' };
+});
+
+app.delete('/api/v1/services/:serviceId/server', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const query = z.object({
+    noPurge: z.coerce.boolean().optional().default(false),
+  }).parse(request.query ?? {});
+  const token = requireToken(request);
+  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+
+  if (!serverRef) {
+    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+      code: 'SERVICE_CONVOY_MAPPING_MISSING',
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  await convoy.destroy(serverRef, query.noPurge);
+  return { message: 'Server termination requested successfully.' };
+});
+
+app.post('/api/v1/services/:serviceId/server/power', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.object({
+    state: z.enum(['start', 'stop', 'restart', 'shutdown']),
+    payload: z.record(z.unknown()).optional(),
+  }).parse(request.body ?? {});
+  const token = requireToken(request);
+  const { buttons } = await getServiceWithActions(token, params.serviceId);
+  const actionAliases = {
+    start: ['start', 'boot', 'power-on', 'power-start'],
+    stop: ['stop', 'shutdown', 'power-off', 'power-stop'],
+    restart: ['restart', 'reboot', 'power-restart'],
+    shutdown: ['shutdown', 'stop', 'power-off'],
+  } as const;
+  const actionName = findActionName(buttons, actionAliases[body.state]);
+
+  if (!actionName) {
+    throw new GatewayError('Requested power action is not available for this service.', 409, {
+      code: 'SERVICE_ACTION_UNSUPPORTED',
+      actionType: 'power',
+      requestedState: body.state,
+    });
+  }
+
+  return gateway.serviceAction(token, params.serviceId, actionName, {
+    state: body.state,
+    ...(body.payload ?? {}),
+  });
+});
+
+app.post('/api/v1/services/:serviceId/server/reinstall', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.object({
+    templateUuid: z.string().min(1).optional(),
+    accountPassword: z.string().min(8).optional(),
+    startOnCompletion: z.boolean().optional(),
+    payload: z.record(z.unknown()).optional(),
+  }).parse(request.body ?? {});
+  const token = requireToken(request);
+  const { buttons } = await getServiceWithActions(token, params.serviceId);
+  const actionName = findActionName(buttons, ['reinstall', 'rebuild', 'reset-os', 'os-reinstall']);
+
+  if (!actionName) {
+    throw new GatewayError('Reinstall action is not available for this service.', 409, {
+      code: 'SERVICE_ACTION_UNSUPPORTED',
+      actionType: 'reinstall',
+    });
+  }
+
+  return gateway.serviceAction(token, params.serviceId, actionName, {
+    ...(body.payload ?? {}),
+    ...(body.templateUuid ? { template_uuid: body.templateUuid } : {}),
+    ...(body.accountPassword ? { account_password: body.accountPassword } : {}),
+    ...(body.startOnCompletion !== undefined ? { start_on_completion: body.startOnCompletion } : {}),
+  });
+});
+
+app.post('/api/v1/services/:serviceId/server/reveal-password', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.object({
+    payload: z.record(z.unknown()).optional(),
+  }).parse(request.body ?? {});
+  const token = requireToken(request);
+  const { buttons } = await getServiceWithActions(token, params.serviceId);
+  const actionName = findActionName(buttons, ['password', 'reveal', 'show-password']);
+
+  if (!actionName) {
+    throw new GatewayError('Reveal password action is not available for this service.', 409, {
+      code: 'SERVICE_ACTION_UNSUPPORTED',
+      actionType: 'reveal-password',
+    });
+  }
+
+  return gateway.serviceAction(token, params.serviceId, actionName, body.payload ?? {});
 });
 
 app.get('/api/v1/invoices', async (request) => {

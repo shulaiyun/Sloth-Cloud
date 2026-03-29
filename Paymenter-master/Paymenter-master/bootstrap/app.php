@@ -38,6 +38,9 @@ return Application::configure(basePath: dirname(__DIR__))
             ImpersonateMiddleware::class,
             SetLocale::class,
         ]);
+        $middleware->validateCsrfTokens(except: [
+            'extensions/gateways/epay/notify',
+        ]);
     })
     ->withEvents(discover: [
         __DIR__ . '/../app/Extensions',

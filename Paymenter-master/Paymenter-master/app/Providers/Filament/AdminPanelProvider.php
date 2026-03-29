@@ -59,6 +59,7 @@ class AdminPanelProvider extends PanelProvider
             ->favicon(config('settings.favicon') ? Storage::url(config('settings.favicon')) : null)
             ->brandLogo(config('settings.logo') ? Storage::url(config('settings.logo')) : null)
             ->darkModeBrandLogo(config('settings.logo_dark') ? Storage::url(config('settings.logo_dark')) : null)
+            ->theme(asset('css/filament/admin/theme.css'))
             ->brandName(config('settings.logo') || config('settings.logo_dark') ? null : config('app.name'))
             ->brandLogoHeight('2rem')
             ->discoverResources(in: app_path('Admin/Resources'), for: 'App\\Admin\\Resources')

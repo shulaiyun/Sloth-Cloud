@@ -81,6 +81,7 @@ class GatewayResource extends Resource
                     ->label('Gateway')
                     ->required()
                     ->searchable()
+                    ->helperText('One extension keeps a single gateway instance. For Epay/V免签, configure channels in upstream checkout and keep this as a unified online gateway.')
                     ->unique(
                         static::getModel(),
                         'extension',

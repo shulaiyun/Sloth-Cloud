@@ -532,6 +532,30 @@ button {
   gap: 10px;
 }
 
+.filter-toolbar {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(210px, 1fr));
+  align-items: end;
+}
+
+.filter-control {
+  display: grid;
+  gap: 8px;
+}
+
+.filter-control > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.filter-control.compact {
+  min-width: 0;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -947,6 +971,20 @@ select.text-input option {
   color: #ff8484;
 }
 
+.status-overdue {
+  color: #ffb15f;
+}
+
+.status-unknown {
+  color: color-mix(in srgb, var(--muted-strong) 75%, var(--text));
+}
+
+.action-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .text-link {
   color: var(--accent);
 }
@@ -1208,6 +1246,11 @@ select.text-input option {
   .action-row,
   .card-footer {
     align-items: stretch;
+  }
+
+  .filter-toolbar,
+  .action-grid {
+    grid-template-columns: 1fr;
   }
 
   .card-footer {

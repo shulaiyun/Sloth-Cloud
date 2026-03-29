@@ -13,8 +13,8 @@ use Illuminate\Support\Facades\Log;
 use Paymenter\Extensions\Gateways\Epay\Support\Signer;
 
 #[ExtensionMeta(
-    name: 'Epay Gateway',
-    description: 'Accept payments via Epay.',
+    name: '在线支付',
+    description: 'Unified online payment gateway for Epay/V免签 callbacks.',
     version: '1.0.0',
     author: 'Sloth Cloud',
     url: 'https://app.jxjvip.help',
@@ -58,9 +58,9 @@ class Epay extends Gateway
             ],
             [
                 'name' => 'payment_type',
-                'label' => 'Default Payment Type',
+                'label' => 'Upstream Channel Type',
                 'type' => 'select',
-                'description' => 'Default payment channel submitted to Epay',
+                'description' => 'Default channel passed upstream. For aggregated checkout, channel selection is handled by V免签/Epay side.',
                 'required' => true,
                 'default' => 'alipay',
                 'options' => [
@@ -131,67 +131,86 @@ class Epay extends Gateway
 
     public function notify(Request $request)
     {
-        $payload = $request->all();
+        $rawPayload = $request->all();
 
-        if (!$this->hasValidSignature($payload)) {
+        Log::info('Epay notify received', [
+            'ip' => $request->ip(),
+            'method' => $request->method(),
+            'path' => $request->path(),
+            'query' => $request->query(),
+            'payload' => Arr::except($rawPayload, ['sign', 'app_key', 'key']),
+        ]);
+
+        if (!$this->hasValidSignature($rawPayload)) {
             Log::warning('Epay notify rejected: invalid signature', [
-                'payload' => Arr::except($payload, ['sign']),
+                'payload' => Arr::except($rawPayload, ['sign']),
             ]);
 
             return response('fail', 400)->header('Content-Type', 'text/plain');
         }
 
-        $merchantId = (string) ($payload['pid'] ?? $payload['partner'] ?? '');
-        if ($merchantId !== (string) $this->config('app_id')) {
+        $payload = $this->normalizeNotifyPayload($rawPayload);
+
+        if ($payload['merchant_id'] !== (string) $this->config('app_id')) {
             Log::warning('Epay notify rejected: merchant mismatch', [
-                'expected' => $this->config('app_id'),
-                'received' => $merchantId,
+                'expected' => (string) $this->config('app_id'),
+                'received' => $payload['merchant_id'],
+                'invoice_id' => $payload['invoice_id'],
             ]);
 
             return response('fail', 400)->header('Content-Type', 'text/plain');
         }
 
-        $invoiceId = (int) ($payload['out_trade_no'] ?? 0);
-        $invoice = Invoice::query()->find($invoiceId);
-
+        $invoice = Invoice::query()->find($payload['invoice_id']);
         if (!$invoice) {
             Log::warning('Epay notify rejected: invoice not found', [
-                'invoice_id' => $invoiceId,
+                'invoice_id' => $payload['invoice_id'],
+                'transaction_id' => $payload['transaction_id'],
             ]);
 
             return response('fail', 404)->header('Content-Type', 'text/plain');
         }
 
-        $paidAmount = number_format((float) ($payload['money'] ?? 0), 2, '.', '');
-        $invoiceRemaining = number_format((float) $invoice->remaining, 2, '.', '');
-        $tradeStatus = strtoupper((string) ($payload['trade_status'] ?? ''));
-
-        if (!in_array($tradeStatus, ['TRADE_SUCCESS', 'TRADE_FINISHED'], true)) {
-            Log::info('Epay notify ignored: payment not successful', [
+        if (!$this->isSuccessfulTradeStatus($payload['trade_status'])) {
+            Log::info('Epay notify ignored: payment is not in success state', [
                 'invoice_id' => $invoice->id,
-                'trade_status' => $tradeStatus,
+                'trade_status' => $payload['trade_status'],
+                'transaction_id' => $payload['transaction_id'],
             ]);
 
             return response('fail', 400)->header('Content-Type', 'text/plain');
         }
 
-        if ((float) $paidAmount < (float) $invoiceRemaining) {
+        $invoiceRemaining = (float) number_format((float) $invoice->remaining, 2, '.', '');
+        if ($payload['paid_amount'] < $invoiceRemaining) {
             Log::warning('Epay notify rejected: amount mismatch', [
                 'invoice_id' => $invoice->id,
                 'invoice_remaining' => $invoiceRemaining,
-                'paid_amount' => $paidAmount,
+                'paid_amount' => $payload['paid_amount'],
+                'transaction_id' => $payload['transaction_id'],
             ]);
 
             return response('fail', 400)->header('Content-Type', 'text/plain');
         }
+
+        $transactionId = $payload['transaction_id'] !== ''
+            ? $payload['transaction_id']
+            : ('epay-invoice-' . $invoice->id);
 
         ExtensionHelper::addPayment(
             $invoice->id,
             'Epay',
-            $paidAmount,
+            number_format($payload['paid_amount'], 2, '.', ''),
             null,
-            (string) ($payload['trade_no'] ?? null)
+            $transactionId
         );
+
+        Log::info('Epay notify accepted: payment recorded', [
+            'invoice_id' => $invoice->id,
+            'transaction_id' => $transactionId,
+            'paid_amount' => $payload['paid_amount'],
+            'trade_status' => $payload['trade_status'],
+        ]);
 
         return response('success')->header('Content-Type', 'text/plain');
     }
@@ -273,5 +292,72 @@ class Epay extends Gateway
         }
 
         return Signer::verify($payload, (string) $this->config('app_key'), $incomingSignature);
+    }
+
+    private function normalizeNotifyPayload(array $payload): array
+    {
+        $merchantId = $this->firstNonEmpty(
+            $payload,
+            ['pid', 'partner', 'merchant_id', 'app_id']
+        );
+
+        $invoiceId = (int) $this->firstNonEmpty(
+            $payload,
+            ['out_trade_no', 'order_id', 'invoice_id', 'invoice']
+        );
+
+        $tradeStatus = strtoupper($this->firstNonEmpty(
+            $payload,
+            ['trade_status', 'status']
+        ));
+
+        $paidAmount = (float) number_format((float) $this->firstNonEmpty(
+            $payload,
+            ['money', 'total_fee', 'realprice', 'amount'],
+            '0'
+        ), 2, '.', '');
+
+        $transactionId = $this->firstNonEmpty(
+            $payload,
+            ['trade_no', 'transaction_id', 'pay_no', 'payid']
+        );
+
+        return [
+            'merchant_id' => $merchantId,
+            'invoice_id' => $invoiceId,
+            'trade_status' => $tradeStatus,
+            'paid_amount' => $paidAmount,
+            'transaction_id' => $transactionId,
+        ];
+    }
+
+    /**
+     * @param array<int, string> $keys
+     */
+    private function firstNonEmpty(array $payload, array $keys, string $fallback = ''): string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $value = trim((string) $payload[$key]);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function isSuccessfulTradeStatus(string $tradeStatus): bool
+    {
+        return in_array($tradeStatus, [
+            'TRADE_SUCCESS',
+            'TRADE_FINISHED',
+            'SUCCESS',
+            'PAID',
+            '1',
+        ], true);
     }
 }
