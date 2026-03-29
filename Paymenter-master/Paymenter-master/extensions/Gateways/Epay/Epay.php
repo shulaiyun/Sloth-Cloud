@@ -133,7 +133,7 @@ class Epay extends Gateway
     {
         $rawPayload = $request->all();
 
-        Log::info('Epay notify received', [
+        $this->logInfo('Epay notify received', [
             'ip' => $request->ip(),
             'method' => $request->method(),
             'path' => $request->path(),
@@ -142,7 +142,7 @@ class Epay extends Gateway
         ]);
 
         if (!$this->hasValidSignature($rawPayload)) {
-            Log::warning('Epay notify rejected: invalid signature', [
+            $this->logWarning('Epay notify rejected: invalid signature', [
                 'payload' => Arr::except($rawPayload, ['sign']),
             ]);
 
@@ -152,7 +152,7 @@ class Epay extends Gateway
         $payload = $this->normalizeNotifyPayload($rawPayload);
 
         if ($payload['merchant_id'] !== (string) $this->config('app_id')) {
-            Log::warning('Epay notify rejected: merchant mismatch', [
+            $this->logWarning('Epay notify rejected: merchant mismatch', [
                 'expected' => (string) $this->config('app_id'),
                 'received' => $payload['merchant_id'],
                 'invoice_id' => $payload['invoice_id'],
@@ -163,7 +163,7 @@ class Epay extends Gateway
 
         $invoice = Invoice::query()->find($payload['invoice_id']);
         if (!$invoice) {
-            Log::warning('Epay notify rejected: invoice not found', [
+            $this->logWarning('Epay notify rejected: invoice not found', [
                 'invoice_id' => $payload['invoice_id'],
                 'transaction_id' => $payload['transaction_id'],
             ]);
@@ -172,7 +172,7 @@ class Epay extends Gateway
         }
 
         if (!$this->isSuccessfulTradeStatus($payload['trade_status'])) {
-            Log::info('Epay notify ignored: payment is not in success state', [
+            $this->logInfo('Epay notify ignored: payment is not in success state', [
                 'invoice_id' => $invoice->id,
                 'trade_status' => $payload['trade_status'],
                 'transaction_id' => $payload['transaction_id'],
@@ -183,7 +183,7 @@ class Epay extends Gateway
 
         $invoiceRemaining = (float) number_format((float) $invoice->remaining, 2, '.', '');
         if ($payload['paid_amount'] < $invoiceRemaining) {
-            Log::warning('Epay notify rejected: amount mismatch', [
+            $this->logWarning('Epay notify rejected: amount mismatch', [
                 'invoice_id' => $invoice->id,
                 'invoice_remaining' => $invoiceRemaining,
                 'paid_amount' => $payload['paid_amount'],
@@ -205,7 +205,7 @@ class Epay extends Gateway
             $transactionId
         );
 
-        Log::info('Epay notify accepted: payment recorded', [
+        $this->logInfo('Epay notify accepted: payment recorded', [
             'invoice_id' => $invoice->id,
             'transaction_id' => $transactionId,
             'paid_amount' => $payload['paid_amount'],
@@ -215,9 +215,22 @@ class Epay extends Gateway
         return response('success')->header('Content-Type', 'text/plain');
     }
 
-    public function return(Request $request, Invoice $invoice): RedirectResponse
+    public function return(Request $request, ?Invoice $invoice = null): RedirectResponse
     {
         $payload = $request->all();
+        $invoice = $invoice ?? $this->resolveInvoiceFromPayload($payload);
+
+        if (!$invoice) {
+            $fallback = $this->resolveFallbackFrontendUrl($payload);
+
+            $this->logWarning('Epay return fallback redirect: invoice not resolved', [
+                'target' => $fallback,
+                'query' => Arr::except($payload, ['sign']),
+            ]);
+
+            return redirect()->away($fallback);
+        }
+
         $hasValidSignature = $this->hasValidSignature($payload);
         $tradeStatus = strtoupper((string) ($payload['trade_status'] ?? ''));
         $invoice->refresh();
@@ -232,7 +245,7 @@ class Epay extends Gateway
             'out_trade_no' => (string) ($payload['out_trade_no'] ?? $invoice->id),
         ]);
 
-        Log::info('Epay return redirect', [
+        $this->logInfo('Epay return redirect', [
             'invoice_id' => $invoice->id,
             'invoice_status' => $invoice->status,
             'has_valid_signature' => $hasValidSignature,
@@ -370,5 +383,64 @@ class Epay extends Gateway
             'PAID',
             '1',
         ], true);
+    }
+
+    private function resolveInvoiceFromPayload(array $payload): ?Invoice
+    {
+        $invoiceId = (int) $this->firstNonEmpty(
+            $payload,
+            ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'],
+            '0'
+        );
+
+        if ($invoiceId <= 0) {
+            return null;
+        }
+
+        return Invoice::query()->find($invoiceId);
+    }
+
+    private function resolveFallbackFrontendUrl(array $payload): string
+    {
+        $configured = trim((string) $this->config('frontend_return_url'));
+        if ($configured === '') {
+            return config('app.url');
+        }
+
+        $baseUrl = str_replace(
+            ['{invoice}', '{number}'],
+            [
+                $this->firstNonEmpty($payload, ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'], ''),
+                $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'], ''),
+            ],
+            $configured
+        );
+
+        $separator = str_contains($baseUrl, '?') ? '&' : '?';
+        return $baseUrl . $separator . http_build_query(array_filter([
+            'payment' => 'pending',
+            'trade_no' => (string) ($payload['trade_no'] ?? ''),
+            'out_trade_no' => (string) ($payload['out_trade_no'] ?? ''),
+        ]));
+    }
+
+    private function logInfo(string $message, array $context = []): void
+    {
+        Log::info($message, $context);
+        try {
+            Log::channel('stderr')->info($message, $context);
+        } catch (\Throwable) {
+            // Ignore stderr channel failures and keep the default logger intact.
+        }
+    }
+
+    private function logWarning(string $message, array $context = []): void
+    {
+        Log::warning($message, $context);
+        try {
+            Log::channel('stderr')->warning($message, $context);
+        } catch (\Throwable) {
+            // Ignore stderr channel failures and keep the default logger intact.
+        }
     }
 }

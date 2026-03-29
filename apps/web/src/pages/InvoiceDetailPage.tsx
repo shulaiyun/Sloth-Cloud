@@ -40,11 +40,15 @@ export function InvoiceDetailPage() {
 
         setInvoiceState(refreshed.data.invoice);
         if (refreshed.data.invoice.status.toLowerCase() === 'paid') {
-          setMessage(locale.startsWith('zh') ? '支付已确认，账单状态已更新。' : 'Payment confirmed and invoice status updated.');
+          setMessage(
+            locale.startsWith('zh')
+              ? '支付已确认，账单状态已更新。'
+              : 'Payment confirmed and invoice status updated.',
+          );
           window.clearInterval(timer);
         }
       } catch {
-        // Ignore transient polling failures and keep the current invoice view stable.
+        // Keep polling resilient if the upstream briefly blips.
       }
     }, 5000);
 
@@ -74,29 +78,30 @@ export function InvoiceDetailPage() {
 
   async function payWithGateway() {
     if (!invoiceId || !data?.data.gateways.length) return;
+
+    if (payResult?.data.redirectUrl) {
+      window.location.assign(payResult.data.redirectUrl);
+      return;
+    }
+
     const gatewayId = selectedGatewayId || data.data.gateways[0].id;
     if (!gatewayId) return;
+
     setPending(true);
     setActionError(null);
+
     try {
       const response = await requestJson<InvoicePayResponse>(`/api/v1/invoices/${invoiceId}/pay`, {
         method: 'POST',
         body: { method: 'gateway', gatewayId: Number(gatewayId) },
       });
+
       setMessage(response.message);
       setPayResult(response);
-      if (response.data.redirectUrl) {
-        const popup = window.open(response.data.redirectUrl, '_blank', 'noopener,noreferrer');
-        if (!popup) {
-          window.location.href = response.data.redirectUrl;
-          return;
-        }
 
-        setMessage(
-          locale.startsWith('zh')
-            ? '支付页面已在新标签打开。完成支付后，此页面会自动轮询账单状态。'
-            : 'The payment page opened in a new tab. This page will keep polling your invoice status.',
-        );
+      if (response.data.redirectUrl) {
+        window.location.assign(response.data.redirectUrl);
+        return;
       }
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
@@ -114,6 +119,7 @@ export function InvoiceDetailPage() {
   }
 
   const invoice = invoiceState ?? data.data.invoice;
+  const zh = locale.startsWith('zh');
 
   return (
     <div className="stack-24">
@@ -140,7 +146,7 @@ export function InvoiceDetailPage() {
         <article className="summary-card">
           {data.data.gateways.length > 0 ? (
             <label className="field">
-              <span>{locale.startsWith('zh') ? '支付网关' : 'Payment gateway'}</span>
+              <span>{zh ? '支付网关' : 'Payment gateway'}</span>
               <select
                 className="text-input select-input"
                 value={selectedGatewayId}
@@ -155,19 +161,28 @@ export function InvoiceDetailPage() {
             </label>
           ) : (
             <div className="callout compact">
-              {locale.startsWith('zh') ? '当前账单没有可用网关，请先在 Paymenter 后台启用并绑定网关。' : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
+              {zh
+                ? '当前账单没有可用支付网关，请先在 Paymenter 后台启用并绑定网关。'
+                : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
             </div>
           )}
 
           <button className="button primary" disabled={pending} type="button" onClick={() => void payWithCredit()}>
             {text.invoices.payWithCredit}
           </button>
-          <button className="button secondary" disabled={pending || data.data.gateways.length === 0} type="button" onClick={() => void payWithGateway()}>
-            {text.invoices.payWithGateway}
+          <button
+            className="button secondary"
+            disabled={pending || data.data.gateways.length === 0}
+            type="button"
+            onClick={() => void payWithGateway()}
+          >
+            {payResult?.data.redirectUrl
+              ? (zh ? '继续支付' : 'Continue payment')
+              : text.invoices.payWithGateway}
           </button>
           {payResult?.data.redirectUrl ? (
             <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-              {text.checkout.redirectTo}
+              {zh ? '新标签页打开支付页' : 'Open payment page in new tab'}
             </a>
           ) : null}
         </article>

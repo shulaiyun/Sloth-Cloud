@@ -70,9 +70,12 @@ Create/update gateway with:
 ## 7) V免签/Epay merchant callback setup (must be reachable from internet)
 
 - Notify URL: `https://bill.jxjvip.help/extensions/gateways/epay/notify`
-- Return URL: `https://bill.jxjvip.help/extensions/gateways/epay/return/{invoice}`
+- Return URL: `https://bill.jxjvip.help/extensions/gateways/epay/return`
 
-The notify URL is the most important one. Invoice paid state depends on notify.
+If your V免签 backend only supports a fixed global callback URL, use the two URLs above.
+This repo now supports resolving the invoice from callback payload fields, so the return URL no longer has to contain `{invoice}`.
+
+The notify URL is still the most important one. Invoice paid state depends on notify.
 
 ## 8) Verify callback traffic in runtime logs
 
@@ -89,6 +92,7 @@ Expected after a test payment:
 - `Epay return redirect`
 
 If notify lines never appear, the payment provider is not calling your notify URL.
+Before this patch, Epay logs only went to Laravel daily files; now they are also mirrored to container stderr so `docker compose logs` can see them after rebuild.
 
 ## 9) Check BFF and frontend if invoice stays pending
 

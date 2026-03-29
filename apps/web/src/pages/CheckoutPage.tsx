@@ -36,6 +36,10 @@ export function CheckoutPage() {
         method: 'POST',
         body: { tos: true },
       });
+      if (response.data.redirect.path) {
+        window.location.assign(response.data.redirect.path);
+        return;
+      }
       setOrderResult(response);
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
