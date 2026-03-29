@@ -1,4 +1,4 @@
-{$APP_URL}, :80 {
+:80 {
     root * /var/www/public
     php_fastcgi sloth-convoy-php:9000
     encode gzip
