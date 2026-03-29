@@ -117,7 +117,7 @@ class Epay extends Gateway
             'type' => (string) ($this->config('payment_type') ?: 'alipay'),
             // Keep callback paths compatible with the common "official doc" format.
             'notify_url' => route('extensions.gateways.epay.notify.official'),
-            'return_url' => route('extensions.gateways.epay.return.official'),
+            'return_url' => route('extensions.gateways.epay.return.official', ['invoice' => $invoice->id]),
             'out_trade_no' => (string) $invoice->id,
             'name' => 'Invoice #' . ($invoice->number ?: $invoice->id),
             'money' => number_format((float) $total, 2, '.', ''),
@@ -152,7 +152,7 @@ class Epay extends Gateway
 
         $payload = $this->normalizeNotifyPayload($rawPayload);
 
-        if ($payload['merchant_id'] !== (string) $this->config('app_id')) {
+        if ($payload['merchant_id'] !== '' && $payload['merchant_id'] !== (string) $this->config('app_id')) {
             $this->logWarning('Epay notify rejected: merchant mismatch', [
                 'expected' => (string) $this->config('app_id'),
                 'received' => $payload['merchant_id'],
@@ -172,10 +172,11 @@ class Epay extends Gateway
             return response('fail', 404)->header('Content-Type', 'text/plain');
         }
 
-        if (!$this->isSuccessfulTradeStatus($payload['trade_status'])) {
+        if (!$this->isSuccessfulNotify($rawPayload, $payload)) {
             $this->logInfo('Epay notify ignored: payment is not in success state', [
                 'invoice_id' => $invoice->id,
                 'trade_status' => $payload['trade_status'],
+                'paid_amount' => $payload['paid_amount'],
                 'transaction_id' => $payload['transaction_id'],
             ]);
 
@@ -310,41 +311,52 @@ class Epay extends Gateway
 
     private function hasValidSignature(array $payload): bool
     {
-        $incomingSignature = (string) ($payload['sign'] ?? '');
+        $signatureCandidates = array_values(array_unique(array_filter([
+            trim((string) ($payload['sign'] ?? '')),
+            trim((string) ($payload['signature'] ?? '')),
+            trim((string) ($payload['key'] ?? '')),
+        ])));
 
-        if ($incomingSignature === '') {
+        if ($signatureCandidates === []) {
             return false;
         }
 
-        return Signer::verify($payload, (string) $this->config('app_key'), $incomingSignature);
+        $appKey = (string) $this->config('app_key');
+        foreach ($signatureCandidates as $incomingSignature) {
+            if (Signer::verify($payload, $appKey, $incomingSignature)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function normalizeNotifyPayload(array $payload): array
     {
         $merchantId = $this->firstNonEmpty(
             $payload,
-            ['pid', 'partner', 'merchant_id', 'app_id']
+            ['pid', 'partner', 'merchant_id', 'app_id', 'uid', 'user_id', 'mid']
         );
 
         $invoiceId = (int) $this->firstNonEmpty(
             $payload,
-            ['out_trade_no', 'order_id', 'invoice_id', 'invoice']
+            ['out_trade_no', 'order_id', 'invoice_id', 'invoice', 'payId', 'pay_id']
         );
 
         $tradeStatus = strtoupper($this->firstNonEmpty(
             $payload,
-            ['trade_status', 'status']
+            ['trade_status', 'trade_state', 'status']
         ));
 
         $paidAmount = (float) number_format((float) $this->firstNonEmpty(
             $payload,
-            ['money', 'total_fee', 'realprice', 'amount'],
+            ['money', 'total_fee', 'realprice', 'reallyPrice', 'real_price', 'amount', 'price'],
             '0'
         ), 2, '.', '');
 
         $transactionId = $this->firstNonEmpty(
             $payload,
-            ['trade_no', 'transaction_id', 'pay_no', 'payid']
+            ['trade_no', 'transaction_id', 'pay_no', 'payid', 'payId', 'pay_id']
         );
 
         return [
@@ -380,17 +392,37 @@ class Epay extends Gateway
         return in_array($tradeStatus, [
             'TRADE_SUCCESS',
             'TRADE_FINISHED',
+            'TRADE_COMPLETED',
             'SUCCESS',
+            'OK',
             'PAID',
             '1',
         ], true);
+    }
+
+    private function isSuccessfulNotify(array $rawPayload, array $normalizedPayload): bool
+    {
+        if ($this->isSuccessfulTradeStatus((string) $normalizedPayload['trade_status'])) {
+            return true;
+        }
+
+        // Compatibility mode for VMS callback variants that omit trade_status.
+        $hasOrderReference = $this->firstNonEmpty(
+            $rawPayload,
+            ['payId', 'pay_id', 'out_trade_no', 'invoice_id', 'order_id'],
+            ''
+        ) !== '';
+
+        $paidAmount = (float) ($normalizedPayload['paid_amount'] ?? 0);
+
+        return $hasOrderReference && $paidAmount > 0;
     }
 
     private function resolveInvoiceFromPayload(array $payload): ?Invoice
     {
         $invoiceId = (int) $this->firstNonEmpty(
             $payload,
-            ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'],
+            ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'],
             '0'
         );
 
@@ -411,8 +443,8 @@ class Epay extends Gateway
         $baseUrl = str_replace(
             ['{invoice}', '{number}'],
             [
-                $this->firstNonEmpty($payload, ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'], ''),
-                $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId'], ''),
+                $this->firstNonEmpty($payload, ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
+                $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
             ],
             $configured
         );
@@ -421,7 +453,7 @@ class Epay extends Gateway
         return $baseUrl . $separator . http_build_query(array_filter([
             'payment' => 'pending',
             'trade_no' => (string) ($payload['trade_no'] ?? ''),
-            'out_trade_no' => (string) ($payload['out_trade_no'] ?? ''),
+            'out_trade_no' => (string) ($payload['out_trade_no'] ?? ($payload['payId'] ?? ($payload['pay_id'] ?? ''))),
         ]));
     }
 

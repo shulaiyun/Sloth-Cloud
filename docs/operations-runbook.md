@@ -75,6 +75,15 @@ Then rebuild convoy services:
 docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml up -d --build sloth-convoy-web sloth-convoy-php sloth-convoy-workers
 ```
 
+If `con.jxjvip.help` still shows `vendor/autoload.php not found`, run once:
+
+```bash
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml exec sloth-convoy-php sh -lc "php -r \"copy('https://getcomposer.org/installer','/tmp/composer-setup.php');\" && php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer && composer install --working-dir=/var/www --no-interaction --prefer-dist --no-dev && rm -f /tmp/composer-setup.php"
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml exec sloth-convoy-php sh -lc "php artisan key:generate --force || true"
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml exec sloth-convoy-php sh -lc "php artisan migrate --force || true"
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml restart sloth-convoy-web sloth-convoy-php sloth-convoy-workers
+```
+
 ## 6) Epay gateway setup in Paymenter admin
 
 Create/update gateway with:
@@ -111,6 +120,13 @@ Expected after a test payment:
 - `Epay return redirect`
 
 If notify lines never appear, provider is not calling your Paymenter notify URL.
+
+Quick route check:
+
+```bash
+curl -I https://bill.jxjvip.help/example/notify.php
+curl -I https://bill.jxjvip.help/example/return.php
+```
 
 ## 9) Check BFF/frontend if invoice stays pending
 

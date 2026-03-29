@@ -32,7 +32,8 @@ class Signer
         $filtered = [];
 
         foreach ($params as $key => $value) {
-            if (in_array($key, ['sign', 'sign_type'], true)) {
+            $normalizedKey = strtolower((string) $key);
+            if (in_array($normalizedKey, ['sign', 'sign_type', 'signature', 'key'], true)) {
                 continue;
             }
 

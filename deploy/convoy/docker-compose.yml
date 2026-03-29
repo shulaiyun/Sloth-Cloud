@@ -56,6 +56,14 @@ services:
         condition: service_healthy
     volumes:
       - ../../Convoy panel-develop/panel-develop:/var/www
+    command: >-
+      sh -lc "if [ ! -f /var/www/vendor/autoload.php ]; then
+      php -r \"copy('https://getcomposer.org/installer','/tmp/composer-setup.php');\";
+      php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer;
+      composer install --working-dir=/var/www --no-interaction --prefer-dist --no-dev;
+      rm -f /tmp/composer-setup.php;
+      fi;
+      php-fpm"
     networks:
       - sloth-convoy-net
 
@@ -76,6 +84,14 @@ services:
         condition: service_healthy
     volumes:
       - ../../Convoy panel-develop/panel-develop:/var/www
+    command: >-
+      sh -lc "if [ ! -f /var/www/vendor/autoload.php ]; then
+      php -r \"copy('https://getcomposer.org/installer','/tmp/composer-setup.php');\";
+      php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer;
+      composer install --working-dir=/var/www --no-interaction --prefer-dist --no-dev;
+      rm -f /tmp/composer-setup.php;
+      fi;
+      /usr/bin/supervisord -c /etc/supervisord.conf"
     networks:
       - sloth-convoy-net
 
