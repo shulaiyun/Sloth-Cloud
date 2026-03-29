@@ -59,8 +59,8 @@ services:
 
   sloth-convoy-workers:
     build:
-      context: ../../Convoy panel-develop/panel-develop
-      dockerfile: dockerfiles/workers/Dockerfile
+      context: ../../Convoy panel-develop/panel-develop/dockerfiles/workers
+      dockerfile: Dockerfile
       args:
         APP_ENV: ${APP_ENV}
     container_name: sloth-convoy-workers
@@ -113,4 +113,3 @@ volumes:
     name: sloth-convoy-caddy-config
   sloth_convoy_caddy_data:
     name: sloth-convoy-caddy-data
-

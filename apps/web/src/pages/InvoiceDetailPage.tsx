@@ -13,6 +13,7 @@ export function InvoiceDetailPage() {
     invoiceId ? `/api/v1/invoices/${invoiceId}` : null,
   );
   const [pending, setPending] = useState(false);
+  const [selectedGatewayId, setSelectedGatewayId] = useState<string>('');
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [payResult, setPayResult] = useState<InvoicePayResponse | null>(null);
@@ -36,16 +37,21 @@ export function InvoiceDetailPage() {
   }
 
   async function payWithGateway() {
-    if (!invoiceId || !data?.data.gateways[0]) return;
+    if (!invoiceId || !data?.data.gateways.length) return;
+    const gatewayId = selectedGatewayId || data.data.gateways[0].id;
+    if (!gatewayId) return;
     setPending(true);
     setActionError(null);
     try {
       const response = await requestJson<InvoicePayResponse>(`/api/v1/invoices/${invoiceId}/pay`, {
         method: 'POST',
-        body: { method: 'gateway', gatewayId: Number(data.data.gateways[0].id) },
+        body: { method: 'gateway', gatewayId: Number(gatewayId) },
       });
       setMessage(response.message);
       setPayResult(response);
+      if (response.data.redirectUrl) {
+        window.location.href = response.data.redirectUrl;
+      }
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
     } finally {
@@ -86,6 +92,27 @@ export function InvoiceDetailPage() {
         </article>
 
         <article className="summary-card">
+          {data.data.gateways.length > 0 ? (
+            <label className="field">
+              <span>{locale.startsWith('zh') ? '支付网关' : 'Payment gateway'}</span>
+              <select
+                className="text-input select-input"
+                value={selectedGatewayId}
+                onChange={(event) => setSelectedGatewayId(event.target.value)}
+              >
+                {data.data.gateways.map((gateway) => (
+                  <option key={gateway.id} value={gateway.id}>
+                    {gateway.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="callout compact">
+              {locale.startsWith('zh') ? '当前账单没有可用网关，请先在 Paymenter 后台启用并绑定网关。' : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
+            </div>
+          )}
+
           <button className="button primary" disabled={pending} type="button" onClick={() => void payWithCredit()}>
             {text.invoices.payWithCredit}
           </button>

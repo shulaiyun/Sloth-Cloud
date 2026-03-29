@@ -75,9 +75,9 @@ class Epay extends Gateway
                 'label' => 'Frontend Return URL',
                 'type' => 'text',
                 'description' => 'Headless frontend URL after payment, supports {invoice} and {number}',
-                'placeholder' => 'https://app.jxjvip.help/billing/invoices/{invoice}',
+                'placeholder' => 'https://app.jxjvip.help/invoices/{invoice}',
                 'required' => false,
-                'validation' => ['nullable', 'url:http,https'],
+                'validation' => ['nullable', 'string', 'max:255', 'regex:/^https?:\\/\\/[^\\s]+$/i'],
             ],
             [
                 'name' => 'allowed_currencies',
