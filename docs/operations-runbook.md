@@ -37,12 +37,12 @@ Use **HTTP** upstream only (NPM does TLS, internal container does not):
 
 - Domain: `con.jxjvip.help`
 - Scheme: `http`
-- Forward Hostname/IP: `127.0.0.1`
+- Forward Hostname/IP: host machine IP (for example `82.22.50.92`)
 - Forward Port: `18181`
 - Websocket Support: `ON`
 - Block Common Exploits: `ON`
 
-If NPM is in another docker network, use host IP instead of `127.0.0.1`.
+Do not use `127.0.0.1` when NPM runs in docker bridge mode, because that points to the NPM container itself instead of the host.
 
 ## 5) Validate Convoy upstream from host
 

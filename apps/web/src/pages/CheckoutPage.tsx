@@ -28,6 +28,9 @@ export function CheckoutPage() {
   }
 
   async function placeOrder() {
+    if (pending) {
+      return;
+    }
     setPending(true);
     setActionError(null);
     setOrderResult(null);

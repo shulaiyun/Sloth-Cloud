@@ -12,6 +12,7 @@ export function InvoiceDetailPage() {
   const { data, error, loading } = useApiData<InvoiceResponse>(
     invoiceId ? `/api/v1/invoices/${invoiceId}` : null,
   );
+
   const [pending, setPending] = useState(false);
   const [selectedGatewayId, setSelectedGatewayId] = useState<string>('');
   const [message, setMessage] = useState<string | null>(null);
@@ -40,11 +41,7 @@ export function InvoiceDetailPage() {
 
         setInvoiceState(refreshed.data.invoice);
         if (refreshed.data.invoice.status.toLowerCase() === 'paid') {
-          setMessage(
-            locale.startsWith('zh')
-              ? '支付已确认，账单状态已更新。'
-              : 'Payment confirmed and invoice status updated.',
-          );
+          setMessage('Payment confirmed and invoice status updated.');
           window.clearInterval(timer);
         }
       } catch {
@@ -56,10 +53,10 @@ export function InvoiceDetailPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [invoiceId, invoiceState, locale, payResult]);
+  }, [invoiceId, invoiceState, payResult]);
 
   async function payWithCredit() {
-    if (!invoiceId) return;
+    if (!invoiceId || pending) return;
     setPending(true);
     setActionError(null);
     try {
@@ -77,7 +74,7 @@ export function InvoiceDetailPage() {
   }
 
   async function payWithGateway() {
-    if (!invoiceId || !data?.data.gateways.length) return;
+    if (!invoiceId || !data?.data.gateways.length || pending) return;
 
     if (payResult?.data.redirectUrl) {
       window.location.assign(payResult.data.redirectUrl);
@@ -119,7 +116,6 @@ export function InvoiceDetailPage() {
   }
 
   const invoice = invoiceState ?? data.data.invoice;
-  const zh = locale.startsWith('zh');
 
   return (
     <div className="stack-24">
@@ -146,7 +142,7 @@ export function InvoiceDetailPage() {
         <article className="summary-card">
           {data.data.gateways.length > 0 ? (
             <label className="field">
-              <span>{zh ? '支付网关' : 'Payment gateway'}</span>
+              <span>Payment gateway</span>
               <select
                 className="text-input select-input"
                 value={selectedGatewayId}
@@ -161,28 +157,26 @@ export function InvoiceDetailPage() {
             </label>
           ) : (
             <div className="callout compact">
-              {zh
-                ? '当前账单没有可用支付网关，请先在 Paymenter 后台启用并绑定网关。'
-                : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
+              No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.
             </div>
           )}
 
           <button className="button primary" disabled={pending} type="button" onClick={() => void payWithCredit()}>
             {text.invoices.payWithCredit}
           </button>
+
           <button
             className="button secondary"
             disabled={pending || data.data.gateways.length === 0}
             type="button"
             onClick={() => void payWithGateway()}
           >
-            {payResult?.data.redirectUrl
-              ? (zh ? '继续支付' : 'Continue payment')
-              : text.invoices.payWithGateway}
+            {payResult?.data.redirectUrl ? 'Continue payment' : text.invoices.payWithGateway}
           </button>
+
           {payResult?.data.redirectUrl ? (
             <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-              {zh ? '新标签页打开支付页' : 'Open payment page in new tab'}
+              Open payment page in new tab
             </a>
           ) : null}
         </article>

@@ -427,6 +427,7 @@ class Epay extends Gateway
     private function logInfo(string $message, array $context = []): void
     {
         Log::info($message, $context);
+        error_log('[Epay] ' . $message . ' ' . json_encode($context, JSON_UNESCAPED_UNICODE));
         try {
             Log::channel('stderr')->info($message, $context);
         } catch (\Throwable) {
@@ -437,6 +438,7 @@ class Epay extends Gateway
     private function logWarning(string $message, array $context = []): void
     {
         Log::warning($message, $context);
+        error_log('[Epay] ' . $message . ' ' . json_encode($context, JSON_UNESCAPED_UNICODE));
         try {
             Log::channel('stderr')->warning($message, $context);
         } catch (\Throwable) {
