@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
@@ -17,6 +17,42 @@ export function InvoiceDetailPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [payResult, setPayResult] = useState<InvoicePayResponse | null>(null);
+  const [invoiceState, setInvoiceState] = useState<InvoiceResponse['data']['invoice'] | null>(null);
+
+  useEffect(() => {
+    if (data?.data.invoice) {
+      setInvoiceState(data.data.invoice);
+    }
+  }, [data]);
+
+  useEffect(() => {
+    if (!invoiceId || !payResult || !invoiceState || invoiceState.status.toLowerCase() === 'paid') {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const refreshed = await requestJson<InvoiceResponse>(`/api/v1/invoices/${invoiceId}`);
+        if (cancelled) {
+          return;
+        }
+
+        setInvoiceState(refreshed.data.invoice);
+        if (refreshed.data.invoice.status.toLowerCase() === 'paid') {
+          setMessage(locale.startsWith('zh') ? '支付已确认，账单状态已更新。' : 'Payment confirmed and invoice status updated.');
+          window.clearInterval(timer);
+        }
+      } catch {
+        // Ignore transient polling failures and keep the current invoice view stable.
+      }
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [invoiceId, invoiceState, locale, payResult]);
 
   async function payWithCredit() {
     if (!invoiceId) return;
@@ -50,7 +86,17 @@ export function InvoiceDetailPage() {
       setMessage(response.message);
       setPayResult(response);
       if (response.data.redirectUrl) {
-        window.location.href = response.data.redirectUrl;
+        const popup = window.open(response.data.redirectUrl, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          window.location.href = response.data.redirectUrl;
+          return;
+        }
+
+        setMessage(
+          locale.startsWith('zh')
+            ? '支付页面已在新标签打开。完成支付后，此页面会自动轮询账单状态。'
+            : 'The payment page opened in a new tab. This page will keep polling your invoice status.',
+        );
       }
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
@@ -67,7 +113,7 @@ export function InvoiceDetailPage() {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
 
-  const invoice = data.data.invoice;
+  const invoice = invoiceState ?? data.data.invoice;
 
   return (
     <div className="stack-24">
