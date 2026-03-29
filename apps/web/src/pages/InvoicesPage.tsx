@@ -50,14 +50,7 @@ export function InvoicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<InvoiceSort>('created-desc');
-
-  if (loading) {
-    return <div className="loading-card">{text.common.loading}</div>;
-  }
-
-  if (error || !data) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
-  }
+  const invoices = data?.data ?? [];
 
   const statusOptions: Array<{ value: InvoiceStatusFilter; label: string }> = [
     { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
@@ -76,7 +69,7 @@ export function InvoicesPage() {
   ];
   const visibleInvoices = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    const filtered = data.data.filter((invoice) => {
+    const filtered = invoices.filter((invoice) => {
       const normalizedStatus = normalizeInvoiceStatus(invoice.status);
       if (statusFilter !== 'all' && normalizedStatus !== statusFilter) {
         return false;
@@ -125,7 +118,15 @@ export function InvoicesPage() {
       const rightCreated = right.createdAt ? new Date(right.createdAt).getTime() : 0;
       return rightCreated - leftCreated;
     });
-  }, [data.data, search, statusFilter, sortBy]);
+  }, [invoices, search, statusFilter, sortBy]);
+
+  if (loading) {
+    return <div className="loading-card">{text.common.loading}</div>;
+  }
+
+  if (error || !data) {
+    return <div className="error-card">{text.common.error}: {error}</div>;
+  }
 
   return (
     <div className="stack-24">

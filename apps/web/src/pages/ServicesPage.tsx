@@ -50,14 +50,7 @@ export function ServicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ServiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<ServiceSort>('status');
-
-  if (loading) {
-    return <div className="loading-card">{text.common.loading}</div>;
-  }
-
-  if (error || !data) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
-  }
+  const services = data?.data ?? [];
 
   const statusOptions: Array<{ value: ServiceStatusFilter; label: string }> = [
     { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
@@ -75,7 +68,7 @@ export function ServicesPage() {
   ];
   const visibleServices = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    const filtered = data.data.filter((service) => {
+    const filtered = services.filter((service) => {
       const normalizedStatus = normalizeServiceStatus(service.status);
       if (statusFilter !== 'all' && normalizedStatus !== statusFilter) {
         return false;
@@ -122,7 +115,15 @@ export function ServicesPage() {
 
       return left.id.localeCompare(right.id);
     });
-  }, [data.data, locale, search, sortBy, statusFilter]);
+  }, [services, locale, search, sortBy, statusFilter]);
+
+  if (loading) {
+    return <div className="loading-card">{text.common.loading}</div>;
+  }
+
+  if (error || !data) {
+    return <div className="error-card">{text.common.error}: {error}</div>;
+  }
 
   return (
     <div className="stack-24">

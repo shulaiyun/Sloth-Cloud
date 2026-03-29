@@ -71,7 +71,8 @@ class GatewayResource extends Resource
                     ->label('Name')
                     ->required()
                     ->maxLength(255)
-                    ->unique(static::getModel(),
+                    ->unique(
+                        static::getModel(),
                         'name',
                         ignoreRecord: true,
                         modifyRuleUsing: fn ($rule) => $rule->where('deleted_at', null)
@@ -81,26 +82,24 @@ class GatewayResource extends Resource
                     ->label('Gateway')
                     ->required()
                     ->searchable()
-                    ->helperText('One extension keeps a single gateway instance. For Epay/V免签, configure channels in upstream checkout and keep this as a unified online gateway.')
-                    ->unique(
-                        static::getModel(),
-                        'extension',
-                        ignoreRecord: true,
-                        modifyRuleUsing: fn ($rule) => $rule->where('deleted_at', null)
-                    )
+                    ->helperText('You can create multiple instances for the same gateway extension (for example multiple Epay channels).')
                     ->options($gatewayOptions)
                     ->live(onBlur: true)
-                    ->afterStateUpdated(fn (Select $component) => $component
-                        ->getContainer()
-                        ->getComponent('settings')
-                        ->getChildComponentContainer()
-                        ->fill())
+                    ->afterStateUpdated(
+                        fn (Select $component) => $component
+                            ->getContainer()
+                            ->getComponent('settings')
+                            ->getChildComponentContainer()
+                            ->fill()
+                    )
                     ->placeholder('Select the type of the gateway'),
                 Section::make('Gateway Settings')
                     ->columnSpanFull()
                     ->description('Specific settings for the selected gateway')
                     ->schema([
-                        Grid::make()->schema(fn (Get $get) => ExtensionHelper::getConfigAsInputs('gateway', $get('extension'), $get('settings')))->key('settings'),
+                        Grid::make()->schema(
+                            fn (Get $get) => ExtensionHelper::getConfigAsInputs('gateway', $get('extension'), $get('settings'))
+                        )->key('settings'),
                     ]),
             ]);
     }
