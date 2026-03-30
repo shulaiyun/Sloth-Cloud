@@ -86,6 +86,7 @@ export function InvoiceDetailPage() {
 
     setPending(true);
     setActionError(null);
+    let redirected = false;
 
     try {
       const response = await requestJson<InvoicePayResponse>(`/api/v1/invoices/${invoiceId}/pay`, {
@@ -97,13 +98,16 @@ export function InvoiceDetailPage() {
       setPayResult(response);
 
       if (response.data.redirectUrl) {
+        redirected = true;
         window.location.assign(response.data.redirectUrl);
         return;
       }
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
     } finally {
-      setPending(false);
+      if (!redirected) {
+        setPending(false);
+      }
     }
   }
 

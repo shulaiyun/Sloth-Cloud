@@ -9,6 +9,7 @@ use App\Models\Invoice;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Paymenter\Extensions\Gateways\Epay\Support\Signer;
 
@@ -55,6 +56,15 @@ class Epay extends Gateway
                 'required' => true,
                 'encrypted' => true,
                 'validation' => ['required', 'string', 'max:255'],
+            ],
+            [
+                'name' => 'callback_base_url',
+                'label' => 'Callback Base URL',
+                'type' => 'text',
+                'description' => 'Optional override for callback host, for example https://bill.example.com',
+                'placeholder' => 'https://bill.jxjvip.help',
+                'required' => false,
+                'validation' => ['nullable', 'url:http,https'],
             ],
             [
                 'name' => 'payment_type',
@@ -112,12 +122,14 @@ class Epay extends Gateway
             );
         }
 
+        [$notifyUrl, $returnUrl] = $this->resolveCallbackUrls();
+
         $params = [
             'pid' => (string) $this->config('app_id'),
             'type' => (string) ($this->config('payment_type') ?: 'alipay'),
             // Keep callback paths compatible with the common "official doc" format.
-            'notify_url' => route('extensions.gateways.epay.notify.official'),
-            'return_url' => route('extensions.gateways.epay.return.official', ['invoice' => $invoice->id]),
+            'notify_url' => $notifyUrl,
+            'return_url' => $returnUrl,
             'out_trade_no' => (string) $invoice->id,
             'name' => 'Invoice #' . ($invoice->number ?: $invoice->id),
             'money' => number_format((float) $total, 2, '.', ''),
@@ -127,7 +139,19 @@ class Epay extends Gateway
 
         $params['sign'] = Signer::build($params, (string) $this->config('app_key'));
 
-        return rtrim((string) $this->config('api_url'), '/') . '/submit.php?' . http_build_query($params);
+        $redirect = rtrim((string) $this->config('api_url'), '/') . '/submit.php?' . http_build_query($params);
+
+        $this->logInfo('Epay pay request built', [
+            'invoice_id' => $invoice->id,
+            'invoice_number' => $invoice->number,
+            'currency' => $currency,
+            'notify_url' => $notifyUrl,
+            'return_url' => $returnUrl,
+            'api_url' => (string) $this->config('api_url'),
+            'redirect_url' => $redirect,
+        ]);
+
+        return $redirect;
     }
 
     public function notify(Request $request)
@@ -195,24 +219,7 @@ class Epay extends Gateway
             return response('fail', 400)->header('Content-Type', 'text/plain');
         }
 
-        $transactionId = $payload['transaction_id'] !== ''
-            ? $payload['transaction_id']
-            : ('epay-invoice-' . $invoice->id);
-
-        ExtensionHelper::addPayment(
-            $invoice->id,
-            'Epay',
-            number_format($payload['paid_amount'], 2, '.', ''),
-            null,
-            $transactionId
-        );
-
-        $this->logInfo('Epay notify accepted: payment recorded', [
-            'invoice_id' => $invoice->id,
-            'transaction_id' => $transactionId,
-            'paid_amount' => $payload['paid_amount'],
-            'trade_status' => $payload['trade_status'],
-        ]);
+        $this->recordPaymentIfApplicable($invoice, $payload, 'notify');
 
         return response('success')->header('Content-Type', 'text/plain');
     }
@@ -234,12 +241,27 @@ class Epay extends Gateway
         }
 
         $hasValidSignature = $this->hasValidSignature($payload);
-        $tradeStatus = strtoupper((string) ($payload['trade_status'] ?? ''));
+        $normalized = $this->normalizeNotifyPayload($payload);
+        $tradeStatus = $normalized['trade_status'];
+
+        $recordedFromReturn = false;
+        $recordedFromQuery = false;
+
+        if (strtolower((string) $invoice->status) !== 'paid' && $hasValidSignature) {
+            $recordedFromReturn = $this->recordPaymentIfApplicable($invoice, $normalized, 'return');
+        }
+
+        if (
+            strtolower((string) $invoice->status) !== 'paid'
+            && !$recordedFromReturn
+            && $this->firstNonEmpty($payload, ['out_trade_no', 'trade_no', 'payId', 'pay_id'], '') !== ''
+        ) {
+            $recordedFromQuery = $this->trySyncInvoiceByOrderQuery($invoice, $payload);
+        }
+
         $invoice->refresh();
         $invoicePaid = strtolower((string) $invoice->status) === 'paid';
-        $paymentState = (($hasValidSignature && in_array($tradeStatus, ['TRADE_SUCCESS', 'TRADE_FINISHED'], true)) || $invoicePaid)
-            ? 'success'
-            : 'pending';
+        $paymentState = $invoicePaid ? 'success' : 'pending';
 
         $target = $this->resolveFrontendReturnUrl($invoice, [
             'payment' => $paymentState,
@@ -252,6 +274,8 @@ class Epay extends Gateway
             'invoice_status' => $invoice->status,
             'has_valid_signature' => $hasValidSignature,
             'trade_status' => $tradeStatus,
+            'recorded_from_return' => $recordedFromReturn,
+            'recorded_from_query' => $recordedFromQuery,
             'target' => $target,
             'query' => Arr::except($payload, ['sign']),
         ]);
@@ -279,6 +303,160 @@ class Epay extends Gateway
         $separator = str_contains($baseUrl, '?') ? '&' : '?';
 
         return $baseUrl . $separator . http_build_query($query);
+    }
+
+    private function resolveCallbackUrls(): array
+    {
+        $base = trim((string) $this->config('callback_base_url'));
+        if ($base !== '') {
+            $base = rtrim($base, '/');
+
+            return [
+                $base . '/example/notify.php',
+                $base . '/example/return.php',
+            ];
+        }
+
+        return [
+            route('extensions.gateways.epay.notify.official'),
+            route('extensions.gateways.epay.return.official'),
+        ];
+    }
+
+    private function recordPaymentIfApplicable(Invoice $invoice, array $payload, string $source): bool
+    {
+        $invoice->refresh();
+        if (strtolower((string) $invoice->status) === 'paid') {
+            $this->logInfo('Epay payment skipped: invoice already paid', [
+                'invoice_id' => $invoice->id,
+                'source' => $source,
+                'transaction_id' => (string) ($payload['transaction_id'] ?? ''),
+            ]);
+
+            return false;
+        }
+
+        $paidAmount = (float) number_format((float) ($payload['paid_amount'] ?? 0), 2, '.', '');
+        $invoiceRemaining = (float) number_format((float) $invoice->remaining, 2, '.', '');
+
+        if ($paidAmount <= 0) {
+            $this->logWarning('Epay payment rejected: amount is empty', [
+                'invoice_id' => $invoice->id,
+                'source' => $source,
+                'invoice_remaining' => $invoiceRemaining,
+                'payload' => Arr::except($payload, ['sign']),
+            ]);
+
+            return false;
+        }
+
+        if ($paidAmount < $invoiceRemaining) {
+            $this->logWarning('Epay payment rejected: amount mismatch', [
+                'invoice_id' => $invoice->id,
+                'source' => $source,
+                'invoice_remaining' => $invoiceRemaining,
+                'paid_amount' => $paidAmount,
+            ]);
+
+            return false;
+        }
+
+        $transactionId = trim((string) ($payload['transaction_id'] ?? ''));
+        if ($transactionId === '') {
+            $transactionId = 'epay-' . $source . '-invoice-' . $invoice->id . '-' . time();
+        }
+
+        ExtensionHelper::addPayment(
+            $invoice->id,
+            'Epay',
+            number_format($paidAmount, 2, '.', ''),
+            null,
+            $transactionId
+        );
+
+        $this->logInfo('Epay payment recorded', [
+            'invoice_id' => $invoice->id,
+            'source' => $source,
+            'transaction_id' => $transactionId,
+            'paid_amount' => $paidAmount,
+            'trade_status' => (string) ($payload['trade_status'] ?? ''),
+        ]);
+
+        return true;
+    }
+
+    private function trySyncInvoiceByOrderQuery(Invoice $invoice, array $returnPayload): bool
+    {
+        $apiUrl = rtrim((string) $this->config('api_url'), '/');
+        $appId = trim((string) $this->config('app_id'));
+        $appKey = trim((string) $this->config('app_key'));
+        $orderNo = $this->firstNonEmpty(
+            $returnPayload,
+            ['out_trade_no', 'order_id', 'invoice_id', 'invoice', 'payId', 'pay_id'],
+            (string) $invoice->id
+        );
+
+        if ($apiUrl === '' || $appId === '' || $appKey === '' || $orderNo === '') {
+            $this->logWarning('Epay order query skipped: missing required config', [
+                'invoice_id' => $invoice->id,
+                'api_url_present' => $apiUrl !== '',
+                'app_id_present' => $appId !== '',
+                'app_key_present' => $appKey !== '',
+                'order_no_present' => $orderNo !== '',
+            ]);
+
+            return false;
+        }
+
+        try {
+            $response = Http::timeout(12)->acceptJson()->get($apiUrl . '/api.php', [
+                'act' => 'order',
+                'pid' => $appId,
+                'key' => $appKey,
+                'out_trade_no' => $orderNo,
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logWarning('Epay order query failed: request exception', [
+                'invoice_id' => $invoice->id,
+                'order_no' => $orderNo,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        $body = $response->body();
+        $json = $response->json();
+        if (!is_array($json)) {
+            $decoded = json_decode($body, true);
+            $json = is_array($decoded) ? $decoded : [];
+        }
+
+        $this->logInfo('Epay order query response', [
+            'invoice_id' => $invoice->id,
+            'order_no' => $orderNo,
+            'http_status' => $response->status(),
+            'payload' => Arr::except($json, ['sign']),
+        ]);
+
+        if ($json === [] || !$this->isOrderQueryPaid($json)) {
+            return false;
+        }
+
+        $normalized = $this->normalizeNotifyPayload(array_merge($json, [
+            'out_trade_no' => $orderNo,
+        ]));
+
+        if ($normalized['paid_amount'] <= 0) {
+            $normalized['paid_amount'] = (float) number_format((float) $invoice->remaining, 2, '.', '');
+        }
+
+        if ($normalized['transaction_id'] === '') {
+            $normalized['transaction_id'] = $this->firstNonEmpty($json, ['trade_no', 'pay_no', 'id'], '')
+                ?: ('epay-query-' . $invoice->id . '-' . time());
+        }
+
+        return $this->recordPaymentIfApplicable($invoice, $normalized, 'return-query');
     }
 
     private function allowedCurrencies(): array
@@ -416,6 +594,32 @@ class Epay extends Gateway
         $paidAmount = (float) ($normalizedPayload['paid_amount'] ?? 0);
 
         return $hasOrderReference && $paidAmount > 0;
+    }
+
+    private function isOrderQueryPaid(array $payload): bool
+    {
+        $status = strtoupper($this->firstNonEmpty($payload, ['status', 'trade_status', 'trade_state'], ''));
+        if ($this->isSuccessfulTradeStatus($status)) {
+            return true;
+        }
+
+        $code = trim((string) ($payload['code'] ?? ''));
+        if ($code === '1' || strtoupper($code) === 'SUCCESS') {
+            return true;
+        }
+
+        $msg = strtoupper($this->firstNonEmpty($payload, ['msg', 'message'], ''));
+        if (str_contains($msg, 'SUCCESS') || str_contains($msg, 'PAID') || str_contains($msg, '支付成功')) {
+            return true;
+        }
+
+        $paidAmount = (float) number_format((float) $this->firstNonEmpty(
+            $payload,
+            ['money', 'total_fee', 'realprice', 'reallyPrice', 'real_price', 'amount', 'price'],
+            '0'
+        ), 2, '.', '');
+
+        return $paidAmount > 0 && $this->firstNonEmpty($payload, ['trade_no', 'out_trade_no', 'order_no'], '') !== '';
     }
 
     private function resolveInvoiceFromPayload(array $payload): ?Invoice

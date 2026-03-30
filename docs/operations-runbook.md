@@ -94,6 +94,7 @@ Create/update gateway with:
 - `Upstream Channel Type`: `alipay` or `wxpay`
 - `Frontend Return URL`: `https://app.jxjvip.help/invoices/{invoice}`
 - `Allowed Currencies`: include `CNY`
+- `Callback Base URL`: `https://bill.jxjvip.help` (recommended)
 
 ## 7) V免签/Epay callback setup (official-style path)
 
@@ -111,7 +112,7 @@ Important:
 ## 8) Verify callback traffic in runtime logs
 
 ```bash
-docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs -f sloth-cloud-paymenter | grep -E "Epay notify|Epay return"
+docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs -f sloth-cloud-paymenter | grep --line-buffered -E "Epay entry notify|Epay entry return|Epay notify|Epay return|Epay pay request"
 ```
 
 Expected after a test payment:
@@ -127,6 +128,13 @@ Quick route check:
 ```bash
 curl -I https://bill.jxjvip.help/example/notify.php
 curl -I https://bill.jxjvip.help/example/return.php
+```
+
+If Convoy still returns 500, inspect Laravel runtime and build assets directly:
+
+```bash
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml logs --tail=200 sloth-convoy-php
+docker compose --env-file deploy/convoy/.env -f deploy/convoy/docker-compose.yml exec sloth-convoy-php sh -lc "ls -lah /var/www/public/build && tail -n 200 /var/www/storage/logs/laravel.log"
 ```
 
 ## 9) Check BFF/frontend if invoice stays pending

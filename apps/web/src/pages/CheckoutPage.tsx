@@ -34,12 +34,14 @@ export function CheckoutPage() {
     setPending(true);
     setActionError(null);
     setOrderResult(null);
+    let redirected = false;
     try {
       const response = await requestJson<CheckoutResponse>('/api/v1/checkout', {
         method: 'POST',
         body: { tos: true },
       });
       if (response.data.redirect.path) {
+        redirected = true;
         window.location.assign(response.data.redirect.path);
         return;
       }
@@ -47,7 +49,9 @@ export function CheckoutPage() {
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
     } finally {
-      setPending(false);
+      if (!redirected) {
+        setPending(false);
+      }
     }
   }
 
