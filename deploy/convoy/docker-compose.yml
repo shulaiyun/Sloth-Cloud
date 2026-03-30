@@ -57,12 +57,19 @@ services:
     volumes:
       - ../../Convoy panel-develop/panel-develop:/var/www
     command: >-
-      sh -lc "if [ ! -f /var/www/vendor/autoload.php ]; then
+      sh -lc "if [ ! -f /var/www/.env ] && [ -f /var/www/.env.example ]; then
+      cp /var/www/.env.example /var/www/.env;
+      fi;
+      if [ ! -f /var/www/vendor/autoload.php ]; then
       php -r \"copy('https://getcomposer.org/installer','/tmp/composer-setup.php');\";
       php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer;
       composer install --working-dir=/var/www --no-interaction --prefer-dist --no-dev;
       rm -f /tmp/composer-setup.php;
       fi;
+      if [ -f /var/www/.env ] && ! grep -q '^APP_KEY=base64:' /var/www/.env; then
+      php /var/www/artisan key:generate --force || true;
+      fi;
+      php /var/www/artisan migrate --force || true;
       php-fpm"
     networks:
       - sloth-convoy-net
@@ -85,7 +92,11 @@ services:
     volumes:
       - ../../Convoy panel-develop/panel-develop:/var/www
     command: >-
-      sh -lc "if [ ! -f /var/www/vendor/autoload.php ]; then
+      sh -lc "for i in $(seq 1 60); do
+      [ -f /var/www/vendor/autoload.php ] && break;
+      sleep 2;
+      done;
+      if [ ! -f /var/www/vendor/autoload.php ]; then
       php -r \"copy('https://getcomposer.org/installer','/tmp/composer-setup.php');\";
       php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer;
       composer install --working-dir=/var/www --no-interaction --prefer-dist --no-dev;

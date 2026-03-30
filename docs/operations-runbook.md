@@ -106,6 +106,7 @@ Important:
 
 - Do not use `https://azj.jxjvip.help/example/*.php` unless that service forwards callback to Paymenter.
 - Invoice paid state depends on notify callback hitting Paymenter.
+- `/example/*.php` are now real compatibility entrypoints in `public/example/` to avoid nginx `.php` path interception.
 
 ## 8) Verify callback traffic in runtime logs
 
