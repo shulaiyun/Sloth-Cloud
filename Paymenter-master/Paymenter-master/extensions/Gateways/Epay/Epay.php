@@ -61,7 +61,7 @@ class Epay extends Gateway
                 'name' => 'callback_base_url',
                 'label' => 'Callback Base URL',
                 'type' => 'text',
-                'description' => 'Optional override for callback host, for example https://bill.example.com',
+                'description' => 'Optional override for notify host, for example https://bill.example.com',
                 'placeholder' => 'https://bill.jxjvip.help',
                 'required' => false,
                 'validation' => ['nullable', 'url:http,https'],
@@ -122,12 +122,13 @@ class Epay extends Gateway
             );
         }
 
-        [$notifyUrl, $returnUrl] = $this->resolveCallbackUrls();
+        $notifyUrl = $this->resolveNotifyUrl();
+        // For headless flow, send users back to frontend invoice page directly.
+        $returnUrl = $this->resolveFrontendReturnUrl($invoice);
 
         $params = [
             'pid' => (string) $this->config('app_id'),
             'type' => (string) ($this->config('payment_type') ?: 'alipay'),
-            // Keep callback paths compatible with the common "official doc" format.
             'notify_url' => $notifyUrl,
             'return_url' => $returnUrl,
             'out_trade_no' => (string) $invoice->id,
@@ -286,7 +287,9 @@ class Epay extends Gateway
     private function resolveFrontendReturnUrl(Invoice $invoice, array $query = []): string
     {
         $configured = trim((string) $this->config('frontend_return_url'));
-        $fallback = route('invoices.show', $invoice);
+        $frontendBase = trim((string) env('SLOTH_FRONTEND_URL', 'https://app.jxjvip.help'));
+        $frontendBase = rtrim($frontendBase, '/');
+        $fallback = $frontendBase . '/invoices/{number}';
 
         $baseUrl = $configured !== '' ? $configured : $fallback;
         $baseUrl = str_replace(
@@ -305,22 +308,19 @@ class Epay extends Gateway
         return $baseUrl . $separator . http_build_query($query);
     }
 
-    private function resolveCallbackUrls(): array
+    private function resolveNotifyUrl(): string
     {
         $base = trim((string) $this->config('callback_base_url'));
         if ($base !== '') {
             $base = rtrim($base, '/');
 
-            return [
-                $base . '/example/notify.php',
-                $base . '/example/return.php',
-            ];
+            $routePath = route('extensions.gateways.epay.notify', [], false);
+            $routePath = '/' . ltrim((string) parse_url($routePath, PHP_URL_PATH), '/');
+
+            return $base . $routePath;
         }
 
-        return [
-            route('extensions.gateways.epay.notify.official'),
-            route('extensions.gateways.epay.return.official'),
-        ];
+        return route('extensions.gateways.epay.notify');
     }
 
     private function recordPaymentIfApplicable(Invoice $invoice, array $payload, string $source): bool

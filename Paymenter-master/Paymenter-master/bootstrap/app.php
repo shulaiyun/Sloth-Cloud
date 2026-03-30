@@ -40,7 +40,6 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->validateCsrfTokens(except: [
             'extensions/gateways/epay/notify',
-            'example/notify.php',
         ]);
     })
     ->withEvents(discover: [

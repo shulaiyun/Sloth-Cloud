@@ -96,23 +96,24 @@ Create/update gateway with:
 - `Allowed Currencies`: include `CNY`
 - `Callback Base URL`: `https://bill.jxjvip.help` (recommended)
 
-## 7) V免签/Epay callback setup (official-style path)
+## 7) VMS/Epay callback setup (dynamic URLs from Paymenter request)
 
-Use Paymenter domain with official callback path style:
+Do not hardcode static callback files.
+Paymenter now sends dynamic callback URLs in each payment request:
 
-- Notify URL: `https://bill.jxjvip.help/example/notify.php`
-- Return URL: `https://bill.jxjvip.help/example/return.php`
+- `notify_url`: `https://bill.jxjvip.help/extensions/gateways/epay/notify`
+- `return_url`: `https://app.jxjvip.help/invoices/{invoice-number}`
 
 Important:
 
-- Do not use `https://azj.jxjvip.help/example/*.php` unless that service forwards callback to Paymenter.
-- Invoice paid state depends on notify callback hitting Paymenter.
-- `/example/*.php` are now real compatibility entrypoints in `public/example/` to avoid nginx `.php` path interception.
+- Do not configure global callback to a fixed unrelated endpoint.
+- Do not use `https://azj.jxjvip.help/example/*.php` for Paymenter orders.
+- Return URL is browser redirect only; invoice paid state depends on notify callback.
 
 ## 8) Verify callback traffic in runtime logs
 
 ```bash
-docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs -f sloth-cloud-paymenter | grep --line-buffered -E "Epay entry notify|Epay entry return|Epay notify|Epay return|Epay pay request"
+docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml logs -f sloth-cloud-paymenter | grep --line-buffered -E "Epay notify|Epay return|Epay pay request"
 ```
 
 Expected after a test payment:
@@ -126,8 +127,8 @@ If notify lines never appear, provider is not calling your Paymenter notify URL.
 Quick route check:
 
 ```bash
-curl -I https://bill.jxjvip.help/example/notify.php
-curl -I https://bill.jxjvip.help/example/return.php
+curl -I https://bill.jxjvip.help/extensions/gateways/epay/notify
+curl -I "https://app.jxjvip.help/invoices/INV-1"
 ```
 
 If Convoy still returns 500, inspect Laravel runtime and build assets directly:
@@ -157,3 +158,4 @@ You need one of these keys in Paymenter service properties/config:
 - `server_uuid`
 
 Until mapping exists, start/stop/reinstall actions cannot run.
+
