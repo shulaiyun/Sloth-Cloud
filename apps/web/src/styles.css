@@ -912,6 +912,23 @@ select.text-input option {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
 }
 
+.callout-success {
+  border-color: rgba(74, 216, 151, 0.52);
+  background: linear-gradient(180deg, rgba(21, 70, 50, 0.76), rgba(16, 56, 41, 0.86));
+}
+
+.callout-success p {
+  margin: 8px 0 0;
+  color: color-mix(in srgb, #a8f5d3 78%, #ffffff);
+}
+
+.invoice-related-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
 .compact {
   padding: 14px 16px;
 }

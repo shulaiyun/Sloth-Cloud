@@ -6,6 +6,20 @@ import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { InvoicePayResponse, InvoiceResponse } from '../lib/types';
 
+function isInvoicePaid(status: string, remaining: number) {
+  const normalized = status.trim().toLowerCase();
+  return normalized === 'paid' || normalized === 'success' || normalized === 'completed' || remaining <= 0;
+}
+
+function normalizeItemName(description: string) {
+  const compact = description.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return '';
+  }
+
+  return compact.replace(/\s*\([^)]*\)\s*$/, '');
+}
+
 export function InvoiceDetailPage() {
   const { invoiceId } = useParams();
   const { text, locale } = useSite();
@@ -27,7 +41,7 @@ export function InvoiceDetailPage() {
   }, [data]);
 
   useEffect(() => {
-    if (!invoiceId || !payResult || !invoiceState || invoiceState.status.toLowerCase() === 'paid') {
+    if (!invoiceId || !payResult || !invoiceState || isInvoicePaid(invoiceState.status, invoiceState.remaining)) {
       return;
     }
 
@@ -40,8 +54,8 @@ export function InvoiceDetailPage() {
         }
 
         setInvoiceState(refreshed.data.invoice);
-        if (refreshed.data.invoice.status.toLowerCase() === 'paid') {
-          setMessage('Payment confirmed and invoice status updated.');
+        if (isInvoicePaid(refreshed.data.invoice.status, refreshed.data.invoice.remaining)) {
+          setMessage(locale.startsWith('zh') ? '支付已确认，账单状态已更新。' : 'Payment confirmed and invoice status updated.');
           window.clearInterval(timer);
         }
       } catch {
@@ -53,7 +67,7 @@ export function InvoiceDetailPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [invoiceId, invoiceState, payResult]);
+  }, [invoiceId, invoiceState, locale, payResult]);
 
   async function payWithCredit() {
     if (!invoiceId || pending) return;
@@ -100,7 +114,6 @@ export function InvoiceDetailPage() {
       if (response.data.redirectUrl) {
         redirected = true;
         window.location.assign(response.data.redirectUrl);
-        return;
       }
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
@@ -120,6 +133,31 @@ export function InvoiceDetailPage() {
   }
 
   const invoice = invoiceState ?? data.data.invoice;
+  const paid = isInvoicePaid(invoice.status, invoice.remaining);
+
+  const relatedServiceNames = (() => {
+    const candidates = new Set<string>();
+
+    data.data.recurringServices.forEach((service) => {
+      const name = localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel).trim();
+      if (name) {
+        candidates.add(name);
+      }
+    });
+
+    invoice.items.forEach((item) => {
+      const normalized = normalizeItemName(localizeText(item.description, locale, item.description));
+      if (normalized) {
+        candidates.add(normalized);
+      }
+    });
+
+    return Array.from(candidates);
+  })();
+
+  const paidMessage = locale.startsWith('zh')
+    ? '✅ 支付成功，账单已结清。'
+    : '✅ Payment successful. This invoice is settled.';
 
   return (
     <div className="stack-24">
@@ -134,6 +172,17 @@ export function InvoiceDetailPage() {
 
       <section className="two-column">
         <article className="panel stack-16">
+          {relatedServiceNames.length > 0 ? (
+            <div className="callout compact">
+              <strong>{locale.startsWith('zh') ? '关联产品/服务' : 'Related product / service'}</strong>
+              <ul className="invoice-related-list">
+                {relatedServiceNames.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {invoice.items.map((item) => (
             <div className="callout compact" key={item.id}>
               <strong>{localizeText(item.description, locale, item.description)}</strong>
@@ -144,45 +193,65 @@ export function InvoiceDetailPage() {
         </article>
 
         <article className="summary-card">
-          {data.data.gateways.length > 0 ? (
-            <label className="field">
-              <span>Payment gateway</span>
-              <select
-                className="text-input select-input"
-                value={selectedGatewayId}
-                onChange={(event) => setSelectedGatewayId(event.target.value)}
-              >
-                {data.data.gateways.map((gateway) => (
-                  <option key={gateway.id} value={gateway.id}>
-                    {gateway.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <div className="callout compact">
-              No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.
+          {paid ? (
+            <div className="callout callout-success">
+              <strong>{paidMessage}</strong>
+              <p>
+                {locale.startsWith('zh')
+                  ? '你可以前往服务页查看该账单对应的开通状态。'
+                  : 'You can open the services page to check provisioning status.'}
+              </p>
+              <Link className="button ghost" to="/services">
+                {text.nav.services}
+              </Link>
             </div>
+          ) : (
+            <>
+              {data.data.gateways.length > 0 ? (
+                <label className="field">
+                  <span>{locale.startsWith('zh') ? '支付网关' : 'Payment gateway'}</span>
+                  <select
+                    className="text-input select-input"
+                    value={selectedGatewayId}
+                    onChange={(event) => setSelectedGatewayId(event.target.value)}
+                  >
+                    {data.data.gateways.map((gateway) => (
+                      <option key={gateway.id} value={gateway.id}>
+                        {gateway.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="callout compact">
+                  {locale.startsWith('zh')
+                    ? '当前账单没有可用网关，请在 Paymenter 后台启用并绑定支付网关。'
+                    : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
+                </div>
+              )}
+
+              <button className="button primary" disabled={pending} type="button" onClick={() => void payWithCredit()}>
+                {text.invoices.payWithCredit}
+              </button>
+
+              <button
+                className="button secondary"
+                disabled={pending || data.data.gateways.length === 0}
+                type="button"
+                onClick={() => void payWithGateway()}
+              >
+                {payResult?.data.redirectUrl
+                  ? (locale.startsWith('zh') ? '继续支付' : 'Continue payment')
+                  : text.invoices.payWithGateway}
+              </button>
+
+              {payResult?.data.redirectUrl ? (
+                <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
+                  {locale.startsWith('zh') ? '打开支付页面（新标签）' : 'Open payment page in new tab'}
+                </a>
+              ) : null}
+            </>
           )}
-
-          <button className="button primary" disabled={pending} type="button" onClick={() => void payWithCredit()}>
-            {text.invoices.payWithCredit}
-          </button>
-
-          <button
-            className="button secondary"
-            disabled={pending || data.data.gateways.length === 0}
-            type="button"
-            onClick={() => void payWithGateway()}
-          >
-            {payResult?.data.redirectUrl ? 'Continue payment' : text.invoices.payWithGateway}
-          </button>
-
-          {payResult?.data.redirectUrl ? (
-            <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-              Open payment page in new tab
-            </a>
-          ) : null}
         </article>
       </section>
 

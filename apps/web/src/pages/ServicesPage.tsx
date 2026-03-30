@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useApiData } from '../lib/api';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
-import type { ServicesResponse } from '../lib/types';
+import type { ServiceSummary, ServicesResponse } from '../lib/types';
 
 type ServiceStatusFilter = 'all' | 'active' | 'pending' | 'suspended' | 'cancelled' | 'unknown';
 type ServiceSort = 'status' | 'price-desc' | 'price-asc' | 'expires-asc';
@@ -44,6 +44,15 @@ function serviceStatusLabel(status: string, locale: string) {
   return zh ? '未知状态' : 'Unknown';
 }
 
+function isPurchasedService(service: ServiceSummary) {
+  const hasLabel = (service.label || service.baseLabel || '').trim().length > 0;
+  const hasProduct = Boolean(service.product?.id || service.product?.slug || service.product?.name);
+  const hasPlan = Boolean(service.plan?.id || service.plan?.name);
+  const hasLifecycleMeta = Boolean(service.expiresAt || service.cancellable || service.upgradable);
+
+  return Boolean(service.id) && (hasLabel || hasProduct || hasPlan || hasLifecycleMeta);
+}
+
 export function ServicesPage() {
   const { text, locale } = useSite();
   const { data, error, loading } = useApiData<ServicesResponse>('/api/v1/services');
@@ -60,15 +69,19 @@ export function ServicesPage() {
     { value: 'cancelled', label: serviceStatusLabel('cancelled', locale) },
     { value: 'unknown', label: serviceStatusLabel('unknown', locale) },
   ];
+
   const sortOptions: Array<{ value: ServiceSort; label: string }> = [
     { value: 'status', label: locale.startsWith('zh') ? '按状态' : 'Sort by status' },
     { value: 'price-desc', label: locale.startsWith('zh') ? '价格从高到低' : 'Price high to low' },
     { value: 'price-asc', label: locale.startsWith('zh') ? '价格从低到高' : 'Price low to high' },
     { value: 'expires-asc', label: locale.startsWith('zh') ? '即将到期优先' : 'Nearest expiry first' },
   ];
+
   const visibleServices = useMemo(() => {
+    const purchasedServices = services.filter(isPurchasedService);
     const keyword = search.trim().toLowerCase();
-    const filtered = services.filter((service) => {
+
+    const filtered = purchasedServices.filter((service) => {
       const normalizedStatus = normalizeServiceStatus(service.status);
       if (statusFilter !== 'all' && normalizedStatus !== statusFilter) {
         return false;
@@ -78,7 +91,11 @@ export function ServicesPage() {
         return true;
       }
 
-      const serviceLabel = localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel).toLowerCase();
+      const serviceLabel = localizeText(
+        service.label || service.baseLabel,
+        locale,
+        service.label || service.baseLabel,
+      ).toLowerCase();
       const productName = service.product?.name
         ? localizeText(service.product.name, locale, service.product.name).toLowerCase()
         : '';
@@ -184,7 +201,9 @@ export function ServicesPage() {
           {visibleServices.map((service) => (
             <article className="panel stack-12" key={service.id}>
               <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
-              <p className="muted">{service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}</p>
+              <p className="muted">
+                {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
+              </p>
               <div className="detail-grid">
                 <div>
                   <span>{text.common.status}</span>
@@ -194,9 +213,14 @@ export function ServicesPage() {
                     </span>
                   </strong>
                 </div>
-                <div><span>{text.common.total}</span><strong>{service.formattedPrice}</strong></div>
+                <div>
+                  <span>{text.common.total}</span>
+                  <strong>{service.formattedPrice}</strong>
+                </div>
               </div>
-              <Link className="button ghost" to={`/services/${service.id}`}>{text.common.inspect}</Link>
+              <Link className="button ghost" to={`/services/${service.id}`}>
+                {text.common.inspect}
+              </Link>
             </article>
           ))}
         </section>
@@ -204,3 +228,4 @@ export function ServicesPage() {
     </div>
   );
 }
+

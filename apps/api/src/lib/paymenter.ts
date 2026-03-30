@@ -685,6 +685,31 @@ function normalizeServiceSummary(raw: unknown): ServiceSummary {
   };
 }
 
+function isServiceLikeRecord(raw: unknown) {
+  const value = asRecord(raw);
+  const id = toStringId(value.id);
+  if (!id) {
+    return false;
+  }
+
+  const hasLabel = readString(value.label).trim().length > 0
+    || readString(value.base_label ?? value.baseLabel).trim().length > 0;
+  const hasProduct = Object.keys(asRecord(value.product)).length > 0;
+  const hasPlan = Object.keys(asRecord(value.plan)).length > 0;
+  const hasLifecycleMeta = value.expires_at !== undefined
+    || value.expiresAt !== undefined
+    || value.cancellable !== undefined
+    || value.upgradable !== undefined;
+
+  // Drop clearly non-service payloads that can leak in from upstream edge cases.
+  const looksLikeInvoice = value.number !== undefined && (value.due_at !== undefined || value.remaining !== undefined);
+  if (looksLikeInvoice && !hasProduct && !hasPlan) {
+    return false;
+  }
+
+  return hasLabel || hasProduct || hasPlan || hasLifecycleMeta;
+}
+
 function normalizeServiceDetail(raw: unknown): ServiceDetail {
   const value = asRecord(raw);
   const base = normalizeServiceSummary(value);
@@ -1328,8 +1353,12 @@ export function createGateway(config: GatewayConfig) {
         token: ensureToken(token),
       });
 
+      const services = readArray<unknown>(response.data)
+        .filter(isServiceLikeRecord)
+        .map(normalizeServiceSummary);
+
       return {
-        data: readArray<unknown>(response.data).map(normalizeServiceSummary),
+        data: services,
         pagination: normalizePagination(response.meta),
         meta: baseMeta(config.mode),
       };
