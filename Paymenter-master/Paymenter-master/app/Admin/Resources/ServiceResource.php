@@ -203,6 +203,7 @@ class ServiceResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->with('latestProvisioningJob'))
             ->columns([
                 TextColumn::make('id')
                     ->label('ID')
@@ -227,6 +228,22 @@ class ServiceResource extends Resource
                     ->label('Status')
                     ->searchable()
                     ->sortable(),
+                TextColumn::make('latestProvisioningJob.status')
+                    ->label('Provisioning')
+                    ->badge()
+                    ->color(fn (?string $state) => match ($state) {
+                        'success' => 'success',
+                        'pending' => 'gray',
+                        'provisioning' => 'warning',
+                        'failed' => 'danger',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn (?string $state) => $state ? ucfirst($state) : 'N/A')
+                    ->toggleable(),
+                TextColumn::make('latestProvisioningJob.error_message')
+                    ->label('Provisioning Error')
+                    ->limit(80)
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('expires_at')
                     ->label('Expires At')
                     ->date()

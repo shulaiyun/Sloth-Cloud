@@ -30,8 +30,11 @@
   ProductPlanPrice,
   ProductPricing,
   ProductSummary,
+  ProvisioningStatus,
   RegisterInput,
   ServiceDetail,
+  ServiceProvisioningResponse,
+  ServiceProvisioningRetryResponse,
   ServiceResponse,
   ServiceSummary,
   ServicesResponse,
@@ -579,6 +582,38 @@ function normalizeGateway(raw: unknown): GatewaySummary {
   };
 }
 
+function normalizeProvisioningStatus(raw: unknown): ProvisioningStatus | null {
+  const value = asRecord(raw);
+
+  if (Object.keys(value).length === 0) {
+    return null;
+  }
+
+  return {
+    status: readString(value.status, 'unknown'),
+    provider: readString(value.provider, 'convoy'),
+    attemptCount: readNumber(value.attempt_count ?? value.attemptCount) ?? 0,
+    errorMessage: readNullableString(value.error_message ?? value.errorMessage),
+    lastAttemptAt: readNullableString(value.last_attempt_at ?? value.lastAttemptAt),
+    completedAt: readNullableString(value.completed_at ?? value.completedAt),
+  };
+}
+
+function normalizeProvisioningJobSummary(raw: unknown) {
+  const value = asRecord(raw);
+  const base = normalizeProvisioningStatus(value);
+
+  if (!base) {
+    return null;
+  }
+
+  return {
+    id: toStringId(value.id),
+    ...base,
+    createdAt: readNullableString(value.created_at ?? value.createdAt),
+  };
+}
+
 function normalizeCartSummary(raw: unknown): CartSummary {
   const value = asRecord(raw);
 
@@ -682,6 +717,7 @@ function normalizeServiceSummary(raw: unknown): ServiceSummary {
     })(),
     cancellable: readBoolean(value.cancellable),
     upgradable: readBoolean(value.upgradable),
+    provisioning: normalizeProvisioningStatus(value.provisioning),
   };
 }
 
@@ -1380,6 +1416,42 @@ export function createGateway(config: GatewayConfig) {
             views: readArray<AnyRecord>(asRecord(data.actions).views),
             fields: readArray<AnyRecord>(asRecord(data.actions).fields),
           },
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async serviceProvisioning(token: string | undefined, serviceId: string): Promise<ServiceProvisioningResponse> {
+      const response = await requestPaymenter<{ data?: unknown }>(config, `/services/${serviceId}/provisioning`, {
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        data: {
+          serviceId: toStringId(data.service_id ?? data.serviceId),
+          latest: normalizeProvisioningJobSummary(data.latest),
+          history: readArray<unknown>(data.history)
+            .map(normalizeProvisioningJobSummary)
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async retryServiceProvisioning(token: string | undefined, serviceId: string): Promise<ServiceProvisioningRetryResponse> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/provisioning/retry`, {
+        method: 'POST',
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        message: readString(response.message, 'Provisioning retry has been scheduled.'),
+        data: {
+          jobId: toStringId(data.job_id ?? data.jobId),
+          status: readString(data.status),
+          attemptCount: readNumber(data.attempt_count ?? data.attemptCount) ?? 0,
         },
         meta: baseMeta(config.mode),
       };

@@ -31,4 +31,12 @@ return [
         ],
     ],
 
+    'provisioning' => [
+        'enabled' => env('PROVISIONING_ENABLED', false),
+        'max_attempts' => env('PROVISIONING_MAX_ATTEMPTS', 3),
+        'retry_base_ms' => env('PROVISIONING_RETRY_BASE_MS', 30000),
+        'retry_max_ms' => env('PROVISIONING_RETRY_MAX_MS', 300000),
+        'lock_ttl_ms' => env('PROVISIONING_LOCK_TTL_MS', 120000),
+    ],
+
 ];

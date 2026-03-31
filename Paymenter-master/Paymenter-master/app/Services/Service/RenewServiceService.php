@@ -5,6 +5,7 @@ namespace App\Services\Service;
 use App\Jobs\Server\CreateJob;
 use App\Jobs\Server\UnsuspendJob;
 use App\Models\Service;
+use App\Services\Provisioning\ProvisioningOrchestrator;
 
 class RenewServiceService
 {
@@ -19,7 +20,14 @@ class RenewServiceService
             if ($service->status == Service::STATUS_SUSPENDED) {
                 UnsuspendJob::dispatch($service);
             } elseif ($service->status == Service::STATUS_PENDING) {
-                CreateJob::dispatch($service);
+                $orchestrator = app(ProvisioningOrchestrator::class);
+                if ($orchestrator->supports($service, 'convoy')) {
+                    $orchestrator->enqueueForService($service, 'convoy', [
+                        'trigger' => 'invoice.paid',
+                    ]);
+                } else {
+                    CreateJob::dispatch($service);
+                }
             }
         }
 

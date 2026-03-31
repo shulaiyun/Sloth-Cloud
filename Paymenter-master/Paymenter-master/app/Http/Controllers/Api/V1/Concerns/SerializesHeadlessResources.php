@@ -452,6 +452,14 @@ trait SerializesHeadlessResources
             ] : null,
             'cancellable' => (bool) $service->cancellable,
             'upgradable' => (bool) $service->upgradable,
+            'provisioning' => $service->latestProvisioningJob ? [
+                'status' => $service->latestProvisioningJob->status,
+                'provider' => $service->latestProvisioningJob->provider,
+                'attempt_count' => (int) $service->latestProvisioningJob->attempt_count,
+                'error_message' => $service->latestProvisioningJob->error_message,
+                'last_attempt_at' => optional($service->latestProvisioningJob->last_attempt_at)?->toISOString(),
+                'completed_at' => optional($service->latestProvisioningJob->completed_at)?->toISOString(),
+            ] : null,
         ];
 
         if (!$includeRelations) {

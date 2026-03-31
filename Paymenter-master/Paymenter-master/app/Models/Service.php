@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Classes\Price;
 use App\Classes\Settings;
 use App\Models\Traits\HasProperties;
+use App\Models\ProvisioningJob;
 use App\Observers\ServiceObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -256,5 +257,15 @@ class Service extends Model implements Auditable
     public function billingAgreement()
     {
         return $this->belongsTo(BillingAgreement::class, 'billing_agreement_id');
+    }
+
+    public function provisioningJobs()
+    {
+        return $this->hasMany(ProvisioningJob::class);
+    }
+
+    public function latestProvisioningJob()
+    {
+        return $this->hasOne(ProvisioningJob::class)->latestOfMany();
     }
 }

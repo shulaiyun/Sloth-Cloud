@@ -14,6 +14,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Service;
 use App\Models\User;
+use App\Services\Provisioning\ProvisioningOrchestrator;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -182,7 +183,14 @@ class CheckoutController extends Controller
                         ]);
                     } else {
                         if ($service->product->server) {
-                            CreateJob::dispatch($service);
+                            $orchestrator = app(ProvisioningOrchestrator::class);
+                            if ($orchestrator->supports($service, 'convoy')) {
+                                $orchestrator->enqueueForService($service, 'convoy', [
+                                    'trigger' => 'checkout.free',
+                                ]);
+                            } else {
+                                CreateJob::dispatch($service);
+                            }
                         }
 
                         $service->status = Service::STATUS_ACTIVE;

@@ -259,6 +259,20 @@ export interface ServiceCancellationSummary {
   createdAt: string | null;
 }
 
+export interface ProvisioningStatus {
+  status: string;
+  provider: string;
+  attemptCount: number;
+  errorMessage: string | null;
+  lastAttemptAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ProvisioningJobSummary extends ProvisioningStatus {
+  id: string;
+  createdAt: string | null;
+}
+
 export interface ServiceSummary {
   id: string;
   label: string;
@@ -280,6 +294,7 @@ export interface ServiceSummary {
   } | null;
   cancellable: boolean;
   upgradable: boolean;
+  provisioning: ProvisioningStatus | null;
 }
 
 export interface ServiceDetail extends ServiceSummary {
@@ -462,6 +477,25 @@ export interface ServiceResponse {
       views: Array<Record<string, unknown>>;
       fields: Array<Record<string, unknown>>;
     };
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceProvisioningResponse {
+  data: {
+    serviceId: string;
+    latest: ProvisioningJobSummary | null;
+    history: ProvisioningJobSummary[];
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceProvisioningRetryResponse {
+  message: string;
+  data: {
+    jobId: string;
+    status: string;
+    attemptCount: number;
   };
   meta: ApiMeta;
 }

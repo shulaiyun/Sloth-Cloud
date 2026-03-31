@@ -31,9 +31,24 @@ class ApiResource extends Resource
     public static function form(Schema $schema): Schema
     {
 
-        $extensionApiPermissions = once(fn () => Arr::dot(
-            array_merge_recursive(...Event::dispatch('api.permissions', []))
-        ));
+        $extensionApiPermissions = once(function (): array {
+            $responses = Event::dispatch('api.permissions', []);
+
+            if ($responses === []) {
+                return [];
+            }
+
+            $merged = [];
+            foreach ($responses as $response) {
+                if (! is_array($response) || $response === []) {
+                    continue;
+                }
+
+                $merged = array_merge_recursive($merged, $response);
+            }
+
+            return Arr::dot($merged);
+        });
 
         return $schema
             ->components([

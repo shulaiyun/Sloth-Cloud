@@ -373,6 +373,16 @@ app.get('/api/v1/services/:serviceId', async (request) => {
   return gateway.service(requireToken(request), params.serviceId);
 });
 
+app.get('/api/v1/services/:serviceId/provisioning', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  return gateway.serviceProvisioning(requireToken(request), params.serviceId);
+});
+
+app.post('/api/v1/services/:serviceId/provisioning/retry', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  return gateway.retryServiceProvisioning(requireToken(request), params.serviceId);
+});
+
 app.patch('/api/v1/services/:serviceId/label', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const body = z.object({

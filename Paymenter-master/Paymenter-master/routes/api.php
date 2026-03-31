@@ -59,6 +59,8 @@ Route::prefix('v1')->group(function () {
         Route::patch('/services/{service}/label', [HeadlessServiceController::class, 'updateLabel']);
         Route::post('/services/{service}/cancel', [HeadlessServiceController::class, 'cancel']);
         Route::post('/services/{service}/actions/{action}', [HeadlessServiceController::class, 'action']);
+        Route::get('/services/{service}/provisioning', [HeadlessServiceController::class, 'provisioning']);
+        Route::post('/services/{service}/provisioning/retry', [HeadlessServiceController::class, 'retryProvisioning']);
 
         Route::get('/invoices', [HeadlessInvoiceController::class, 'index']);
         Route::get('/invoices/{invoice}', [HeadlessInvoiceController::class, 'show']);

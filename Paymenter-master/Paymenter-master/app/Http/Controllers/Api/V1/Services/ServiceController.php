@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\Concerns\SerializesHeadlessResources;
 use App\Http\Controllers\Controller;
 use App\Models\Service;
 use App\Models\ServiceCancellation;
+use App\Services\Provisioning\ProvisioningOrchestrator;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,7 +25,7 @@ class ServiceController extends Controller
 
         $services = $request->user()
             ->services()
-            ->with(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation'])
+            ->with(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation', 'latestProvisioningJob'])
             ->when($validated['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
             ->orderByDesc('created_at')
             ->paginate($validated['per_page'] ?? 20);
@@ -56,6 +57,7 @@ class ServiceController extends Controller
             'invoices.transactions.gateway',
             'billingAgreement.gateway',
             'cancellation',
+            'latestProvisioningJob',
         ]);
 
         $actions = [
@@ -99,6 +101,7 @@ class ServiceController extends Controller
         $service->label = $validated['label'] ?? null;
         $service->save();
         $service->load(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation']);
+        $service->load('latestProvisioningJob');
 
         return response()->json([
             'message' => 'Service label updated.',
@@ -132,6 +135,7 @@ class ServiceController extends Controller
         );
 
         $service->load(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation']);
+        $service->load('latestProvisioningJob');
 
         return response()->json([
             'message' => 'Cancellation requested.',
@@ -179,5 +183,64 @@ class ServiceController extends Controller
                 'redirect_url' => is_string($result) ? $result : null,
             ],
         ]);
+    }
+
+    public function provisioning(Request $request, Service $service): JsonResponse
+    {
+        abort_unless((int) $service->user_id === (int) $request->user()->id, 404);
+
+        $service->load([
+            'latestProvisioningJob',
+            'provisioningJobs' => fn ($query) => $query->latest('id')->limit(10),
+        ]);
+
+        return response()->json([
+            'data' => [
+                'service_id' => $service->id,
+                'latest' => $service->latestProvisioningJob ? [
+                    'id' => $service->latestProvisioningJob->id,
+                    'status' => $service->latestProvisioningJob->status,
+                    'provider' => $service->latestProvisioningJob->provider,
+                    'attempt_count' => (int) $service->latestProvisioningJob->attempt_count,
+                    'error_message' => $service->latestProvisioningJob->error_message,
+                    'last_attempt_at' => optional($service->latestProvisioningJob->last_attempt_at)?->toISOString(),
+                    'completed_at' => optional($service->latestProvisioningJob->completed_at)?->toISOString(),
+                ] : null,
+                'history' => $service->provisioningJobs->map(fn ($job) => [
+                    'id' => $job->id,
+                    'status' => $job->status,
+                    'provider' => $job->provider,
+                    'attempt_count' => (int) $job->attempt_count,
+                    'error_message' => $job->error_message,
+                    'last_attempt_at' => optional($job->last_attempt_at)?->toISOString(),
+                    'completed_at' => optional($job->completed_at)?->toISOString(),
+                    'created_at' => optional($job->created_at)?->toISOString(),
+                ])->values(),
+            ],
+        ]);
+    }
+
+    public function retryProvisioning(Request $request, Service $service, ProvisioningOrchestrator $orchestrator): JsonResponse
+    {
+        abort_unless((int) $service->user_id === (int) $request->user()->id, 404);
+
+        if (!$orchestrator->supports($service, 'convoy')) {
+            return response()->json([
+                'message' => 'Provisioning is not enabled for this service.',
+            ], 422);
+        }
+
+        $job = $orchestrator->enqueueForService($service, 'convoy', [
+            'trigger' => 'user.retry',
+        ]);
+
+        return response()->json([
+            'message' => 'Provisioning retry has been scheduled.',
+            'data' => [
+                'job_id' => $job->id,
+                'status' => $job->status,
+                'attempt_count' => (int) $job->attempt_count,
+            ],
+        ], 202);
     }
 }
