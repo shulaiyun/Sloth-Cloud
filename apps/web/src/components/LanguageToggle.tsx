@@ -3,7 +3,7 @@ import { localeMeta, type Locale } from '../lib/content';
 import { useSite } from '../lib/site-context';
 
 export function LanguageToggle() {
-  const { locale, setLocale } = useSite();
+  const { locale, setLocale, text } = useSite();
   const entries = Object.entries(localeMeta) as Array<[Locale, (typeof localeMeta)[Locale]]>;
 
   return (
@@ -20,8 +20,8 @@ export function LanguageToggle() {
       </summary>
       <div className="locale-menu-list">
         <div className="locale-menu-head">
-          <span>界面语言</span>
-          <small>选择前台显示语言</small>
+          <span>{text.language.menuTitle}</span>
+          <small>{text.language.menuHint}</small>
         </div>
         {entries.map(([code, meta]) => (
           <button

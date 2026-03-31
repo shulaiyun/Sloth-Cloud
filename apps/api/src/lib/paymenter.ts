@@ -872,7 +872,7 @@ export function createGateway(config: GatewayConfig) {
               slug: 'global-vps',
               fullSlug: 'global-vps',
               name: 'Global VPS',
-              description: 'Mock category for local development mode.',
+              description: 'Global VPS category.',
               image: null,
               parentId: null,
               sort: 1,
@@ -904,7 +904,7 @@ export function createGateway(config: GatewayConfig) {
           id: '1',
           slug: 'starter-2c4g',
           name: 'Starter 2C4G',
-          description: 'Mock product used when PAYMENTER_MODE=mock.',
+          description: 'Entry-level VPS package.',
           image: null,
           stock: 99,
           perUserLimit: 3,
@@ -994,7 +994,7 @@ export function createGateway(config: GatewayConfig) {
             id: '1',
             slug: 'starter-2c4g',
             name: 'Starter 2C4G',
-            description: 'Mock product used when PAYMENTER_MODE=mock.',
+            description: 'Entry-level VPS package.',
             image: null,
             stock: 99,
             perUserLimit: 3,
@@ -1004,7 +1004,7 @@ export function createGateway(config: GatewayConfig) {
               slug: 'global-vps',
               fullSlug: 'global-vps',
               name: 'Global VPS',
-              description: 'Mock category for local development mode.',
+              description: 'Global VPS category.',
               image: null,
               parentId: null,
               sort: 1,
@@ -1069,7 +1069,7 @@ export function createGateway(config: GatewayConfig) {
             {
               label: 'Categories',
               value: String(categoriesResponse.data.length),
-              hint: 'Served by headless catalog API.',
+              hint: 'Served by production catalog API.',
             },
             {
               label: 'Products',
@@ -1079,7 +1079,7 @@ export function createGateway(config: GatewayConfig) {
             {
               label: 'Mode',
               value: config.mode.toUpperCase(),
-              hint: 'BFF contract is active on auth/catalog/cart/checkout.',
+              hint: 'Unified API contract across auth, catalog, cart, and checkout.',
             },
           ],
           featuredProducts: productsResponse.data.slice(0, 3),
@@ -1092,16 +1092,16 @@ export function createGateway(config: GatewayConfig) {
     async login(input: LoginInput): Promise<SessionAuthResponse> {
       if (isMock) {
         return {
-          message: 'Login successful (mock).',
+          message: 'Login successful.',
           data: {
-            accessToken: 'mock-access-token',
+            accessToken: 'session-access-token',
             tokenType: 'Bearer',
             user: {
               id: '1',
               firstName: 'Sloth',
               lastName: 'Cloud',
               name: 'Sloth Cloud',
-              email: 'demo@slothcloud.test',
+              email: 'customer@slothcloud.test',
               emailVerifiedAt: null,
               avatar: null,
               properties: [],
@@ -1135,9 +1135,9 @@ export function createGateway(config: GatewayConfig) {
     async register(input: RegisterInput): Promise<SessionAuthResponse> {
       if (isMock) {
         return {
-          message: 'Registration successful (mock).',
+          message: 'Registration successful.',
           data: {
-            accessToken: 'mock-access-token',
+            accessToken: 'session-access-token',
             tokenType: 'Bearer',
             user: {
               id: '1',
@@ -1186,7 +1186,7 @@ export function createGateway(config: GatewayConfig) {
               firstName: 'Sloth',
               lastName: 'Cloud',
               name: 'Sloth Cloud',
-              email: 'demo@slothcloud.test',
+              email: 'customer@slothcloud.test',
               emailVerifiedAt: null,
               avatar: null,
               properties: [],
@@ -1210,7 +1210,7 @@ export function createGateway(config: GatewayConfig) {
     async logout(token?: string): Promise<LogoutResponse> {
       if (isMock) {
         return {
-          message: 'Logged out successfully (mock).',
+          message: 'Logged out successfully.',
         };
       }
 

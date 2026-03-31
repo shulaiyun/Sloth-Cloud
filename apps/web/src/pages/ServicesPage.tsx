@@ -18,32 +18,6 @@ function normalizeServiceStatus(status: string): Exclude<ServiceStatusFilter, 'a
   return 'unknown';
 }
 
-function serviceStatusClassName(status: string) {
-  switch (normalizeServiceStatus(status)) {
-    case 'active':
-      return 'status-active';
-    case 'pending':
-      return 'status-pending';
-    case 'suspended':
-      return 'status-suspended';
-    case 'cancelled':
-      return 'status-cancelled';
-    default:
-      return 'status-unknown';
-  }
-}
-
-function serviceStatusLabel(status: string, locale: string) {
-  const key = normalizeServiceStatus(status);
-  const zh = locale.startsWith('zh');
-
-  if (key === 'active') return zh ? '运行中' : 'Active';
-  if (key === 'pending') return zh ? '待开通' : 'Pending';
-  if (key === 'suspended') return zh ? '已暂停' : 'Suspended';
-  if (key === 'cancelled') return zh ? '已取消' : 'Cancelled';
-  return zh ? '未知状态' : 'Unknown';
-}
-
 function isPurchasedService(service: ServiceSummary) {
   const hasLabel = (service.label || service.baseLabel || '').trim().length > 0;
   const hasProduct = Boolean(service.product?.id || service.product?.slug || service.product?.name);
@@ -61,20 +35,28 @@ export function ServicesPage() {
   const [sortBy, setSortBy] = useState<ServiceSort>('status');
   const services = data?.data ?? [];
 
+  const statusLabels: Record<Exclude<ServiceStatusFilter, 'all'>, string> = {
+    active: text.services.statusActive,
+    pending: text.services.statusPending,
+    suspended: text.services.statusSuspended,
+    cancelled: text.services.statusCancelled,
+    unknown: text.services.statusUnknown,
+  };
+
   const statusOptions: Array<{ value: ServiceStatusFilter; label: string }> = [
-    { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
-    { value: 'active', label: serviceStatusLabel('active', locale) },
-    { value: 'pending', label: serviceStatusLabel('pending', locale) },
-    { value: 'suspended', label: serviceStatusLabel('suspended', locale) },
-    { value: 'cancelled', label: serviceStatusLabel('cancelled', locale) },
-    { value: 'unknown', label: serviceStatusLabel('unknown', locale) },
+    { value: 'all', label: text.services.statusAll },
+    { value: 'active', label: statusLabels.active },
+    { value: 'pending', label: statusLabels.pending },
+    { value: 'suspended', label: statusLabels.suspended },
+    { value: 'cancelled', label: statusLabels.cancelled },
+    { value: 'unknown', label: statusLabels.unknown },
   ];
 
   const sortOptions: Array<{ value: ServiceSort; label: string }> = [
-    { value: 'status', label: locale.startsWith('zh') ? '按状态' : 'Sort by status' },
-    { value: 'price-desc', label: locale.startsWith('zh') ? '价格从高到低' : 'Price high to low' },
-    { value: 'price-asc', label: locale.startsWith('zh') ? '价格从低到高' : 'Price low to high' },
-    { value: 'expires-asc', label: locale.startsWith('zh') ? '即将到期优先' : 'Nearest expiry first' },
+    { value: 'status', label: text.services.sortByStatus },
+    { value: 'price-desc', label: text.services.sortPriceDesc },
+    { value: 'price-asc', label: text.services.sortPriceAsc },
+    { value: 'expires-asc', label: text.services.sortExpiresAsc },
   ];
 
   const visibleServices = useMemo(() => {
@@ -155,11 +137,11 @@ export function ServicesPage() {
       <section className="panel stack-12">
         <div className="filter-toolbar">
           <label className="filter-control">
-            <span>{locale.startsWith('zh') ? '搜索' : 'Search'}</span>
+            <span>{text.common.search}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={locale.startsWith('zh') ? '输入服务名、产品名或 ID' : 'Search by service, product, or ID'}
+              placeholder={text.services.searchPlaceholder}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -178,7 +160,7 @@ export function ServicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{locale.startsWith('zh') ? '排序' : 'Sort'}</span>
+            <span>{text.common.sort}</span>
             <select
               className="text-input select-input"
               value={sortBy}
@@ -198,34 +180,38 @@ export function ServicesPage() {
         <div className="callout">{text.services.noServices}</div>
       ) : (
         <section className="service-grid">
-          {visibleServices.map((service) => (
-            <article className="panel stack-12" key={service.id}>
-              <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
-              <p className="muted">
-                {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
-              </p>
-              <div className="detail-grid">
-                <div>
-                  <span>{text.common.status}</span>
-                  <strong>
-                    <span className={`status-pill ${serviceStatusClassName(service.status)}`}>
-                      {serviceStatusLabel(service.status, locale)}
-                    </span>
-                  </strong>
+          {visibleServices.map((service) => {
+            const normalized = normalizeServiceStatus(service.status);
+            const statusClassName = `status-${normalized}`;
+
+            return (
+              <article className="panel stack-12" key={service.id}>
+                <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
+                <p className="muted">
+                  {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
+                </p>
+                <div className="detail-grid">
+                  <div>
+                    <span>{text.common.status}</span>
+                    <strong>
+                      <span className={`status-pill ${statusClassName}`}>
+                        {statusLabels[normalized]}
+                      </span>
+                    </strong>
+                  </div>
+                  <div>
+                    <span>{text.common.total}</span>
+                    <strong>{service.formattedPrice}</strong>
+                  </div>
                 </div>
-                <div>
-                  <span>{text.common.total}</span>
-                  <strong>{service.formattedPrice}</strong>
-                </div>
-              </div>
-              <Link className="button ghost" to={`/services/${service.id}`}>
-                {text.common.inspect}
-              </Link>
-            </article>
-          ))}
+                <Link className="button ghost" to={`/services/${service.id}`}>
+                  {text.common.inspect}
+                </Link>
+              </article>
+            );
+          })}
         </section>
       )}
     </div>
   );
 }
-

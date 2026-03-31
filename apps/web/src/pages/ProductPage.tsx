@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-import { ApiError, requestJson, useApiData } from '../lib/api';
+import { requestJson, useApiData } from '../lib/api';
+import { localizeApiError } from '../lib/error-messages';
 import { useAuth } from '../lib/auth-context';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
@@ -152,7 +153,7 @@ export function ProductPage() {
 
       setSubmitSuccess(text.product.addSuccess);
     } catch (caughtError) {
-      setSubmitError((caughtError as ApiError).message);
+      setSubmitError(localizeApiError(caughtError, text, locale));
     } finally {
       setSubmitting(false);
     }
@@ -182,7 +183,7 @@ export function ProductPage() {
 
       navigate('/checkout');
     } catch (caughtError) {
-      const message = (caughtError as ApiError).message;
+      const message = localizeApiError(caughtError, text, locale);
       const normalized = message.toLowerCase();
 
       if (
@@ -208,8 +209,6 @@ export function ProductPage() {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
 
-  const sourceMode = data?.meta.sourceMode ?? 'live';
-
   return (
     <div className="stack-24">
       <section className="detail-hero">
@@ -217,7 +216,6 @@ export function ProductPage() {
           <Link className="text-link" to="/catalog">{text.common.backToCatalog}</Link>
           <div className="chip-row">
             {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
-            <span className="chip">{text.common.sourceMode}: {sourceMode === 'live' ? text.common.live : text.common.mock}</span>
             <span className="chip">{text.common.stock}: {product.stock ?? '-'}</span>
           </div>
           <h1>{localizeText(product.name, locale, product.name)}</h1>

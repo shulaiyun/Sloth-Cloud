@@ -18,55 +18,39 @@ function normalizeInvoiceStatus(status: string): Exclude<InvoiceStatusFilter, 'a
   return 'unknown';
 }
 
-function invoiceStatusClassName(status: string) {
-  switch (normalizeInvoiceStatus(status)) {
-    case 'paid':
-      return 'status-active';
-    case 'pending':
-      return 'status-pending';
-    case 'overdue':
-      return 'status-overdue';
-    case 'cancelled':
-      return 'status-cancelled';
-    default:
-      return 'status-unknown';
-  }
-}
-
-function invoiceStatusLabel(status: string, locale: string) {
-  const key = normalizeInvoiceStatus(status);
-  const zh = locale.startsWith('zh');
-
-  if (key === 'paid') return zh ? '已支付' : 'Paid';
-  if (key === 'pending') return zh ? '待支付' : 'Pending';
-  if (key === 'cancelled') return zh ? '已取消' : 'Cancelled';
-  if (key === 'overdue') return zh ? '已逾期' : 'Overdue';
-  return zh ? '未知状态' : 'Unknown';
-}
-
 export function InvoicesPage() {
-  const { text, locale, formatDate } = useSite();
+  const { text, formatDate } = useSite();
   const { data, error, loading } = useApiData<InvoicesResponse>('/api/v1/invoices');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<InvoiceSort>('created-desc');
   const invoices = data?.data ?? [];
 
+  const statusLabels: Record<Exclude<InvoiceStatusFilter, 'all'>, string> = {
+    paid: text.invoices.statusPaid,
+    pending: text.invoices.statusPending,
+    cancelled: text.invoices.statusCancelled,
+    overdue: text.invoices.statusOverdue,
+    unknown: text.invoices.statusUnknown,
+  };
+
   const statusOptions: Array<{ value: InvoiceStatusFilter; label: string }> = [
-    { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
-    { value: 'paid', label: invoiceStatusLabel('paid', locale) },
-    { value: 'pending', label: invoiceStatusLabel('pending', locale) },
-    { value: 'cancelled', label: invoiceStatusLabel('cancelled', locale) },
-    { value: 'overdue', label: invoiceStatusLabel('overdue', locale) },
-    { value: 'unknown', label: invoiceStatusLabel('unknown', locale) },
+    { value: 'all', label: text.invoices.statusAll },
+    { value: 'paid', label: statusLabels.paid },
+    { value: 'pending', label: statusLabels.pending },
+    { value: 'cancelled', label: statusLabels.cancelled },
+    { value: 'overdue', label: statusLabels.overdue },
+    { value: 'unknown', label: statusLabels.unknown },
   ];
+
   const sortOptions: Array<{ value: InvoiceSort; label: string }> = [
-    { value: 'created-desc', label: locale.startsWith('zh') ? '最新开票优先' : 'Newest invoices first' },
-    { value: 'due-asc', label: locale.startsWith('zh') ? '最早到期优先' : 'Nearest due date first' },
-    { value: 'amount-desc', label: locale.startsWith('zh') ? '金额从高到低' : 'Amount high to low' },
-    { value: 'amount-asc', label: locale.startsWith('zh') ? '金额从低到高' : 'Amount low to high' },
-    { value: 'status', label: locale.startsWith('zh') ? '按状态' : 'Sort by status' },
+    { value: 'created-desc', label: text.invoices.sortNewest },
+    { value: 'due-asc', label: text.invoices.sortDue },
+    { value: 'amount-desc', label: text.invoices.sortAmountDesc },
+    { value: 'amount-asc', label: text.invoices.sortAmountAsc },
+    { value: 'status', label: text.invoices.sortByStatus },
   ];
+
   const visibleInvoices = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     const filtered = invoices.filter((invoice) => {
@@ -141,11 +125,11 @@ export function InvoicesPage() {
       <section className="panel stack-12">
         <div className="filter-toolbar">
           <label className="filter-control">
-            <span>{locale.startsWith('zh') ? '搜索' : 'Search'}</span>
+            <span>{text.common.search}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={locale.startsWith('zh') ? '输入账单编号、用户或金额' : 'Search by invoice number, user, or amount'}
+              placeholder={text.invoices.searchPlaceholder}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -164,7 +148,7 @@ export function InvoicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{locale.startsWith('zh') ? '排序' : 'Sort'}</span>
+            <span>{text.common.sort}</span>
             <select
               className="text-input select-input"
               value={sortBy}
@@ -184,21 +168,26 @@ export function InvoicesPage() {
         <div className="callout">{text.invoices.noInvoices}</div>
       ) : (
         <section className="card-grid section-products">
-          {visibleInvoices.map((invoice) => (
-            <article className="panel stack-12" key={invoice.id}>
-              <h3>#{invoice.number ?? invoice.id}</h3>
-              <p>
-                <span className={`status-pill ${invoiceStatusClassName(invoice.status)}`}>
-                  {invoiceStatusLabel(invoice.status, locale)}
-                </span>
-              </p>
-              <p className="muted">
-                {locale.startsWith('zh') ? '到期' : 'Due'}: {formatDate(invoice.dueAt)}
-              </p>
-              <strong>{invoice.formattedTotal}</strong>
-              <Link className="button ghost" to={`/invoices/${invoice.id}`}>{text.common.inspect}</Link>
-            </article>
-          ))}
+          {visibleInvoices.map((invoice) => {
+            const normalized = normalizeInvoiceStatus(invoice.status);
+            const statusClassName = `status-${normalized}`;
+
+            return (
+              <article className="panel stack-12" key={invoice.id}>
+                <h3>#{invoice.number ?? invoice.id}</h3>
+                <p>
+                  <span className={`status-pill ${statusClassName}`}>
+                    {statusLabels[normalized]}
+                  </span>
+                </p>
+                <p className="muted">
+                  {text.common.due}: {formatDate(invoice.dueAt)}
+                </p>
+                <strong>{invoice.formattedTotal}</strong>
+                <Link className="button ghost" to={`/invoices/${invoice.id}`}>{text.common.inspect}</Link>
+              </article>
+            );
+          })}
         </section>
       )}
     </div>

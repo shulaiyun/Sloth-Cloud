@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { ApiError, requestJson, useApiData } from '../lib/api';
+import { requestJson, useApiData } from '../lib/api';
+import { localizeApiError } from '../lib/error-messages';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { ServiceDetail, ServiceResponse } from '../lib/types';
@@ -160,25 +161,21 @@ function extractRevealedPassword(payload: unknown) {
   ]);
 }
 
-function friendlyServerError(rawError: string | null | undefined, locale: string) {
+function friendlyServerError(rawError: string | null | undefined, mapMissing: string, convoyDisabled: string, unavailable: string) {
   if (!rawError) {
     return null;
   }
 
   const lower = rawError.toLowerCase();
   if (lower.includes('409') || lower.includes('service_convoy_mapping_missing')) {
-    return locale.startsWith('zh')
-      ? '该服务尚未绑定 Convoy 服务器映射（server_uuid）。请在 Paymenter 产品中绑定 Convoy Server 扩展并创建新服务，或补写该服务的 server_uuid 属性后再试。'
-      : 'This service is not mapped to a Convoy server reference (server_uuid). Bind a Convoy server extension to the product and reprovision, or backfill server_uuid in service properties.';
+    return mapMissing;
   }
 
   if (lower.includes('convoy integration is disabled') || lower.includes('convoy_disabled')) {
-    return locale.startsWith('zh')
-      ? 'BFF 里未启用 Convoy（CONVOY_ENABLED=false）。请在 apps/api 环境变量中启用并重启 API 容器。'
-      : 'Convoy is disabled in BFF (CONVOY_ENABLED=false). Enable it in apps/api env and restart the API container.';
+    return convoyDisabled;
   }
 
-  return rawError;
+  return rawError || unavailable;
 }
 
 export function ServiceDetailPage() {
@@ -212,10 +209,10 @@ export function ServiceDetailPage() {
         method: 'PATCH',
         body: { label: label.trim() || null },
       });
-      setMessage(locale.startsWith('zh') ? '服务标签已更新。' : 'Service label updated.');
+      setMessage(text.services.updateLabel);
       window.location.reload();
     } catch (caughtError) {
-      setActionError((caughtError as ApiError).message);
+      setActionError(localizeApiError(caughtError, text, locale));
     } finally {
       setPending(false);
     }
@@ -231,13 +228,13 @@ export function ServiceDetailPage() {
         method: 'POST',
         body: {
           type: 'end_of_period',
-          reason: reason || 'Requested by customer.',
+          reason: reason || text.services.cancel,
         },
       });
-      setMessage(locale.startsWith('zh') ? '已提交取消请求。' : 'Cancellation requested.');
+      setMessage(text.services.cancel);
       window.location.reload();
     } catch (caughtError) {
-      setActionError((caughtError as ApiError).message);
+      setActionError(localizeApiError(caughtError, text, locale));
     } finally {
       setPending(false);
     }
@@ -283,7 +280,7 @@ export function ServiceDetailPage() {
       const responseRecord = asRecord(response);
       const responseMessage = typeof responseRecord.message === 'string' && responseRecord.message.trim() !== ''
         ? responseRecord.message
-        : (locale.startsWith('zh') ? '操作执行成功。' : 'Action completed successfully.');
+        : text.serviceDetail.actionSuccess;
 
       if (action === 'reveal-password') {
         const password = extractRevealedPassword(responseRecord);
@@ -292,7 +289,7 @@ export function ServiceDetailPage() {
 
       setServerMessage(responseMessage);
     } catch (caughtError) {
-      setServerActionError((caughtError as ApiError).message);
+      setServerActionError(localizeApiError(caughtError, text, locale));
     } finally {
       setServerBusy(null);
     }
@@ -319,6 +316,7 @@ export function ServiceDetailPage() {
 
     return serverData.data.capabilities;
   }, [serverData]);
+
   const convoyState = useMemo(() => {
     const convoy = asRecord(serverData?.data.convoy);
 
@@ -344,7 +342,6 @@ export function ServiceDetailPage() {
   }
 
   const { service, invoices } = data.data;
-  const zh = locale.startsWith('zh');
 
   return (
     <div className="stack-24">
@@ -385,7 +382,7 @@ export function ServiceDetailPage() {
         </article>
 
         <article className="panel stack-12">
-          <p className="eyebrow">{text.nav.invoices}</p>
+          <p className="eyebrow">{text.serviceDetail.linkedInvoices}</p>
           {invoices.map((invoice) => (
             <Link className="callout compact" key={invoice.id} to={`/invoices/${invoice.id}`}>
               #{invoice.number ?? invoice.id} - {invoice.formattedTotal}
@@ -396,29 +393,36 @@ export function ServiceDetailPage() {
 
       <section className="two-column">
         <article className="panel stack-16">
-          <p className="eyebrow">{zh ? '服务器信息' : 'Server information'}</p>
+          <p className="eyebrow">{text.serviceDetail.infoTitle}</p>
 
           {serverLoading ? (
             <div className="loading-card">{text.common.loading}</div>
           ) : serverError ? (
-            <div className="callout">{friendlyServerError(serverError, locale)}</div>
+            <div className="callout">
+              {friendlyServerError(
+                serverError,
+                text.serviceDetail.mapMissing,
+                text.serviceDetail.convoyDisabled,
+                text.serviceDetail.unavailable,
+              )}
+            </div>
           ) : (
             <div className="detail-grid">
-              <div><span>{zh ? 'Server Ref' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>
-              <div><span>{zh ? '运行状态' : 'State'}</span><strong>{convoyState.state}</strong></div>
-              <div><span>{zh ? 'IP 地址' : 'IP address'}</span><strong>{convoyState.ip}</strong></div>
-              <div><span>{zh ? '锁定状态' : 'Locked'}</span><strong>{convoyState.locked === null ? '-' : (convoyState.locked ? (zh ? '是' : 'Yes') : (zh ? '否' : 'No'))}</strong></div>
-              <div><span>CPU</span><strong>{convoyState.cpu}</strong></div>
-              <div><span>{zh ? '内存' : 'Memory'}</span><strong>{convoyState.memory}</strong></div>
-              <div><span>{zh ? '磁盘' : 'Disk'}</span><strong>{convoyState.disk}</strong></div>
-              <div><span>{zh ? '入站带宽' : 'Inbound bandwidth'}</span><strong>{convoyState.bandwidth}</strong></div>
-              <div><span>{zh ? '出站流量' : 'Outbound traffic'}</span><strong>{convoyState.traffic}</strong></div>
+              <div><span>{text.serviceDetail.serverRef}</span><strong>{convoyState.serverRef}</strong></div>
+              <div><span>{text.serviceDetail.state}</span><strong>{convoyState.state}</strong></div>
+              <div><span>{text.serviceDetail.ipAddress}</span><strong>{convoyState.ip}</strong></div>
+              <div><span>{text.serviceDetail.locked}</span><strong>{convoyState.locked === null ? '-' : (convoyState.locked ? text.common.yes : text.common.no)}</strong></div>
+              <div><span>{text.serviceDetail.cpu}</span><strong>{convoyState.cpu}</strong></div>
+              <div><span>{text.serviceDetail.memory}</span><strong>{convoyState.memory}</strong></div>
+              <div><span>{text.serviceDetail.disk}</span><strong>{convoyState.disk}</strong></div>
+              <div><span>{text.serviceDetail.inbound}</span><strong>{convoyState.bandwidth}</strong></div>
+              <div><span>{text.serviceDetail.outbound}</span><strong>{convoyState.traffic}</strong></div>
             </div>
           )}
         </article>
 
         <article className="panel stack-12">
-          <p className="eyebrow">{zh ? '服务器操作' : 'Server operations'}</p>
+          <p className="eyebrow">{text.serviceDetail.operationsTitle}</p>
           <div className="action-grid">
             <button
               className="button secondary"
@@ -426,7 +430,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('start')}
             >
-              {serverBusy === 'start' ? `${text.common.pending}...` : (zh ? '开机 Start' : 'Start')}
+              {serverBusy === 'start' ? `${text.common.pending}...` : text.serviceDetail.start}
             </button>
             <button
               className="button secondary"
@@ -434,7 +438,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('stop')}
             >
-              {serverBusy === 'stop' ? `${text.common.pending}...` : (zh ? '关机 Stop' : 'Stop')}
+              {serverBusy === 'stop' ? `${text.common.pending}...` : text.serviceDetail.stop}
             </button>
             <button
               className="button secondary"
@@ -442,7 +446,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('restart')}
             >
-              {serverBusy === 'restart' ? `${text.common.pending}...` : (zh ? '重启 Restart' : 'Restart')}
+              {serverBusy === 'restart' ? `${text.common.pending}...` : text.serviceDetail.restart}
             </button>
             <button
               className="button secondary"
@@ -450,7 +454,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('reinstall')}
             >
-              {serverBusy === 'reinstall' ? `${text.common.pending}...` : (zh ? '重装系统 Reinstall' : 'Reinstall')}
+              {serverBusy === 'reinstall' ? `${text.common.pending}...` : text.serviceDetail.reinstall}
             </button>
             <button
               className="button secondary"
@@ -458,7 +462,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('reveal-password')}
             >
-              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : (zh ? '显示密码 Reveal Password' : 'Reveal password')}
+              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : text.serviceDetail.revealPassword}
             </button>
             <button
               className="button ghost"
@@ -466,7 +470,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('suspend')}
             >
-              {serverBusy === 'suspend' ? `${text.common.pending}...` : (zh ? '暂停 Suspend' : 'Suspend')}
+              {serverBusy === 'suspend' ? `${text.common.pending}...` : text.serviceDetail.suspend}
             </button>
             <button
               className="button ghost"
@@ -474,12 +478,12 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('unsuspend')}
             >
-              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : (zh ? '解除暂停 Unsuspend' : 'Unsuspend')}
+              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : text.serviceDetail.unsuspend}
             </button>
           </div>
           {revealedPassword ? (
             <div className="callout compact">
-              <strong>{zh ? '临时密码：' : 'Temporary password: '}</strong>
+              <strong>{text.serviceDetail.tempPassword}: </strong>
               <code>{revealedPassword}</code>
             </div>
           ) : null}

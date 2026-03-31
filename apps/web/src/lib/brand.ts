@@ -5,6 +5,6 @@ export const brand = {
   nameEnCompact: 'SLOTH CLOUD',
   sloganCn: '树懒云——一切皆服务',
   sloganEn: 'Shulai Cloud - Everything as a Service',
-  topbarTag: 'Premium Headless VPS Cloud',
-  heroNote: 'Headless 计费核心、目录接口与用户会话由边缘 BFF 统一承载。',
+  topbarTag: 'PREMIUM VPS CLOUD PLATFORM',
+  heroNote: '树懒云前台由统一 BFF 聚合计费、服务与交付能力。',
 } as const;

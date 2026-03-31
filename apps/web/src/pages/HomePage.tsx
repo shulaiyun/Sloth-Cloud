@@ -8,13 +8,6 @@ import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { HomeResponse } from '../lib/types';
 
-const emptyProductsTitle = '\u6682\u65e0\u53ef\u552e\u5546\u54c1';
-const emptyProductsBody = '\u8bf7\u5728\u7ba1\u7406\u540e\u53f0\u521b\u5efa\u5546\u54c1\u5e76\u786e\u4fdd\u672a\u52fe\u9009\u201c\u9690\u85cf\u4ea7\u54c1\u201d\uff0c\u540c\u65f6\u81f3\u5c11\u914d\u7f6e\u4e00\u4e2a\u53ef\u7528\u4ef7\u683c\u3002';
-const refreshCatalogText = '\u5237\u65b0\u5546\u5e97\u89c6\u56fe';
-const emptyCategoriesTitle = '\u6682\u65e0\u53ef\u89c1\u5206\u7c7b';
-const emptyCategoriesBody = '\u5206\u7c7b\u5df2\u7ecf\u5bf9\u63a5\u771f\u5b9e API\u3002\u82e5\u4ecd\u4e3a 0\uff0c\u8bf7\u68c0\u67e5\u5206\u7c7b\u4e0b\u662f\u5426\u7ed1\u5b9a\u4e86\u53ef\u89c1\u5546\u54c1\u3002';
-const homeHeadlessLabel = `Headless \u5ba2\u6237\u7aef`;
-
 export function HomePage() {
   const { text, formatMoney, locale } = useSite();
   const { isAuthenticated } = useAuth();
@@ -45,9 +38,9 @@ export function HomePage() {
       tone: 'products',
     },
     {
-      label: text.common.sourceMode,
-      value: data.meta.sourceMode === 'live' ? text.common.live : text.common.mock,
-      hint: text.footer.statement,
+      label: text.home.dataOverviewTitle,
+      value: text.common.live,
+      hint: text.home.dataOverviewSubtitle,
       tone: 'platform',
     },
   ] as const;
@@ -80,9 +73,9 @@ export function HomePage() {
               </div>
             </div>
             <div className="brand-signal-list" aria-label="Brand capability highlights">
-              <span className="brand-signal">Headless Billing</span>
-              <span className="brand-signal">Catalog API</span>
-              <span className="brand-signal">Edge Session</span>
+              <span className="brand-signal">{text.home.signalProvisioning}</span>
+              <span className="brand-signal">{text.home.signalBilling}</span>
+              <span className="brand-signal">{text.home.signalGlobal}</span>
             </div>
           </div>
         </div>
@@ -91,8 +84,8 @@ export function HomePage() {
       <section className="section-frame section-shell">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">{text.common.sourceMode}</p>
-            <h2>{`${brand.nameCn} ${homeHeadlessLabel}`}</h2>
+            <p className="section-kicker">{text.home.dataOverviewTitle}</p>
+            <h2>{text.home.dataOverviewSubtitle}</h2>
           </div>
         </div>
         <div className="metrics-grid">
@@ -129,11 +122,8 @@ export function HomePage() {
             </article>
           )) : (
             <article className="product-card">
-              <h3>{emptyProductsTitle}</h3>
-              <p>{emptyProductsBody}</p>
-              <div className="card-footer">
-                <Link className="button secondary" to="/catalog">{refreshCatalogText}</Link>
-              </div>
+              <h3>{text.home.emptyProductsTitle}</h3>
+              <p>{text.home.emptyProductsBody}</p>
             </article>
           )}
         </div>
@@ -156,8 +146,8 @@ export function HomePage() {
             </article>
           )) : (
             <article className="category-card">
-              <h3>{emptyCategoriesTitle}</h3>
-              <p>{emptyCategoriesBody}</p>
+              <h3>{text.home.emptyCategoriesTitle}</h3>
+              <p>{text.home.emptyCategoriesBody}</p>
             </article>
           )}
         </div>
