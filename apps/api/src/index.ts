@@ -214,6 +214,19 @@ function buildCapabilities(buttons: Array<Record<string, unknown>>, hasServerRef
   };
 }
 
+function buildProvisioningPayload(service: ServiceDetail) {
+  return service.provisioning
+    ? {
+      status: service.provisioning.status,
+      provider: service.provisioning.provider,
+      attemptCount: service.provisioning.attemptCount,
+      errorMessage: service.provisioning.errorMessage,
+      lastAttemptAt: service.provisioning.lastAttemptAt,
+      completedAt: service.provisioning.completedAt,
+    }
+    : null;
+}
+
 async function getServiceWithActions(token: string, serviceId: string) {
   const serviceResponse = await gateway.service(token, serviceId);
   const service = serviceResponse.data.service;
@@ -226,6 +239,35 @@ async function getServiceWithActions(token: string, serviceId: string) {
     serverRef,
     capabilities: buildCapabilities(buttons, serverRef !== null),
   };
+}
+
+function requireServerRefOrThrow(service: ServiceDetail, serverRef: string | null): string {
+  if (serverRef) {
+    return serverRef;
+  }
+
+  const provisioning = buildProvisioningPayload(service);
+  if (provisioning?.status === 'pending' || provisioning?.status === 'provisioning') {
+    throw new GatewayError('Service provisioning is still in progress.', 409, {
+      code: 'SERVICE_PROVISIONING_PENDING',
+      provisioning,
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  if (provisioning?.status === 'failed') {
+    throw new GatewayError('Service provisioning failed and requires retry.', 409, {
+      code: 'SERVICE_PROVISIONING_FAILED',
+      provisioning,
+      expectedKeys: convoyRefKeys,
+    });
+  }
+
+  throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
+    code: 'SERVICE_CONVOY_MAPPING_MISSING',
+    provisioning,
+    expectedKeys: convoyRefKeys,
+  });
 }
 
 app.get('/api/v1/health', async () => gateway.health());
@@ -417,20 +459,15 @@ app.get('/api/v1/services/:serviceId/server', async (request) => {
   const token = requireToken(request);
   const { service, buttons, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  const convoyResponse = await convoy.getServer(serverRef);
+  const convoyResponse = await convoy.getServer(resolvedServerRef);
 
   return {
     data: {
       service,
       mapping: {
-        serverRef,
+        serverRef: resolvedServerRef,
         expectedKeys: convoyRefKeys,
       },
       capabilities,
@@ -449,12 +486,13 @@ app.get('/api/v1/services/:serviceId/server', async (request) => {
 app.get('/api/v1/services/:serviceId/server/capabilities', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const token = requireToken(request);
-  const { serverRef, capabilities, buttons } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef, capabilities, buttons } = await getServiceWithActions(token, params.serviceId);
 
   return {
     data: {
       mapped: serverRef !== null,
       serverRef,
+      provisioning: buildProvisioningPayload(service),
       expectedKeys: convoyRefKeys,
       capabilities,
       actions: {
@@ -472,16 +510,10 @@ app.patch('/api/v1/services/:serviceId/server', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const body = z.record(z.unknown()).parse(request.body ?? {});
   const token = requireToken(request);
-  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
-
-  const response = await convoy.patchServer(serverRef, body);
+  const response = await convoy.patchServer(resolvedServerRef, body);
   return {
     message: 'Server settings updated successfully.',
     data: response.data ?? {},
@@ -492,16 +524,10 @@ app.patch('/api/v1/services/:serviceId/server/build', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const body = z.record(z.unknown()).parse(request.body ?? {});
   const token = requireToken(request);
-  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
-
-  const response = await convoy.patchBuild(serverRef, body);
+  const response = await convoy.patchBuild(resolvedServerRef, body);
   return {
     message: 'Server build updated successfully.',
     data: response.data ?? {},
@@ -511,32 +537,20 @@ app.patch('/api/v1/services/:serviceId/server/build', async (request) => {
 app.post('/api/v1/services/:serviceId/server/suspend', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const token = requireToken(request);
-  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
-
-  await convoy.suspend(serverRef);
+  await convoy.suspend(resolvedServerRef);
   return { message: 'Server suspended successfully.' };
 });
 
 app.post('/api/v1/services/:serviceId/server/unsuspend', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const token = requireToken(request);
-  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
-
-  await convoy.unsuspend(serverRef);
+  await convoy.unsuspend(resolvedServerRef);
   return { message: 'Server unsuspended successfully.' };
 });
 
@@ -546,16 +560,10 @@ app.delete('/api/v1/services/:serviceId/server', async (request) => {
     noPurge: z.coerce.boolean().optional().default(false),
   }).parse(request.query ?? {});
   const token = requireToken(request);
-  const { serverRef } = await getServiceWithActions(token, params.serviceId);
+  const { service, serverRef } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
 
-  if (!serverRef) {
-    throw new GatewayError('Service is not mapped to a Convoy server reference.', 409, {
-      code: 'SERVICE_CONVOY_MAPPING_MISSING',
-      expectedKeys: convoyRefKeys,
-    });
-  }
-
-  await convoy.destroy(serverRef, query.noPurge);
+  await convoy.destroy(resolvedServerRef, query.noPurge);
   return { message: 'Server termination requested successfully.' };
 });
 

@@ -212,6 +212,12 @@ class ProvisioningOrchestrator
 
             $response = ExtensionHelper::createServer($service);
             $mappingPayload = $this->syncServerRefs($service, $response);
+            if ($mappingPayload === []) {
+                return $this->markFailed($job, 'Provisioning completed but no server mapping keys were returned.', [
+                    'mapping_id' => $mapping->id,
+                    'response' => $response,
+                ]);
+            }
 
             $job->status = ProvisioningJob::STATUS_SUCCESS;
             $job->response_payload = [
@@ -388,6 +394,18 @@ class ProvisioningOrchestrator
             );
         }
 
-        return array_filter($properties, fn ($value) => $value !== '');
+        $service->load('properties');
+        $resolved = [];
+        foreach ($this->mappingKeys as $mappingKey) {
+            $hit = $service->properties->firstWhere('key', $mappingKey);
+            $value = trim((string) ($hit?->value ?? ''));
+            if ($value === '') {
+                continue;
+            }
+
+            $resolved[$mappingKey] = $value;
+        }
+
+        return $resolved;
     }
 }
