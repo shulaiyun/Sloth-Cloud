@@ -5,6 +5,7 @@ import { useSite } from '../lib/site-context';
 export function LanguageToggle() {
   const { locale, setLocale } = useSite();
   const entries = Object.entries(localeMeta) as Array<[Locale, (typeof localeMeta)[Locale]]>;
+  const zh = locale.startsWith('zh');
 
   return (
     <details className="locale-menu">
@@ -20,8 +21,8 @@ export function LanguageToggle() {
       </summary>
       <div className="locale-menu-list">
         <div className="locale-menu-head">
-          <span>界面语言</span>
-          <small>选择前台显示语言</small>
+          <span>{zh ? '界面语言' : 'Interface language'}</span>
+          <small>{zh ? '选择前台显示语言' : 'Select storefront language'}</small>
         </div>
         {entries.map(([code, meta]) => (
           <button

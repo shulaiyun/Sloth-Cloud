@@ -4,7 +4,12 @@ import { Link, useParams } from 'react-router-dom';
 import { ApiError, requestJson, useApiData } from '../lib/api';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
-import type { ServiceDetail, ServiceResponse } from '../lib/types';
+import type {
+  ServiceDetail,
+  ServiceProvisioningResponse,
+  ServiceProvisioningRetryResponse,
+  ServiceResponse,
+} from '../lib/types';
 
 type ConvoyCapabilities = {
   application: {
@@ -148,6 +153,45 @@ function statusClassName(status: string) {
   return 'status-unknown';
 }
 
+function normalizeActionName(action: string) {
+  return action.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function readActionName(button: Record<string, unknown>) {
+  const candidates = [
+    button.function,
+    button.action,
+    button.name,
+    button.label,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') {
+      return candidate.trim();
+    }
+  }
+
+  return null;
+}
+
+function findActionName(buttons: Array<Record<string, unknown>>, aliases: string[]) {
+  const normalizedAliases = aliases.map((alias) => normalizeActionName(alias));
+
+  for (const button of buttons) {
+    const name = readActionName(button);
+    if (!name) {
+      continue;
+    }
+
+    const normalized = normalizeActionName(name);
+    if (normalizedAliases.some((alias) => normalized.includes(alias))) {
+      return name;
+    }
+  }
+
+  return null;
+}
+
 function extractRevealedPassword(payload: unknown) {
   return pickString(payload, [
     'password',
@@ -168,22 +212,41 @@ function friendlyServerError(rawError: string | null | undefined, locale: string
   const lower = rawError.toLowerCase();
   if (lower.includes('409') || lower.includes('service_convoy_mapping_missing')) {
     return locale.startsWith('zh')
-      ? '该服务尚未绑定 Convoy 服务器映射（server_uuid）。请在 Paymenter 产品中绑定 Convoy Server 扩展并创建新服务，或补写该服务的 server_uuid 属性后再试。'
-      : 'This service is not mapped to a Convoy server reference (server_uuid). Bind a Convoy server extension to the product and reprovision, or backfill server_uuid in service properties.';
+      ? '该服务尚未完成 Convoy 映射，当前不能执行服务器操作。请等待开通完成，或在后台补齐 server_uuid 映射。'
+      : 'This service is not mapped to a Convoy server yet. Wait for provisioning to complete or backfill server_uuid mapping.';
+  }
+
+  if (lower.includes('service_provisioning_pending')) {
+    return locale.startsWith('zh')
+      ? '服务正在开通中，请稍后重试。'
+      : 'Service provisioning is still in progress. Please try again later.';
+  }
+
+  if (lower.includes('service_provisioning_failed')) {
+    return locale.startsWith('zh')
+      ? '服务开通失败，请在开通状态面板中发起重试。'
+      : 'Service provisioning failed. Retry from the provisioning panel.';
   }
 
   if (lower.includes('convoy integration is disabled') || lower.includes('convoy_disabled')) {
     return locale.startsWith('zh')
-      ? 'BFF 里未启用 Convoy（CONVOY_ENABLED=false）。请在 apps/api 环境变量中启用并重启 API 容器。'
-      : 'Convoy is disabled in BFF (CONVOY_ENABLED=false). Enable it in apps/api env and restart the API container.';
+      ? 'BFF 未启用 Convoy（CONVOY_ENABLED=false），请联系管理员。'
+      : 'Convoy is disabled in BFF (CONVOY_ENABLED=false).';
   }
 
   return rawError;
 }
 
+function provisioningTone(status: string | null | undefined) {
+  const normalized = (status ?? '').toLowerCase();
+  if (normalized === 'success' || normalized === 'completed') return 'success';
+  if (normalized === 'failed') return 'failed';
+  return 'pending';
+}
+
 export function ServiceDetailPage() {
   const { serviceId } = useParams();
-  const { text, locale } = useSite();
+  const { text, locale, formatDate } = useSite();
   const { data, error, loading } = useApiData<ServiceResponse>(
     serviceId ? `/api/v1/services/${serviceId}` : null,
   );
@@ -192,6 +255,12 @@ export function ServiceDetailPage() {
     error: serverError,
     loading: serverLoading,
   } = useApiData<ServiceServerResponse>(serviceId ? `/api/v1/services/${serviceId}/server` : null);
+  const {
+    data: provisioningData,
+    error: provisioningError,
+    loading: provisioningLoading,
+  } = useApiData<ServiceProvisioningResponse>(serviceId ? `/api/v1/services/${serviceId}/provisioning` : null);
+
   const [label, setLabel] = useState('');
   const [reason, setReason] = useState('');
   const [pending, setPending] = useState(false);
@@ -201,6 +270,9 @@ export function ServiceDetailPage() {
   const [serverMessage, setServerMessage] = useState<string | null>(null);
   const [serverActionError, setServerActionError] = useState<string | null>(null);
   const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
+  const [renewingService, setRenewingService] = useState(false);
+  const [retryingProvisioning, setRetryingProvisioning] = useState(false);
+  const [provisioningMessage, setProvisioningMessage] = useState<string | null>(null);
 
   async function updateLabel() {
     if (!serviceId) return;
@@ -240,6 +312,54 @@ export function ServiceDetailPage() {
       setActionError((caughtError as ApiError).message);
     } finally {
       setPending(false);
+    }
+  }
+
+  async function retryProvisioning() {
+    if (!serviceId) return;
+
+    setRetryingProvisioning(true);
+    setProvisioningMessage(null);
+    setActionError(null);
+    try {
+      const response = await requestJson<ServiceProvisioningRetryResponse>(`/api/v1/services/${serviceId}/provisioning/retry`, {
+        method: 'POST',
+      });
+      setProvisioningMessage(response.message);
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (caughtError) {
+      setActionError((caughtError as ApiError).message);
+    } finally {
+      setRetryingProvisioning(false);
+    }
+  }
+
+  async function renewService(actionName: string | null) {
+    if (!serviceId || !actionName) {
+      return;
+    }
+
+    setRenewingService(true);
+    setActionError(null);
+    setMessage(null);
+    try {
+      const response = await requestJson<{ message?: string }>(
+        `/api/v1/services/${serviceId}/actions/${encodeURIComponent(actionName)}`,
+        {
+          method: 'POST',
+          body: {},
+        },
+      );
+      setMessage(
+        typeof response.message === 'string' && response.message.trim() !== ''
+          ? response.message
+          : (locale.startsWith('zh') ? '续费请求已提交。' : 'Renewal request submitted.'),
+      );
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (caughtError) {
+      setActionError((caughtError as ApiError).message);
+    } finally {
+      setRenewingService(false);
     }
   }
 
@@ -319,6 +439,7 @@ export function ServiceDetailPage() {
 
     return serverData.data.capabilities;
   }, [serverData]);
+
   const convoyState = useMemo(() => {
     const convoy = asRecord(serverData?.data.convoy);
 
@@ -344,7 +465,35 @@ export function ServiceDetailPage() {
   }
 
   const { service, invoices } = data.data;
+  const serviceButtons = (data.data.actions?.buttons ?? []) as Array<Record<string, unknown>>;
   const zh = locale.startsWith('zh');
+  const provisioning = provisioningData?.data.latest ?? null;
+  const provisioningStatus = (provisioning?.status ?? '').toLowerCase();
+  const provisioningCanRetry = provisioningStatus === 'failed';
+  const provisioningInFlight = provisioningStatus === 'pending' || provisioningStatus === 'provisioning';
+  const renewActionName = findActionName(serviceButtons, ['renew', 'extend', 'recurring', 'cycle']);
+  const canRenewService = renewActionName !== null && !provisioningInFlight;
+  const canRunServerActions = !serverLoading && !serverError && !provisioningInFlight && !provisioningCanRetry;
+
+  const provisioningLabel = zh
+    ? (
+      provisioningStatus === 'failed'
+        ? '开通失败'
+        : provisioningStatus === 'success' || provisioningStatus === 'completed'
+          ? '开通成功'
+          : provisioningStatus
+            ? '开通中'
+            : '待开通'
+    )
+    : (
+      provisioningStatus === 'failed'
+        ? 'Provisioning failed'
+        : provisioningStatus === 'success' || provisioningStatus === 'completed'
+          ? 'Provisioning completed'
+          : provisioningStatus
+            ? 'Provisioning in progress'
+            : 'Provisioning pending'
+    );
 
   return (
     <div className="stack-24">
@@ -355,6 +504,42 @@ export function ServiceDetailPage() {
           <p className="muted">{service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}</p>
         </div>
         <Link className="button ghost" to="/services">{text.nav.services}</Link>
+      </section>
+
+      <section className="panel stack-16">
+        <p className="eyebrow">{zh ? '开通状态' : 'Provisioning status'}</p>
+        {provisioningLoading ? (
+          <div className="loading-card">{text.common.loading}</div>
+        ) : provisioningError ? (
+          <div className="error-card">{provisioningError}</div>
+        ) : (
+          <>
+            <div className={`callout ${provisioningTone(provisioningStatus) === 'failed' ? 'error-card compact' : 'compact'}`}>
+              <strong>{provisioningLabel}</strong>
+              {provisioning?.errorMessage ? (
+                <p className="muted">{provisioning?.errorMessage}</p>
+              ) : null}
+              <p className="muted">
+                {zh ? '最近尝试' : 'Last attempt'}: {formatDate(provisioning?.lastAttemptAt ?? null)}
+                {' · '}
+                {zh ? '尝试次数' : 'Attempts'}: {provisioning?.attemptCount ?? 0}
+              </p>
+            </div>
+            {provisioningCanRetry ? (
+              <button
+                className="button primary"
+                disabled={retryingProvisioning}
+                type="button"
+                onClick={() => void retryProvisioning()}
+              >
+                {retryingProvisioning
+                  ? (zh ? '正在重试...' : 'Retrying...')
+                  : (zh ? '重试开通' : 'Retry provisioning')}
+              </button>
+            ) : null}
+            {provisioningMessage ? <div className="callout compact">{provisioningMessage}</div> : null}
+          </>
+        )}
       </section>
 
       <section className="two-column">
@@ -382,11 +567,31 @@ export function ServiceDetailPage() {
           <button className="button danger" disabled={pending} type="button" onClick={() => void cancelService()}>
             {text.services.cancel}
           </button>
+
+          <button
+            className="button primary"
+            disabled={renewingService || !canRenewService}
+            type="button"
+            onClick={() => void renewService(renewActionName)}
+          >
+            {renewingService
+              ? (zh ? '续费处理中...' : 'Renewing...')
+              : (zh ? '续费服务' : 'Renew service')}
+          </button>
+          {!canRenewService ? (
+            <p className="muted">
+              {provisioningInFlight
+                ? (zh ? '服务正在开通中，开通完成后可续费。' : 'Renewal will be available after provisioning completes.')
+                : (zh ? '当前服务未开放续费动作。' : 'Renewal action is not available for this service.')}
+            </p>
+          ) : null}
         </article>
 
         <article className="panel stack-12">
           <p className="eyebrow">{text.nav.invoices}</p>
-          {invoices.map((invoice) => (
+          {invoices.length === 0 ? (
+            <div className="callout compact">{text.invoices.noInvoices}</div>
+          ) : invoices.map((invoice) => (
             <Link className="callout compact" key={invoice.id} to={`/invoices/${invoice.id}`}>
               #{invoice.number ?? invoice.id} - {invoice.formattedTotal}
             </Link>
@@ -404,7 +609,7 @@ export function ServiceDetailPage() {
             <div className="callout">{friendlyServerError(serverError, locale)}</div>
           ) : (
             <div className="detail-grid">
-              <div><span>{zh ? 'Server Ref' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>
+              <div><span>{zh ? '服务器映射' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>
               <div><span>{zh ? '运行状态' : 'State'}</span><strong>{convoyState.state}</strong></div>
               <div><span>{zh ? 'IP 地址' : 'IP address'}</span><strong>{convoyState.ip}</strong></div>
               <div><span>{zh ? '锁定状态' : 'Locked'}</span><strong>{convoyState.locked === null ? '-' : (convoyState.locked ? (zh ? '是' : 'Yes') : (zh ? '否' : 'No'))}</strong></div>
@@ -422,61 +627,70 @@ export function ServiceDetailPage() {
           <div className="action-grid">
             <button
               className="button secondary"
-              disabled={serverBusy !== null || !serverCapabilities.actionBridge.power}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
               type="button"
               onClick={() => void runServerAction('start')}
             >
-              {serverBusy === 'start' ? `${text.common.pending}...` : (zh ? '开机 Start' : 'Start')}
+              {serverBusy === 'start' ? `${text.common.pending}...` : (zh ? '开机' : 'Start')}
             </button>
             <button
               className="button secondary"
-              disabled={serverBusy !== null || !serverCapabilities.actionBridge.power}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
               type="button"
               onClick={() => void runServerAction('stop')}
             >
-              {serverBusy === 'stop' ? `${text.common.pending}...` : (zh ? '关机 Stop' : 'Stop')}
+              {serverBusy === 'stop' ? `${text.common.pending}...` : (zh ? '关机' : 'Stop')}
             </button>
             <button
               className="button secondary"
-              disabled={serverBusy !== null || !serverCapabilities.actionBridge.power}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
               type="button"
               onClick={() => void runServerAction('restart')}
             >
-              {serverBusy === 'restart' ? `${text.common.pending}...` : (zh ? '重启 Restart' : 'Restart')}
+              {serverBusy === 'restart' ? `${text.common.pending}...` : (zh ? '重启' : 'Restart')}
             </button>
             <button
               className="button secondary"
-              disabled={serverBusy !== null || !serverCapabilities.actionBridge.reinstall}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.reinstall}
               type="button"
               onClick={() => void runServerAction('reinstall')}
             >
-              {serverBusy === 'reinstall' ? `${text.common.pending}...` : (zh ? '重装系统 Reinstall' : 'Reinstall')}
+              {serverBusy === 'reinstall' ? `${text.common.pending}...` : (zh ? '重装系统' : 'Reinstall')}
             </button>
             <button
               className="button secondary"
-              disabled={serverBusy !== null || !serverCapabilities.actionBridge.revealPassword}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.revealPassword}
               type="button"
               onClick={() => void runServerAction('reveal-password')}
             >
-              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : (zh ? '显示密码 Reveal Password' : 'Reveal password')}
+              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : (zh ? '显示密码' : 'Reveal password')}
             </button>
             <button
               className="button ghost"
-              disabled={serverBusy !== null || !serverCapabilities.application.suspend}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.suspend}
               type="button"
               onClick={() => void runServerAction('suspend')}
             >
-              {serverBusy === 'suspend' ? `${text.common.pending}...` : (zh ? '暂停 Suspend' : 'Suspend')}
+              {serverBusy === 'suspend' ? `${text.common.pending}...` : (zh ? '暂停' : 'Suspend')}
             </button>
             <button
               className="button ghost"
-              disabled={serverBusy !== null || !serverCapabilities.application.unsuspend}
+              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.unsuspend}
               type="button"
               onClick={() => void runServerAction('unsuspend')}
             >
-              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : (zh ? '解除暂停 Unsuspend' : 'Unsuspend')}
+              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : (zh ? '解除暂停' : 'Unsuspend')}
             </button>
           </div>
+          {!canRunServerActions ? (
+            <div className="callout compact">
+              {provisioningInFlight
+                ? (zh ? '服务正在开通中，暂不可执行服务器操作。' : 'Server actions are disabled while provisioning is in progress.')
+                : provisioningCanRetry
+                  ? (zh ? '服务开通失败，请先在上方重试开通。' : 'Provisioning failed. Retry provisioning before server actions.')
+                  : (zh ? '服务器映射尚未完成，暂不可执行服务器操作。' : 'Server mapping is not ready yet, so actions are currently unavailable.')}
+            </div>
+          ) : null}
           {revealedPassword ? (
             <div className="callout compact">
               <strong>{zh ? '临时密码：' : 'Temporary password: '}</strong>

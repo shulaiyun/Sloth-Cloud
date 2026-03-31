@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
@@ -55,7 +55,11 @@ export function InvoiceDetailPage() {
 
         setInvoiceState(refreshed.data.invoice);
         if (isInvoicePaid(refreshed.data.invoice.status, refreshed.data.invoice.remaining)) {
-          setMessage(locale.startsWith('zh') ? '支付已确认，账单状态已更新。' : 'Payment confirmed and invoice status updated.');
+          setMessage(
+            locale.startsWith('zh')
+              ? '支付已确认，账单状态已更新。'
+              : 'Payment confirmed and invoice status updated.',
+          );
           window.clearInterval(timer);
         }
       } catch {
@@ -134,8 +138,9 @@ export function InvoiceDetailPage() {
 
   const invoice = invoiceState ?? data.data.invoice;
   const paid = isInvoicePaid(invoice.status, invoice.remaining);
+  const zh = locale.startsWith('zh');
 
-  const relatedServiceNames = (() => {
+  const relatedServiceNames = useMemo(() => {
     const candidates = new Set<string>();
 
     data.data.recurringServices.forEach((service) => {
@@ -153,11 +158,9 @@ export function InvoiceDetailPage() {
     });
 
     return Array.from(candidates);
-  })();
+  }, [data.data.recurringServices, invoice.items, locale]);
 
-  const paidMessage = locale.startsWith('zh')
-    ? '✅ 支付成功，账单已结清。'
-    : '✅ Payment successful. This invoice is settled.';
+  const paidMessage = zh ? '✅ 支付成功，账单已结清。' : '✅ Payment successful. This invoice is settled.';
 
   return (
     <div className="stack-24">
@@ -174,7 +177,7 @@ export function InvoiceDetailPage() {
         <article className="panel stack-16">
           {relatedServiceNames.length > 0 ? (
             <div className="callout compact">
-              <strong>{locale.startsWith('zh') ? '关联产品/服务' : 'Related product / service'}</strong>
+              <strong>{zh ? '关联产品 / 服务' : 'Related product / service'}</strong>
               <ul className="invoice-related-list">
                 {relatedServiceNames.map((name) => (
                   <li key={name}>{name}</li>
@@ -197,7 +200,7 @@ export function InvoiceDetailPage() {
             <div className="callout callout-success">
               <strong>{paidMessage}</strong>
               <p>
-                {locale.startsWith('zh')
+                {zh
                   ? '你可以前往服务页查看该账单对应的开通状态。'
                   : 'You can open the services page to check provisioning status.'}
               </p>
@@ -209,7 +212,7 @@ export function InvoiceDetailPage() {
             <>
               {data.data.gateways.length > 0 ? (
                 <label className="field">
-                  <span>{locale.startsWith('zh') ? '支付网关' : 'Payment gateway'}</span>
+                  <span>{zh ? '支付网关' : 'Payment gateway'}</span>
                   <select
                     className="text-input select-input"
                     value={selectedGatewayId}
@@ -224,7 +227,7 @@ export function InvoiceDetailPage() {
                 </label>
               ) : (
                 <div className="callout compact">
-                  {locale.startsWith('zh')
+                  {zh
                     ? '当前账单没有可用网关，请在 Paymenter 后台启用并绑定支付网关。'
                     : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
                 </div>
@@ -241,13 +244,13 @@ export function InvoiceDetailPage() {
                 onClick={() => void payWithGateway()}
               >
                 {payResult?.data.redirectUrl
-                  ? (locale.startsWith('zh') ? '继续支付' : 'Continue payment')
+                  ? (zh ? '继续支付' : 'Continue payment')
                   : text.invoices.payWithGateway}
               </button>
 
               {payResult?.data.redirectUrl ? (
                 <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-                  {locale.startsWith('zh') ? '打开支付页面（新标签）' : 'Open payment page in new tab'}
+                  {zh ? '打开支付页面（新标签）' : 'Open payment page in new tab'}
                 </a>
               ) : null}
             </>

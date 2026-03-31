@@ -441,6 +441,36 @@ export interface ServiceResponse {
   meta: ApiMeta;
 }
 
+export interface ProvisioningJobSummary {
+  id: string;
+  status: string;
+  provider: string;
+  attemptCount: number;
+  errorMessage: string | null;
+  lastAttemptAt: string | null;
+  completedAt: string | null;
+  createdAt: string | null;
+}
+
+export interface ServiceProvisioningResponse {
+  data: {
+    serviceId: string;
+    latest: ProvisioningJobSummary | null;
+    history: ProvisioningJobSummary[];
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceProvisioningRetryResponse {
+  message: string;
+  data: {
+    jobId: string;
+    status: string;
+    attemptCount: number;
+  };
+  meta: ApiMeta;
+}
+
 export interface InvoicesResponse {
   data: InvoiceSummary[];
   pagination: PaginationMeta | null;

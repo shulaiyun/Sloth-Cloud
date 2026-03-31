@@ -38,7 +38,7 @@ function serviceStatusLabel(status: string, locale: string) {
   const zh = locale.startsWith('zh');
 
   if (key === 'active') return zh ? '运行中' : 'Active';
-  if (key === 'pending') return zh ? '待开通' : 'Pending';
+  if (key === 'pending') return zh ? '开通中' : 'Provisioning';
   if (key === 'suspended') return zh ? '已暂停' : 'Suspended';
   if (key === 'cancelled') return zh ? '已取消' : 'Cancelled';
   return zh ? '未知状态' : 'Unknown';
@@ -60,9 +60,10 @@ export function ServicesPage() {
   const [statusFilter, setStatusFilter] = useState<ServiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<ServiceSort>('status');
   const services = data?.data ?? [];
+  const zh = locale.startsWith('zh');
 
   const statusOptions: Array<{ value: ServiceStatusFilter; label: string }> = [
-    { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
+    { value: 'all', label: zh ? '全部状态' : 'All statuses' },
     { value: 'active', label: serviceStatusLabel('active', locale) },
     { value: 'pending', label: serviceStatusLabel('pending', locale) },
     { value: 'suspended', label: serviceStatusLabel('suspended', locale) },
@@ -71,10 +72,10 @@ export function ServicesPage() {
   ];
 
   const sortOptions: Array<{ value: ServiceSort; label: string }> = [
-    { value: 'status', label: locale.startsWith('zh') ? '按状态' : 'Sort by status' },
-    { value: 'price-desc', label: locale.startsWith('zh') ? '价格从高到低' : 'Price high to low' },
-    { value: 'price-asc', label: locale.startsWith('zh') ? '价格从低到高' : 'Price low to high' },
-    { value: 'expires-asc', label: locale.startsWith('zh') ? '即将到期优先' : 'Nearest expiry first' },
+    { value: 'status', label: zh ? '按状态' : 'Sort by status' },
+    { value: 'price-desc', label: zh ? '价格从高到低' : 'Price high to low' },
+    { value: 'price-asc', label: zh ? '价格从低到高' : 'Price low to high' },
+    { value: 'expires-asc', label: zh ? '即将到期优先' : 'Nearest expiry first' },
   ];
 
   const visibleServices = useMemo(() => {
@@ -155,11 +156,11 @@ export function ServicesPage() {
       <section className="panel stack-12">
         <div className="filter-toolbar">
           <label className="filter-control">
-            <span>{locale.startsWith('zh') ? '搜索' : 'Search'}</span>
+            <span>{zh ? '搜索' : 'Search'}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={locale.startsWith('zh') ? '输入服务名、产品名或 ID' : 'Search by service, product, or ID'}
+              placeholder={zh ? '输入服务名、产品名或 ID' : 'Search by service, product, or ID'}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -178,7 +179,7 @@ export function ServicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{locale.startsWith('zh') ? '排序' : 'Sort'}</span>
+            <span>{zh ? '排序' : 'Sort'}</span>
             <select
               className="text-input select-input"
               value={sortBy}
@@ -228,4 +229,3 @@ export function ServicesPage() {
     </div>
   );
 }
-

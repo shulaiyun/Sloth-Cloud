@@ -6,5 +6,5 @@ export const brand = {
   sloganCn: '树懒云——一切皆服务',
   sloganEn: 'Shulai Cloud - Everything as a Service',
   topbarTag: 'Premium Headless VPS Cloud',
-  heroNote: 'Headless 计费核心、目录接口与用户会话由边缘 BFF 统一承载。',
+  heroNote: '统一计费、订单、开通编排与服务控制，面向可规模化运营。',
 } as const;

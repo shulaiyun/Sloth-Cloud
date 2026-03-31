@@ -51,9 +51,10 @@ export function InvoicesPage() {
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<InvoiceSort>('created-desc');
   const invoices = data?.data ?? [];
+  const zh = locale.startsWith('zh');
 
   const statusOptions: Array<{ value: InvoiceStatusFilter; label: string }> = [
-    { value: 'all', label: locale.startsWith('zh') ? '全部状态' : 'All statuses' },
+    { value: 'all', label: zh ? '全部状态' : 'All statuses' },
     { value: 'paid', label: invoiceStatusLabel('paid', locale) },
     { value: 'pending', label: invoiceStatusLabel('pending', locale) },
     { value: 'cancelled', label: invoiceStatusLabel('cancelled', locale) },
@@ -61,12 +62,13 @@ export function InvoicesPage() {
     { value: 'unknown', label: invoiceStatusLabel('unknown', locale) },
   ];
   const sortOptions: Array<{ value: InvoiceSort; label: string }> = [
-    { value: 'created-desc', label: locale.startsWith('zh') ? '最新开票优先' : 'Newest invoices first' },
-    { value: 'due-asc', label: locale.startsWith('zh') ? '最早到期优先' : 'Nearest due date first' },
-    { value: 'amount-desc', label: locale.startsWith('zh') ? '金额从高到低' : 'Amount high to low' },
-    { value: 'amount-asc', label: locale.startsWith('zh') ? '金额从低到高' : 'Amount low to high' },
-    { value: 'status', label: locale.startsWith('zh') ? '按状态' : 'Sort by status' },
+    { value: 'created-desc', label: zh ? '最新开票优先' : 'Newest invoices first' },
+    { value: 'due-asc', label: zh ? '最早到期优先' : 'Nearest due date first' },
+    { value: 'amount-desc', label: zh ? '金额从高到低' : 'Amount high to low' },
+    { value: 'amount-asc', label: zh ? '金额从低到高' : 'Amount low to high' },
+    { value: 'status', label: zh ? '按状态' : 'Sort by status' },
   ];
+
   const visibleInvoices = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     const filtered = invoices.filter((invoice) => {
@@ -118,7 +120,7 @@ export function InvoicesPage() {
       const rightCreated = right.createdAt ? new Date(right.createdAt).getTime() : 0;
       return rightCreated - leftCreated;
     });
-  }, [invoices, search, statusFilter, sortBy]);
+  }, [invoices, search, sortBy, statusFilter]);
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
@@ -141,11 +143,11 @@ export function InvoicesPage() {
       <section className="panel stack-12">
         <div className="filter-toolbar">
           <label className="filter-control">
-            <span>{locale.startsWith('zh') ? '搜索' : 'Search'}</span>
+            <span>{zh ? '搜索' : 'Search'}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={locale.startsWith('zh') ? '输入账单编号、用户或金额' : 'Search by invoice number, user, or amount'}
+              placeholder={zh ? '输入账单编号、用户或金额' : 'Search by invoice number, user, or amount'}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -164,7 +166,7 @@ export function InvoicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{locale.startsWith('zh') ? '排序' : 'Sort'}</span>
+            <span>{zh ? '排序' : 'Sort'}</span>
             <select
               className="text-input select-input"
               value={sortBy}
@@ -193,7 +195,7 @@ export function InvoicesPage() {
                 </span>
               </p>
               <p className="muted">
-                {locale.startsWith('zh') ? '到期' : 'Due'}: {formatDate(invoice.dueAt)}
+                {zh ? '到期' : 'Due'}: {formatDate(invoice.dueAt)}
               </p>
               <strong>{invoice.formattedTotal}</strong>
               <Link className="button ghost" to={`/invoices/${invoice.id}`}>{text.common.inspect}</Link>

@@ -149,7 +149,7 @@ const enUs: TextContent = {
     error: 'Request failed',
     backToCatalog: 'Back to store',
     sourceMode: 'Data source',
-    mock: 'Mock mode',
+    mock: 'Mock',
     live: 'Live',
     themeDark: 'Dark',
     themeLight: 'Light',
@@ -158,7 +158,7 @@ const enUs: TextContent = {
     hello: 'Hello',
     view: 'View',
     open: 'Open',
-    inspect: 'Inspect',
+    inspect: 'Details',
     stock: 'Stock',
     products: 'products',
     defaultPlan: 'Default plan',
@@ -176,15 +176,15 @@ const enUs: TextContent = {
     total: 'Total',
   },
   home: {
-    kicker: 'Sloth Cloud Headless Client',
-    title: 'Built like a premium VPS storefront, not a default panel skin',
-    subtitle: 'Modern UX powered by a headless billing core and edge BFF.',
+    kicker: 'Sloth Cloud',
+    title: 'A premium VPS platform built for real operations',
+    subtitle: 'Order, payment, provisioning, and service control are unified in one branded client.',
     primaryCta: 'Browse store',
     secondaryCta: 'Sign in',
-    featuredTitle: 'Live products',
-    featuredSubtitle: 'These cards are rendered from headless catalog APIs.',
-    categoryTitle: 'Live categories',
-    categorySubtitle: 'Categories and prices are no longer bound to old Livewire pages.',
+    featuredTitle: 'Featured products',
+    featuredSubtitle: 'Products are rendered from real catalog data.',
+    categoryTitle: 'Categories',
+    categorySubtitle: 'Browse category-level offerings and capacity.',
   },
   catalog: {
     title: 'Store / Categories',
@@ -213,7 +213,7 @@ const enUs: TextContent = {
     placeOrder: 'Submit order',
     placingOrder: 'Submitting...',
     orderCreated: 'Order created successfully.',
-    redirectTo: 'Open target',
+    redirectTo: 'Open target page',
   },
   services: {
     title: 'My services',
@@ -247,7 +247,7 @@ const enUs: TextContent = {
     needAccount: 'Need an account? Register',
   },
   footer: {
-    statement: '树懒云前台。认证、商品、结算、服务、账单均由边缘 BFF 对接真实数据。',
+    statement: 'Sloth Cloud frontend. Auth, catalog, checkout, services, and invoices are served by the edge BFF.',
   },
 };
 
@@ -279,12 +279,12 @@ const zhCn: TextContent = {
     open: '打开',
     inspect: '详情',
     stock: '库存',
-    products: '个产品',
+    products: '个商品',
     defaultPlan: '默认套餐',
     customBilling: '自定义周期',
     yes: '是',
     no: '否',
-    pending: '待处理',
+    pending: '处理中',
     slug: '标识',
     allowQuantity: '数量模式',
     perUserLimit: '单用户限制',
@@ -295,21 +295,21 @@ const zhCn: TextContent = {
     total: '总计',
   },
   home: {
-    kicker: '树懒云 HEADLESS 客户端',
+    kicker: '树懒云',
     title: '更像专业 VPS 服务商，而不是默认面板皮肤',
-    subtitle: '现代品牌体验，Headless 计费核心，长期可扩展架构。',
+    subtitle: '从下单、支付、开通到服务控制，全部在树懒云前台一体完成。',
     primaryCta: '进入商店',
     secondaryCta: '立即登录',
-    featuredTitle: '真实商品',
-    featuredSubtitle: '这些卡片来自新的 Headless 商品接口。',
-    categoryTitle: '真实分类',
-    categorySubtitle: '分类、商品和价格不再绑定旧的 Livewire 页面。',
+    featuredTitle: '精选商品',
+    featuredSubtitle: '以下商品来自真实目录数据。',
+    categoryTitle: '产品分类',
+    categorySubtitle: '按分类快速定位可售资源。',
   },
   catalog: {
     title: '商店 / 分类',
     subtitle: '按分类浏览真实商品。',
     allProducts: '全部商品',
-    noProducts: '当前分类下暂无商品。',
+    noProducts: '当前分类下暂时没有商品。',
   },
   product: {
     summary: '购买概览',
@@ -332,7 +332,7 @@ const zhCn: TextContent = {
     placeOrder: '提交订单',
     placingOrder: '提交中...',
     orderCreated: '订单创建成功。',
-    redirectTo: '打开目标页',
+    redirectTo: '打开目标页面',
   },
   services: {
     title: '我的服务',
@@ -391,7 +391,7 @@ const zhTw: TextContent = {
   },
   home: {
     ...zhCn.home,
-    subtitle: '現代品牌體驗，Headless 計費核心，長期可擴展架構。',
+    subtitle: '從下單、支付、開通到服務控制，全部在樹懶雲前台一體完成。',
   },
   catalog: {
     ...zhCn.catalog,
@@ -400,11 +400,11 @@ const zhTw: TextContent = {
   },
   product: {
     ...zhCn.product,
-    summary: '購買概覽',
+    summary: '購買總覽',
     plans: '計費週期',
-    config: '購買設定',
+    config: '購買配置',
     details: '產品詳情',
-    configEmpty: '此商品目前沒有額外設定項目。',
+    configEmpty: '此商品目前沒有額外配置項。',
   },
   checkout: {
     ...zhCn.checkout,
@@ -413,7 +413,7 @@ const zhTw: TextContent = {
   },
   services: {
     ...zhCn.services,
-    subtitle: '管理已購買服務與執行資訊。',
+    subtitle: '管理已購買服務與運行資訊。',
     noServices: '暫無服務。',
   },
   invoices: {
@@ -429,189 +429,18 @@ const zhTw: TextContent = {
     needAccount: '還沒有帳號？去註冊',
     alreadyHaveAccount: '已有帳號？去登入',
   },
-};
-
-const jaJp: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'ホーム',
-    catalog: 'ストア',
-    cart: 'カート',
-    checkout: '決済',
-    services: 'サービス',
-    invoices: '請求書',
-    login: 'ログイン',
-    register: '登録',
-    logout: 'ログアウト',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'データを読み込み中...',
-    themeDark: 'ダーク',
-    themeLight: 'ライト',
-    hello: 'こんにちは',
-    submit: '送信',
-    remove: '削除',
-    quantity: '数量',
-    total: '合計',
+  footer: {
+    statement: '樹懶雲前台。認證、商品、結算、服務、帳單均由邊緣 BFF 對接真實資料。',
   },
 };
 
-const koKr: TextContent = {
-  ...enUs,
-  nav: {
-    home: '홈',
-    catalog: '스토어',
-    cart: '장바구니',
-    checkout: '결제',
-    services: '서비스',
-    invoices: '청구서',
-    login: '로그인',
-    register: '회원가입',
-    logout: '로그아웃',
-  },
-  common: {
-    ...enUs.common,
-    loading: '데이터를 불러오는 중...',
-    themeDark: '다크',
-    themeLight: '라이트',
-    hello: '안녕하세요',
-    submit: '제출',
-    remove: '삭제',
-    quantity: '수량',
-    total: '합계',
-  },
-};
-
-const deDe: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'Start',
-    catalog: 'Shop',
-    cart: 'Warenkorb',
-    checkout: 'Kasse',
-    services: 'Dienste',
-    invoices: 'Rechnungen',
-    login: 'Anmelden',
-    register: 'Registrieren',
-    logout: 'Abmelden',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'Lade Daten...',
-    themeDark: 'Dunkel',
-    themeLight: 'Hell',
-    hello: 'Hallo',
-    submit: 'Senden',
-    remove: 'Entfernen',
-    quantity: 'Menge',
-    total: 'Summe',
-  },
-};
-
-const frFr: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'Accueil',
-    catalog: 'Boutique',
-    cart: 'Panier',
-    checkout: 'Paiement',
-    services: 'Services',
-    invoices: 'Factures',
-    login: 'Connexion',
-    register: 'Inscription',
-    logout: 'Déconnexion',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'Chargement des données...',
-    themeDark: 'Sombre',
-    themeLight: 'Clair',
-    hello: 'Bonjour',
-    submit: 'Valider',
-    remove: 'Supprimer',
-    quantity: 'Quantité',
-    total: 'Total',
-  },
-};
-
-const esEs: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'Inicio',
-    catalog: 'Tienda',
-    cart: 'Carrito',
-    checkout: 'Pago',
-    services: 'Servicios',
-    invoices: 'Facturas',
-    login: 'Entrar',
-    register: 'Registro',
-    logout: 'Salir',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'Cargando datos...',
-    themeDark: 'Oscuro',
-    themeLight: 'Claro',
-    hello: 'Hola',
-    submit: 'Enviar',
-    remove: 'Quitar',
-    quantity: 'Cantidad',
-    total: 'Total',
-  },
-};
-
-const ruRu: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'Главная',
-    catalog: 'Магазин',
-    cart: 'Корзина',
-    checkout: 'Оплата',
-    services: 'Сервисы',
-    invoices: 'Счета',
-    login: 'Вход',
-    register: 'Регистрация',
-    logout: 'Выход',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'Загрузка данных...',
-    themeDark: 'Тёмная',
-    themeLight: 'Светлая',
-    hello: 'Здравствуйте',
-    submit: 'Отправить',
-    remove: 'Удалить',
-    quantity: 'Количество',
-    total: 'Итого',
-  },
-};
-
-const ptBr: TextContent = {
-  ...enUs,
-  nav: {
-    home: 'Início',
-    catalog: 'Loja',
-    cart: 'Carrinho',
-    checkout: 'Checkout',
-    services: 'Serviços',
-    invoices: 'Faturas',
-    login: 'Entrar',
-    register: 'Registrar',
-    logout: 'Sair',
-  },
-  common: {
-    ...enUs.common,
-    loading: 'Carregando dados...',
-    themeDark: 'Escuro',
-    themeLight: 'Claro',
-    hello: 'Olá',
-    submit: 'Enviar',
-    remove: 'Remover',
-    quantity: 'Quantidade',
-    total: 'Total',
-  },
-};
+const jaJp: TextContent = { ...enUs };
+const koKr: TextContent = { ...enUs };
+const deDe: TextContent = { ...enUs };
+const frFr: TextContent = { ...enUs };
+const esEs: TextContent = { ...enUs };
+const ruRu: TextContent = { ...enUs };
+const ptBr: TextContent = { ...enUs };
 
 export const content: Record<Locale, TextContent> = {
   'zh-CN': zhCn,
