@@ -8,12 +8,29 @@ import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { HomeResponse } from '../lib/types';
 
-const emptyProductsTitle = '\u6682\u65e0\u53ef\u552e\u5546\u54c1';
-const emptyProductsBody = '\u8bf7\u5728\u7ba1\u7406\u540e\u53f0\u521b\u5efa\u5546\u54c1\u5e76\u786e\u4fdd\u672a\u52fe\u9009\u201c\u9690\u85cf\u4ea7\u54c1\u201d\uff0c\u540c\u65f6\u81f3\u5c11\u914d\u7f6e\u4e00\u4e2a\u53ef\u7528\u4ef7\u683c\u3002';
-const refreshCatalogText = '\u5237\u65b0\u5546\u5e97\u89c6\u56fe';
-const emptyCategoriesTitle = '\u6682\u65e0\u53ef\u89c1\u5206\u7c7b';
-const emptyCategoriesBody = '\u5206\u7c7b\u5df2\u7ecf\u5bf9\u63a5\u771f\u5b9e API\u3002\u82e5\u4ecd\u4e3a 0\uff0c\u8bf7\u68c0\u67e5\u5206\u7c7b\u4e0b\u662f\u5426\u7ed1\u5b9a\u4e86\u53ef\u89c1\u5546\u54c1\u3002';
-const homeHeadlessLabel = `Headless \u5ba2\u6237\u7aef`;
+function emptyProductsTitle(locale: string) {
+  return locale.startsWith('zh')
+    ? '\u6682\u65e0\u53ef\u552e\u5546\u54c1'
+    : 'No products available yet';
+}
+
+function emptyProductsBody(locale: string) {
+  return locale.startsWith('zh')
+    ? '\u8bf7\u5728\u8ba1\u8d39\u540e\u53f0\u5b8c\u6210\u5546\u54c1\u4e0a\u67b6\u4e0e\u4ef7\u683c\u914d\u7f6e\u540e\u518d\u91cd\u8bd5\u3002'
+    : 'Please publish products and pricing in billing admin, then refresh this page.';
+}
+
+function emptyCategoriesTitle(locale: string) {
+  return locale.startsWith('zh')
+    ? '\u6682\u65e0\u53ef\u89c1\u5206\u7c7b'
+    : 'No visible categories';
+}
+
+function emptyCategoriesBody(locale: string) {
+  return locale.startsWith('zh')
+    ? '\u8bf7\u68c0\u67e5\u5206\u7c7b\u662f\u5426\u7ed1\u5b9a\u53ef\u89c1\u5546\u54c1\u3002'
+    : 'Check whether categories are linked to visible products.';
+}
 
 export function HomePage() {
   const { text, formatMoney, locale } = useSite();
@@ -28,19 +45,21 @@ export function HomePage() {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
 
-  const hasProducts = data.data.featuredProducts.length > 0;
-  const hasCategories = data.data.categories.length > 0;
+  const featuredProducts = data.data.featuredProducts;
+  const categories = data.data.categories;
+  const hasProducts = featuredProducts.length > 0;
+  const hasCategories = categories.length > 0;
 
   const metricCards = [
     {
       label: text.home.categoryTitle,
-      value: String(data.data.categories.length),
+      value: String(categories.length),
       hint: text.home.categorySubtitle,
       tone: 'catalog',
     },
     {
       label: text.home.featuredTitle,
-      value: String(data.data.featuredProducts.length),
+      value: String(featuredProducts.length),
       hint: text.home.featuredSubtitle,
       tone: 'products',
     },
@@ -60,8 +79,14 @@ export function HomePage() {
           <h1>{text.home.title}</h1>
           <p>{text.home.subtitle}</p>
           <div className="action-row">
-            <Link className="button primary" to="/catalog">{text.home.primaryCta}</Link>
-            {!isAuthenticated ? <Link className="button secondary" to="/login">{text.home.secondaryCta}</Link> : null}
+            <Link className="button primary" to="/catalog">
+              {text.home.primaryCta}
+            </Link>
+            {!isAuthenticated ? (
+              <Link className="button secondary" to="/login">
+                {text.home.secondaryCta}
+              </Link>
+            ) : null}
           </div>
         </div>
 
@@ -81,8 +106,8 @@ export function HomePage() {
             </div>
             <div className="brand-signal-list" aria-label="Brand capability highlights">
               <span className="brand-signal">Headless Billing</span>
-              <span className="brand-signal">Catalog API</span>
-              <span className="brand-signal">Edge Session</span>
+              <span className="brand-signal">Provisioning Orchestrator</span>
+              <span className="brand-signal">Service Control API</span>
             </div>
           </div>
         </div>
@@ -92,7 +117,7 @@ export function HomePage() {
         <div className="section-heading">
           <div>
             <p className="section-kicker">{text.common.sourceMode}</p>
-            <h2>{`${brand.nameCn} ${homeHeadlessLabel}`}</h2>
+            <h2>{`${brand.nameCn} Headless`}</h2>
           </div>
         </div>
         <div className="metrics-grid">
@@ -114,25 +139,39 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid product-grid">
-          {hasProducts ? data.data.featuredProducts.map((product) => (
-            <article className="product-card" key={product.id}>
-              <div className="chip-row">
-                {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
-                <span className="chip">{localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}</span>
-              </div>
-              <h3>{localizeText(product.name, locale, product.name)}</h3>
-              <p>{localizeText(product.description, locale, product.description)}</p>
-              <div className="card-footer">
-                <strong>{formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}</strong>
-                <Link className="button ghost" to={`/product/${product.slug}`}>{text.common.view}</Link>
-              </div>
-            </article>
-          )) : (
+          {hasProducts ? (
+            featuredProducts.map((product) => (
+              <article className="product-card" key={product.id}>
+                <div className="chip-row">
+                  {product.category ? (
+                    <span className="chip">
+                      {localizeText(product.category.name, locale, product.category.name)}
+                    </span>
+                  ) : null}
+                  <span className="chip">
+                    {localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}
+                  </span>
+                </div>
+                <h3>{localizeText(product.name, locale, product.name)}</h3>
+                <p>{localizeText(product.description, locale, product.description)}</p>
+                <div className="card-footer">
+                  <strong>
+                    {formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}
+                  </strong>
+                  <Link className="button ghost" to={`/product/${product.slug}`}>
+                    {text.common.view}
+                  </Link>
+                </div>
+              </article>
+            ))
+          ) : (
             <article className="product-card">
-              <h3>{emptyProductsTitle}</h3>
-              <p>{emptyProductsBody}</p>
+              <h3>{emptyProductsTitle(locale)}</h3>
+              <p>{emptyProductsBody(locale)}</p>
               <div className="card-footer">
-                <Link className="button secondary" to="/catalog">{refreshCatalogText}</Link>
+                <Link className="button secondary" to="/catalog">
+                  {text.nav.catalog}
+                </Link>
               </div>
             </article>
           )}
@@ -147,17 +186,23 @@ export function HomePage() {
           </div>
         </div>
         <div className="card-grid category-grid">
-          {hasCategories ? data.data.categories.map((category) => (
-            <article className="category-card" key={category.id}>
-              <h3>{localizeText(category.name, locale, category.name)}</h3>
-              <p>{localizeText(category.description, locale, category.description)}</p>
-              <strong>{category.productCount} {text.common.products}</strong>
-              <Link className="button ghost" to={`/catalog/${category.slug}`}>{text.common.open}</Link>
-            </article>
-          )) : (
+          {hasCategories ? (
+            categories.map((category) => (
+              <article className="category-card" key={category.id}>
+                <h3>{localizeText(category.name, locale, category.name)}</h3>
+                <p>{localizeText(category.description, locale, category.description)}</p>
+                <strong>
+                  {category.productCount} {text.common.products}
+                </strong>
+                <Link className="button ghost" to={`/catalog/${category.slug}`}>
+                  {text.common.open}
+                </Link>
+              </article>
+            ))
+          ) : (
             <article className="category-card">
-              <h3>{emptyCategoriesTitle}</h3>
-              <p>{emptyCategoriesBody}</p>
+              <h3>{emptyCategoriesTitle(locale)}</h3>
+              <p>{emptyCategoriesBody(locale)}</p>
             </article>
           )}
         </div>

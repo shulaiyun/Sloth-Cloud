@@ -119,19 +119,13 @@ function pickBoolean(value: unknown, paths: string[]) {
 }
 
 function formatPercent(value: number | null) {
-  if (value === null) {
-    return '-';
-  }
-
+  if (value === null) return '-';
   const normalized = value > 1 ? value : value * 100;
   return `${normalized.toFixed(1)}%`;
 }
 
 function formatBytes(value: number | null) {
-  if (value === null || value <= 0) {
-    return '-';
-  }
-
+  if (value === null || value <= 0) return '-';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let bytes = value;
   let unitIndex = 0;
@@ -139,13 +133,11 @@ function formatBytes(value: number | null) {
     bytes /= 1024;
     unitIndex += 1;
   }
-
   return `${bytes.toFixed(bytes >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function statusClassName(status: string) {
   const normalized = status.trim().toLowerCase();
-
   if (normalized === 'active') return 'status-active';
   if (normalized === 'pending') return 'status-pending';
   if (normalized === 'suspended') return 'status-suspended';
@@ -158,19 +150,12 @@ function normalizeActionName(action: string) {
 }
 
 function readActionName(button: Record<string, unknown>) {
-  const candidates = [
-    button.function,
-    button.action,
-    button.name,
-    button.label,
-  ];
-
+  const candidates = [button.function, button.action, button.name, button.label];
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.trim() !== '') {
       return candidate.trim();
     }
   }
-
   return null;
 }
 
@@ -179,9 +164,7 @@ function findActionName(buttons: Array<Record<string, unknown>>, aliases: string
 
   for (const button of buttons) {
     const name = readActionName(button);
-    if (!name) {
-      continue;
-    }
+    if (!name) continue;
 
     const normalized = normalizeActionName(name);
     if (normalizedAliases.some((alias) => normalized.includes(alias))) {
@@ -205,32 +188,32 @@ function extractRevealedPassword(payload: unknown) {
 }
 
 function friendlyServerError(rawError: string | null | undefined, locale: string) {
-  if (!rawError) {
-    return null;
-  }
+  if (!rawError) return null;
 
   const lower = rawError.toLowerCase();
+  const zh = locale.startsWith('zh');
+
   if (lower.includes('409') || lower.includes('service_convoy_mapping_missing')) {
-    return locale.startsWith('zh')
-      ? '该服务尚未完成 Convoy 映射，当前不能执行服务器操作。请等待开通完成，或在后台补齐 server_uuid 映射。'
+    return zh
+      ? '\u8be5\u670d\u52a1\u5c1a\u672a\u5b8c\u6210 Convoy \u6620\u5c04\uff0c\u5f53\u524d\u4e0d\u80fd\u6267\u884c\u670d\u52a1\u5668\u64cd\u4f5c\u3002\u8bf7\u7b49\u5f85\u5f00\u901a\u5b8c\u6210\uff0c\u6216\u5728\u540e\u53f0\u8865\u9f50 server_uuid \u6620\u5c04\u3002'
       : 'This service is not mapped to a Convoy server yet. Wait for provisioning to complete or backfill server_uuid mapping.';
   }
 
   if (lower.includes('service_provisioning_pending')) {
-    return locale.startsWith('zh')
-      ? '服务正在开通中，请稍后重试。'
+    return zh
+      ? '\u670d\u52a1\u6b63\u5728\u5f00\u901a\u4e2d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002'
       : 'Service provisioning is still in progress. Please try again later.';
   }
 
   if (lower.includes('service_provisioning_failed')) {
-    return locale.startsWith('zh')
-      ? '服务开通失败，请在开通状态面板中发起重试。'
+    return zh
+      ? '\u670d\u52a1\u5f00\u901a\u5931\u8d25\uff0c\u8bf7\u5728\u5f00\u901a\u72b6\u6001\u9762\u677f\u4e2d\u53d1\u8d77\u91cd\u8bd5\u3002'
       : 'Service provisioning failed. Retry from the provisioning panel.';
   }
 
   if (lower.includes('convoy integration is disabled') || lower.includes('convoy_disabled')) {
-    return locale.startsWith('zh')
-      ? 'BFF 未启用 Convoy（CONVOY_ENABLED=false），请联系管理员。'
+    return zh
+      ? 'BFF \u672a\u542f\u7528 Convoy\uff08CONVOY_ENABLED=false\uff09\uff0c\u8bf7\u8054\u7cfb\u7ba1\u7406\u5458\u3002'
       : 'Convoy is disabled in BFF (CONVOY_ENABLED=false).';
   }
 
@@ -250,11 +233,9 @@ export function ServiceDetailPage() {
   const { data, error, loading } = useApiData<ServiceResponse>(
     serviceId ? `/api/v1/services/${serviceId}` : null,
   );
-  const {
-    data: serverData,
-    error: serverError,
-    loading: serverLoading,
-  } = useApiData<ServiceServerResponse>(serviceId ? `/api/v1/services/${serviceId}/server` : null);
+  const { data: serverData, error: serverError, loading: serverLoading } = useApiData<ServiceServerResponse>(
+    serviceId ? `/api/v1/services/${serviceId}/server` : null,
+  );
   const {
     data: provisioningData,
     error: provisioningError,
@@ -274,6 +255,8 @@ export function ServiceDetailPage() {
   const [retryingProvisioning, setRetryingProvisioning] = useState(false);
   const [provisioningMessage, setProvisioningMessage] = useState<string | null>(null);
 
+  const zh = locale.startsWith('zh');
+
   async function updateLabel() {
     if (!serviceId) return;
     setPending(true);
@@ -284,7 +267,7 @@ export function ServiceDetailPage() {
         method: 'PATCH',
         body: { label: label.trim() || null },
       });
-      setMessage(locale.startsWith('zh') ? '服务标签已更新。' : 'Service label updated.');
+      setMessage(zh ? '\u670d\u52a1\u6807\u7b7e\u5df2\u66f4\u65b0\u3002' : 'Service label updated.');
       window.location.reload();
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
@@ -306,7 +289,7 @@ export function ServiceDetailPage() {
           reason: reason || 'Requested by customer.',
         },
       });
-      setMessage(locale.startsWith('zh') ? '已提交取消请求。' : 'Cancellation requested.');
+      setMessage(zh ? '\u5df2\u63d0\u4ea4\u53d6\u6d88\u8bf7\u6c42\u3002' : 'Cancellation requested.');
       window.location.reload();
     } catch (caughtError) {
       setActionError((caughtError as ApiError).message);
@@ -317,7 +300,6 @@ export function ServiceDetailPage() {
 
   async function retryProvisioning() {
     if (!serviceId) return;
-
     setRetryingProvisioning(true);
     setProvisioningMessage(null);
     setActionError(null);
@@ -335,9 +317,7 @@ export function ServiceDetailPage() {
   }
 
   async function renewService(actionName: string | null) {
-    if (!serviceId || !actionName) {
-      return;
-    }
+    if (!serviceId || !actionName) return;
 
     setRenewingService(true);
     setActionError(null);
@@ -353,7 +333,7 @@ export function ServiceDetailPage() {
       setMessage(
         typeof response.message === 'string' && response.message.trim() !== ''
           ? response.message
-          : (locale.startsWith('zh') ? '续费请求已提交。' : 'Renewal request submitted.'),
+          : (zh ? '\u7eed\u8d39\u8bf7\u6c42\u5df2\u63d0\u4ea4\u3002' : 'Renewal request submitted.'),
       );
       window.setTimeout(() => window.location.reload(), 1200);
     } catch (caughtError) {
@@ -364,9 +344,7 @@ export function ServiceDetailPage() {
   }
 
   async function runServerAction(action: ServerAction) {
-    if (!serviceId) {
-      return;
-    }
+    if (!serviceId) return;
 
     setServerBusy(action);
     setServerMessage(null);
@@ -403,7 +381,7 @@ export function ServiceDetailPage() {
       const responseRecord = asRecord(response);
       const responseMessage = typeof responseRecord.message === 'string' && responseRecord.message.trim() !== ''
         ? responseRecord.message
-        : (locale.startsWith('zh') ? '操作执行成功。' : 'Action completed successfully.');
+        : (zh ? '\u64cd\u4f5c\u6267\u884c\u6210\u529f\u3002' : 'Action completed successfully.');
 
       if (action === 'reveal-password') {
         const password = extractRevealedPassword(responseRecord);
@@ -466,7 +444,6 @@ export function ServiceDetailPage() {
 
   const { service, invoices } = data.data;
   const serviceButtons = (data.data.actions?.buttons ?? []) as Array<Record<string, unknown>>;
-  const zh = locale.startsWith('zh');
   const provisioning = provisioningData?.data.latest ?? null;
   const provisioningStatus = (provisioning?.status ?? '').toLowerCase();
   const provisioningCanRetry = provisioningStatus === 'failed';
@@ -478,12 +455,12 @@ export function ServiceDetailPage() {
   const provisioningLabel = zh
     ? (
       provisioningStatus === 'failed'
-        ? '开通失败'
+        ? '\u5f00\u901a\u5931\u8d25'
         : provisioningStatus === 'success' || provisioningStatus === 'completed'
-          ? '开通成功'
+          ? '\u5f00\u901a\u6210\u529f'
           : provisioningStatus
-            ? '开通中'
-            : '待开通'
+            ? '\u5f00\u901a\u4e2d'
+            : '\u5f85\u5f00\u901a'
     )
     : (
       provisioningStatus === 'failed'
@@ -507,7 +484,7 @@ export function ServiceDetailPage() {
       </section>
 
       <section className="panel stack-16">
-        <p className="eyebrow">{zh ? '开通状态' : 'Provisioning status'}</p>
+        <p className="eyebrow">{zh ? '\u5f00\u901a\u72b6\u6001' : 'Provisioning status'}</p>
         {provisioningLoading ? (
           <div className="loading-card">{text.common.loading}</div>
         ) : provisioningError ? (
@@ -516,13 +493,11 @@ export function ServiceDetailPage() {
           <>
             <div className={`callout ${provisioningTone(provisioningStatus) === 'failed' ? 'error-card compact' : 'compact'}`}>
               <strong>{provisioningLabel}</strong>
-              {provisioning?.errorMessage ? (
-                <p className="muted">{provisioning?.errorMessage}</p>
-              ) : null}
+              {provisioning?.errorMessage ? <p className="muted">{provisioning.errorMessage}</p> : null}
               <p className="muted">
-                {zh ? '最近尝试' : 'Last attempt'}: {formatDate(provisioning?.lastAttemptAt ?? null)}
+                {zh ? '\u6700\u8fd1\u5c1d\u8bd5' : 'Last attempt'}: {formatDate(provisioning?.lastAttemptAt ?? null)}
                 {' · '}
-                {zh ? '尝试次数' : 'Attempts'}: {provisioning?.attemptCount ?? 0}
+                {zh ? '\u5c1d\u8bd5\u6b21\u6570' : 'Attempts'}: {provisioning?.attemptCount ?? 0}
               </p>
             </div>
             {provisioningCanRetry ? (
@@ -533,8 +508,8 @@ export function ServiceDetailPage() {
                 onClick={() => void retryProvisioning()}
               >
                 {retryingProvisioning
-                  ? (zh ? '正在重试...' : 'Retrying...')
-                  : (zh ? '重试开通' : 'Retry provisioning')}
+                  ? (zh ? '\u6b63\u5728\u91cd\u8bd5...' : 'Retrying...')
+                  : (zh ? '\u91cd\u8bd5\u5f00\u901a' : 'Retry provisioning')}
               </button>
             ) : null}
             {provisioningMessage ? <div className="callout compact">{provisioningMessage}</div> : null}
@@ -575,14 +550,14 @@ export function ServiceDetailPage() {
             onClick={() => void renewService(renewActionName)}
           >
             {renewingService
-              ? (zh ? '续费处理中...' : 'Renewing...')
-              : (zh ? '续费服务' : 'Renew service')}
+              ? (zh ? '\u7eed\u8d39\u5904\u7406\u4e2d...' : 'Renewing...')
+              : (zh ? '\u7eed\u8d39\u670d\u52a1' : 'Renew service')}
           </button>
           {!canRenewService ? (
             <p className="muted">
               {provisioningInFlight
-                ? (zh ? '服务正在开通中，开通完成后可续费。' : 'Renewal will be available after provisioning completes.')
-                : (zh ? '当前服务未开放续费动作。' : 'Renewal action is not available for this service.')}
+                ? (zh ? '\u670d\u52a1\u6b63\u5728\u5f00\u901a\u4e2d\uff0c\u5f00\u901a\u5b8c\u6210\u540e\u53ef\u7eed\u8d39\u3002' : 'Renewal will be available after provisioning completes.')
+                : (zh ? '\u5f53\u524d\u670d\u52a1\u672a\u5f00\u653e\u7eed\u8d39\u52a8\u4f5c\u3002' : 'Renewal action is not available for this service.')}
             </p>
           ) : null}
         </article>
@@ -601,7 +576,7 @@ export function ServiceDetailPage() {
 
       <section className="two-column">
         <article className="panel stack-16">
-          <p className="eyebrow">{zh ? '服务器信息' : 'Server information'}</p>
+          <p className="eyebrow">{zh ? '\u670d\u52a1\u5668\u4fe1\u606f' : 'Server information'}</p>
 
           {serverLoading ? (
             <div className="loading-card">{text.common.loading}</div>
@@ -609,21 +584,21 @@ export function ServiceDetailPage() {
             <div className="callout">{friendlyServerError(serverError, locale)}</div>
           ) : (
             <div className="detail-grid">
-              <div><span>{zh ? '服务器映射' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>
-              <div><span>{zh ? '运行状态' : 'State'}</span><strong>{convoyState.state}</strong></div>
-              <div><span>{zh ? 'IP 地址' : 'IP address'}</span><strong>{convoyState.ip}</strong></div>
-              <div><span>{zh ? '锁定状态' : 'Locked'}</span><strong>{convoyState.locked === null ? '-' : (convoyState.locked ? (zh ? '是' : 'Yes') : (zh ? '否' : 'No'))}</strong></div>
+              <div><span>{zh ? '\u670d\u52a1\u5668\u6620\u5c04' : 'Server ref'}</span><strong>{convoyState.serverRef}</strong></div>
+              <div><span>{zh ? '\u8fd0\u884c\u72b6\u6001' : 'State'}</span><strong>{convoyState.state}</strong></div>
+              <div><span>{zh ? 'IP \u5730\u5740' : 'IP address'}</span><strong>{convoyState.ip}</strong></div>
+              <div><span>{zh ? '\u9501\u5b9a\u72b6\u6001' : 'Locked'}</span><strong>{convoyState.locked === null ? '-' : (convoyState.locked ? (zh ? '\u662f' : 'Yes') : (zh ? '\u5426' : 'No'))}</strong></div>
               <div><span>CPU</span><strong>{convoyState.cpu}</strong></div>
-              <div><span>{zh ? '内存' : 'Memory'}</span><strong>{convoyState.memory}</strong></div>
-              <div><span>{zh ? '磁盘' : 'Disk'}</span><strong>{convoyState.disk}</strong></div>
-              <div><span>{zh ? '入站带宽' : 'Inbound bandwidth'}</span><strong>{convoyState.bandwidth}</strong></div>
-              <div><span>{zh ? '出站流量' : 'Outbound traffic'}</span><strong>{convoyState.traffic}</strong></div>
+              <div><span>{zh ? '\u5185\u5b58' : 'Memory'}</span><strong>{convoyState.memory}</strong></div>
+              <div><span>{zh ? '\u78c1\u76d8' : 'Disk'}</span><strong>{convoyState.disk}</strong></div>
+              <div><span>{zh ? '\u5165\u7ad9\u5e26\u5bbd' : 'Inbound bandwidth'}</span><strong>{convoyState.bandwidth}</strong></div>
+              <div><span>{zh ? '\u51fa\u7ad9\u6d41\u91cf' : 'Outbound traffic'}</span><strong>{convoyState.traffic}</strong></div>
             </div>
           )}
         </article>
 
         <article className="panel stack-12">
-          <p className="eyebrow">{zh ? '服务器操作' : 'Server operations'}</p>
+          <p className="eyebrow">{zh ? '\u670d\u52a1\u5668\u64cd\u4f5c' : 'Server operations'}</p>
           <div className="action-grid">
             <button
               className="button secondary"
@@ -631,7 +606,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('start')}
             >
-              {serverBusy === 'start' ? `${text.common.pending}...` : (zh ? '开机' : 'Start')}
+              {serverBusy === 'start' ? `${text.common.pending}...` : (zh ? '\u5f00\u673a' : 'Start')}
             </button>
             <button
               className="button secondary"
@@ -639,7 +614,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('stop')}
             >
-              {serverBusy === 'stop' ? `${text.common.pending}...` : (zh ? '关机' : 'Stop')}
+              {serverBusy === 'stop' ? `${text.common.pending}...` : (zh ? '\u5173\u673a' : 'Stop')}
             </button>
             <button
               className="button secondary"
@@ -647,7 +622,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('restart')}
             >
-              {serverBusy === 'restart' ? `${text.common.pending}...` : (zh ? '重启' : 'Restart')}
+              {serverBusy === 'restart' ? `${text.common.pending}...` : (zh ? '\u91cd\u542f' : 'Restart')}
             </button>
             <button
               className="button secondary"
@@ -655,7 +630,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('reinstall')}
             >
-              {serverBusy === 'reinstall' ? `${text.common.pending}...` : (zh ? '重装系统' : 'Reinstall')}
+              {serverBusy === 'reinstall' ? `${text.common.pending}...` : (zh ? '\u91cd\u88c5\u7cfb\u7edf' : 'Reinstall')}
             </button>
             <button
               className="button secondary"
@@ -663,7 +638,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('reveal-password')}
             >
-              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : (zh ? '显示密码' : 'Reveal password')}
+              {serverBusy === 'reveal-password' ? `${text.common.pending}...` : (zh ? '\u663e\u793a\u5bc6\u7801' : 'Reveal password')}
             </button>
             <button
               className="button ghost"
@@ -671,7 +646,7 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('suspend')}
             >
-              {serverBusy === 'suspend' ? `${text.common.pending}...` : (zh ? '暂停' : 'Suspend')}
+              {serverBusy === 'suspend' ? `${text.common.pending}...` : (zh ? '\u6682\u505c' : 'Suspend')}
             </button>
             <button
               className="button ghost"
@@ -679,21 +654,21 @@ export function ServiceDetailPage() {
               type="button"
               onClick={() => void runServerAction('unsuspend')}
             >
-              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : (zh ? '解除暂停' : 'Unsuspend')}
+              {serverBusy === 'unsuspend' ? `${text.common.pending}...` : (zh ? '\u89e3\u9664\u6682\u505c' : 'Unsuspend')}
             </button>
           </div>
           {!canRunServerActions ? (
             <div className="callout compact">
               {provisioningInFlight
-                ? (zh ? '服务正在开通中，暂不可执行服务器操作。' : 'Server actions are disabled while provisioning is in progress.')
+                ? (zh ? '\u670d\u52a1\u6b63\u5728\u5f00\u901a\u4e2d\uff0c\u6682\u4e0d\u53ef\u6267\u884c\u670d\u52a1\u5668\u64cd\u4f5c\u3002' : 'Server actions are disabled while provisioning is in progress.')
                 : provisioningCanRetry
-                  ? (zh ? '服务开通失败，请先在上方重试开通。' : 'Provisioning failed. Retry provisioning before server actions.')
-                  : (zh ? '服务器映射尚未完成，暂不可执行服务器操作。' : 'Server mapping is not ready yet, so actions are currently unavailable.')}
+                  ? (zh ? '\u670d\u52a1\u5f00\u901a\u5931\u8d25\uff0c\u8bf7\u5148\u5728\u4e0a\u65b9\u91cd\u8bd5\u5f00\u901a\u3002' : 'Provisioning failed. Retry provisioning before server actions.')
+                  : (zh ? '\u670d\u52a1\u5668\u6620\u5c04\u5c1a\u672a\u5b8c\u6210\uff0c\u6682\u4e0d\u53ef\u6267\u884c\u670d\u52a1\u5668\u64cd\u4f5c\u3002' : 'Server mapping is not ready yet, so actions are currently unavailable.')}
             </div>
           ) : null}
           {revealedPassword ? (
             <div className="callout compact">
-              <strong>{zh ? '临时密码：' : 'Temporary password: '}</strong>
+              <strong>{zh ? '\u4e34\u65f6\u5bc6\u7801\uff1a' : 'Temporary password: '}</strong>
               <code>{revealedPassword}</code>
             </div>
           ) : null}

@@ -18,7 +18,7 @@ loadEnv({
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
-  PAYMENTER_MODE: z.enum(['mock', 'live']).default('mock'),
+  PAYMENTER_MODE: z.enum(['mock', 'live']).default('live'),
   PAYMENTER_API_URL: z.string().url().optional(),
   PAYMENTER_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 7),
@@ -34,6 +34,9 @@ const envSchema = z.object({
 });
 
 const env = envSchema.parse(process.env);
+const effectivePaymenterMode = process.env.NODE_ENV === 'production' && env.PAYMENTER_MODE === 'mock'
+  ? 'live'
+  : env.PAYMENTER_MODE;
 const isSecureCookie = env.SESSION_COOKIE_SECURE.toLowerCase() === 'true';
 const convoyEnabled = env.CONVOY_ENABLED.toLowerCase() === 'true';
 const convoyRefKeys = env.CONVOY_SERVER_REF_KEYS.split(',')
@@ -46,7 +49,8 @@ const app = Fastify({
 });
 
 app.log.info({
-  paymenterMode: env.PAYMENTER_MODE,
+  paymenterMode: effectivePaymenterMode,
+  configuredPaymenterMode: env.PAYMENTER_MODE,
   paymenterApiUrl: env.PAYMENTER_API_URL ?? null,
   convoyEnabled,
   convoyBaseUrl: env.CONVOY_BASE_URL ?? null,
@@ -65,7 +69,7 @@ await app.register(fastifyCookie, {
 
 const gateway = createGateway({
   apiUrl: env.PAYMENTER_API_URL,
-  mode: env.PAYMENTER_MODE,
+  mode: effectivePaymenterMode,
   timeoutMs: env.PAYMENTER_TIMEOUT_MS,
 });
 const convoy = createConvoyClient({
@@ -478,7 +482,7 @@ app.get('/api/v1/services/:serviceId/server', async (request) => {
     },
     meta: {
       generatedAt: new Date().toISOString(),
-      sourceMode: env.PAYMENTER_MODE,
+      sourceMode: effectivePaymenterMode,
     },
   };
 });
@@ -501,7 +505,7 @@ app.get('/api/v1/services/:serviceId/server/capabilities', async (request) => {
     },
     meta: {
       generatedAt: new Date().toISOString(),
-      sourceMode: env.PAYMENTER_MODE,
+      sourceMode: effectivePaymenterMode,
     },
   };
 });

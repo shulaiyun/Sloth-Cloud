@@ -13,10 +13,7 @@ function isInvoicePaid(status: string, remaining: number) {
 
 function normalizeItemName(description: string) {
   const compact = description.replace(/\s+/g, ' ').trim();
-  if (!compact) {
-    return '';
-  }
-
+  if (!compact) return '';
   return compact.replace(/\s*\([^)]*\)\s*$/, '');
 }
 
@@ -28,11 +25,12 @@ export function InvoiceDetailPage() {
   );
 
   const [pending, setPending] = useState(false);
-  const [selectedGatewayId, setSelectedGatewayId] = useState<string>('');
+  const [selectedGatewayId, setSelectedGatewayId] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [payResult, setPayResult] = useState<InvoicePayResponse | null>(null);
   const [invoiceState, setInvoiceState] = useState<InvoiceResponse['data']['invoice'] | null>(null);
+  const zh = locale.startsWith('zh');
 
   useEffect(() => {
     if (data?.data.invoice) {
@@ -49,21 +47,19 @@ export function InvoiceDetailPage() {
     const timer = window.setInterval(async () => {
       try {
         const refreshed = await requestJson<InvoiceResponse>(`/api/v1/invoices/${invoiceId}`);
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         setInvoiceState(refreshed.data.invoice);
         if (isInvoicePaid(refreshed.data.invoice.status, refreshed.data.invoice.remaining)) {
           setMessage(
-            locale.startsWith('zh')
-              ? '支付已确认，账单状态已更新。'
+            zh
+              ? '\u652f\u4ed8\u5df2\u786e\u8ba4\uff0c\u8d26\u5355\u72b6\u6001\u5df2\u66f4\u65b0\u3002'
               : 'Payment confirmed and invoice status updated.',
           );
           window.clearInterval(timer);
         }
       } catch {
-        // Keep polling resilient if the upstream briefly blips.
+        // Ignore transient polling errors.
       }
     }, 5000);
 
@@ -71,7 +67,7 @@ export function InvoiceDetailPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [invoiceId, invoiceState, locale, payResult]);
+  }, [invoiceId, invoiceState, zh, payResult]);
 
   async function payWithCredit() {
     if (!invoiceId || pending) return;
@@ -138,7 +134,6 @@ export function InvoiceDetailPage() {
 
   const invoice = invoiceState ?? data.data.invoice;
   const paid = isInvoicePaid(invoice.status, invoice.remaining);
-  const zh = locale.startsWith('zh');
 
   const relatedServiceNames = useMemo(() => {
     const candidates = new Set<string>();
@@ -160,8 +155,6 @@ export function InvoiceDetailPage() {
     return Array.from(candidates);
   }, [data.data.recurringServices, invoice.items, locale]);
 
-  const paidMessage = zh ? '✅ 支付成功，账单已结清。' : '✅ Payment successful. This invoice is settled.';
-
   return (
     <div className="stack-24">
       <section className="section-heading">
@@ -177,7 +170,7 @@ export function InvoiceDetailPage() {
         <article className="panel stack-16">
           {relatedServiceNames.length > 0 ? (
             <div className="callout compact">
-              <strong>{zh ? '关联产品 / 服务' : 'Related product / service'}</strong>
+              <strong>{zh ? '\u5173\u8054\u4ea7\u54c1 / \u670d\u52a1' : 'Related product / service'}</strong>
               <ul className="invoice-related-list">
                 {relatedServiceNames.map((name) => (
                   <li key={name}>{name}</li>
@@ -198,21 +191,19 @@ export function InvoiceDetailPage() {
         <article className="summary-card">
           {paid ? (
             <div className="callout callout-success">
-              <strong>{paidMessage}</strong>
+              <strong>{zh ? '\u2705 \u652f\u4ed8\u6210\u529f\uff0c\u8d26\u5355\u5df2\u7ed3\u6e05\u3002' : '\u2705 Payment successful. This invoice is settled.'}</strong>
               <p>
                 {zh
-                  ? '你可以前往服务页查看该账单对应的开通状态。'
+                  ? '\u4f60\u53ef\u4ee5\u524d\u5f80\u670d\u52a1\u9875\u67e5\u770b\u8be5\u8d26\u5355\u5bf9\u5e94\u670d\u52a1\u7684\u5f00\u901a\u72b6\u6001\u3002'
                   : 'You can open the services page to check provisioning status.'}
               </p>
-              <Link className="button ghost" to="/services">
-                {text.nav.services}
-              </Link>
+              <Link className="button ghost" to="/services">{text.nav.services}</Link>
             </div>
           ) : (
             <>
               {data.data.gateways.length > 0 ? (
                 <label className="field">
-                  <span>{zh ? '支付网关' : 'Payment gateway'}</span>
+                  <span>{zh ? '\u652f\u4ed8\u7f51\u5173' : 'Payment gateway'}</span>
                   <select
                     className="text-input select-input"
                     value={selectedGatewayId}
@@ -228,7 +219,7 @@ export function InvoiceDetailPage() {
               ) : (
                 <div className="callout compact">
                   {zh
-                    ? '当前账单没有可用网关，请在 Paymenter 后台启用并绑定支付网关。'
+                    ? '\u5f53\u524d\u8d26\u5355\u6ca1\u6709\u53ef\u7528\u7f51\u5173\uff0c\u8bf7\u5728 Paymenter \u540e\u53f0\u542f\u7528\u5e76\u7ed1\u5b9a\u652f\u4ed8\u7f51\u5173\u3002'
                     : 'No gateway is available for this invoice yet. Enable and bind a gateway in Paymenter admin.'}
                 </div>
               )}
@@ -244,13 +235,13 @@ export function InvoiceDetailPage() {
                 onClick={() => void payWithGateway()}
               >
                 {payResult?.data.redirectUrl
-                  ? (zh ? '继续支付' : 'Continue payment')
+                  ? (zh ? '\u7ee7\u7eed\u652f\u4ed8' : 'Continue payment')
                   : text.invoices.payWithGateway}
               </button>
 
               {payResult?.data.redirectUrl ? (
                 <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-                  {zh ? '打开支付页面（新标签）' : 'Open payment page in new tab'}
+                  {zh ? '\u6253\u5f00\u652f\u4ed8\u9875\u9762\uff08\u65b0\u6807\u7b7e\uff09' : 'Open payment page in new tab'}
                 </a>
               ) : null}
             </>

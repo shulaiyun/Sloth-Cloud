@@ -37,11 +37,11 @@ function serviceStatusLabel(status: string, locale: string) {
   const key = normalizeServiceStatus(status);
   const zh = locale.startsWith('zh');
 
-  if (key === 'active') return zh ? '运行中' : 'Active';
-  if (key === 'pending') return zh ? '开通中' : 'Provisioning';
-  if (key === 'suspended') return zh ? '已暂停' : 'Suspended';
-  if (key === 'cancelled') return zh ? '已取消' : 'Cancelled';
-  return zh ? '未知状态' : 'Unknown';
+  if (key === 'active') return zh ? '\u8fd0\u884c\u4e2d' : 'Active';
+  if (key === 'pending') return zh ? '\u5f00\u901a\u4e2d' : 'Provisioning';
+  if (key === 'suspended') return zh ? '\u5df2\u6682\u505c' : 'Suspended';
+  if (key === 'cancelled') return zh ? '\u5df2\u53d6\u6d88' : 'Cancelled';
+  return zh ? '\u672a\u77e5' : 'Unknown';
 }
 
 function isPurchasedService(service: ServiceSummary) {
@@ -63,7 +63,7 @@ export function ServicesPage() {
   const zh = locale.startsWith('zh');
 
   const statusOptions: Array<{ value: ServiceStatusFilter; label: string }> = [
-    { value: 'all', label: zh ? '全部状态' : 'All statuses' },
+    { value: 'all', label: zh ? '\u5168\u90e8\u72b6\u6001' : 'All statuses' },
     { value: 'active', label: serviceStatusLabel('active', locale) },
     { value: 'pending', label: serviceStatusLabel('pending', locale) },
     { value: 'suspended', label: serviceStatusLabel('suspended', locale) },
@@ -72,10 +72,10 @@ export function ServicesPage() {
   ];
 
   const sortOptions: Array<{ value: ServiceSort; label: string }> = [
-    { value: 'status', label: zh ? '按状态' : 'Sort by status' },
-    { value: 'price-desc', label: zh ? '价格从高到低' : 'Price high to low' },
-    { value: 'price-asc', label: zh ? '价格从低到高' : 'Price low to high' },
-    { value: 'expires-asc', label: zh ? '即将到期优先' : 'Nearest expiry first' },
+    { value: 'status', label: zh ? '\u6309\u72b6\u6001' : 'Sort by status' },
+    { value: 'price-desc', label: zh ? '\u4ef7\u683c\u4ece\u9ad8\u5230\u4f4e' : 'Price high to low' },
+    { value: 'price-asc', label: zh ? '\u4ef7\u683c\u4ece\u4f4e\u5230\u9ad8' : 'Price low to high' },
+    { value: 'expires-asc', label: zh ? '\u5373\u5c06\u5230\u671f\u4f18\u5148' : 'Nearest expiry first' },
   ];
 
   const visibleServices = useMemo(() => {
@@ -156,11 +156,11 @@ export function ServicesPage() {
       <section className="panel stack-12">
         <div className="filter-toolbar">
           <label className="filter-control">
-            <span>{zh ? '搜索' : 'Search'}</span>
+            <span>{zh ? '\u641c\u7d22' : 'Search'}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={zh ? '输入服务名、产品名或 ID' : 'Search by service, product, or ID'}
+              placeholder={zh ? '\u8f93\u5165\u670d\u52a1\u540d\u3001\u4ea7\u54c1\u540d\u6216 ID' : 'Search by service, product, or ID'}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -179,7 +179,7 @@ export function ServicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{zh ? '排序' : 'Sort'}</span>
+            <span>{zh ? '\u6392\u5e8f' : 'Sort'}</span>
             <select
               className="text-input select-input"
               value={sortBy}

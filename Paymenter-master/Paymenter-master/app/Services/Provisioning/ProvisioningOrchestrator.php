@@ -3,6 +3,7 @@
 namespace App\Services\Provisioning;
 
 use App\Helpers\ExtensionHelper;
+use App\Helpers\NotificationHelper;
 use App\Jobs\Provisioning\ProcessProvisioningJob;
 use App\Models\ProvisioningJob;
 use App\Models\Service;
@@ -186,7 +187,7 @@ class ProvisioningOrchestrator
         }
 
         if (!$this->supports($service, $job->provider)) {
-            return $this->markFailed($job, 'Provisioning provider is not enabled for this service.');
+            return $this->markFailed($job, 'Provisioning provider is not enabled for this service.', service: $service);
         }
 
         $job->status = ProvisioningJob::STATUS_PROVISIONING;
@@ -204,7 +205,7 @@ class ProvisioningOrchestrator
                     'product_slug' => $service->product?->slug,
                     'plan_id' => $service->plan_id,
                     'plan_name' => $service->plan?->name,
-                ]);
+                ], $service);
             }
 
             $overrides = $this->mappingResolver->buildPropertyOverrides($service, $mapping);
@@ -216,7 +217,7 @@ class ProvisioningOrchestrator
                 return $this->markFailed($job, 'Provisioning completed but no server mapping keys were returned.', [
                     'mapping_id' => $mapping->id,
                     'response' => $response,
-                ]);
+                ], $service);
             }
 
             $job->status = ProvisioningJob::STATUS_SUCCESS;
@@ -228,6 +229,7 @@ class ProvisioningOrchestrator
             $job->completed_at = now();
             $job->error_message = null;
             $job->save();
+            $this->notifyProvisioningSuccess($service, $mappingPayload);
 
             Log::info('Provisioning job completed', [
                 'job_id' => $job->id,
@@ -243,7 +245,7 @@ class ProvisioningOrchestrator
                     'class' => get_class($exception),
                     'message' => $exception->getMessage(),
                 ],
-            ]);
+            ], $service);
         }
 
         return $job->refresh();
@@ -302,12 +304,18 @@ class ProvisioningOrchestrator
         return (int) config('services.provisioning.lock_ttl_ms', env('PROVISIONING_LOCK_TTL_MS', 120_000));
     }
 
-    protected function markFailed(ProvisioningJob $job, string $message, array $responsePayload = []): ProvisioningJob
+    protected function markFailed(
+        ProvisioningJob $job,
+        string $message,
+        array $responsePayload = [],
+        ?Service $service = null
+    ): ProvisioningJob
     {
         $job->status = ProvisioningJob::STATUS_FAILED;
         $job->error_message = $message;
         $job->response_payload = $responsePayload === [] ? null : $responsePayload;
         $job->save();
+        $this->notifyProvisioningFailure($job, $message, $service);
 
         Log::warning('Provisioning job failed', [
             'job_id' => $job->id,
@@ -318,6 +326,61 @@ class ProvisioningOrchestrator
         ]);
 
         return $job->refresh();
+    }
+
+    /**
+     * @param  array<string, string>  $mappingPayload
+     */
+    protected function notifyProvisioningSuccess(Service $service, array $mappingPayload): void
+    {
+        $service->loadMissing(['user', 'product']);
+        if (!$service->user) {
+            return;
+        }
+
+        NotificationHelper::serverCreatedNotification($service->user, $service, [
+            'provider' => 'convoy',
+            'server_mapping' => $mappingPayload,
+        ]);
+    }
+
+    protected function notifyProvisioningFailure(ProvisioningJob $job, string $message, ?Service $service = null): void
+    {
+        $service ??= Service::query()->with(['user', 'product'])->find($job->service_id);
+        if (!$service || !$service->user) {
+            return;
+        }
+
+        // Avoid spamming on every transient retry; notify on final failure or mapping/configuration errors.
+        $maxAttempts = $this->maxAttempts();
+        $isFinalAttempt = (int) $job->attempt_count >= $maxAttempts;
+        $isMappingError = str_contains(strtolower($message), 'mapping');
+
+        if (!$isFinalAttempt && !$isMappingError) {
+            return;
+        }
+
+        $serviceLabel = trim((string) ($service->label ?: $service->name ?: ('#'.$service->id)));
+        $productName = trim((string) ($service->product?->name ?: '-'));
+        $subject = sprintf('Service provisioning failed - %s', $serviceLabel);
+        $body = implode("\n", [
+            'A provisioning task failed and requires attention.',
+            '',
+            'Service ID: '.$service->id,
+            'Service: '.$serviceLabel,
+            'Product: '.$productName,
+            'Provider: '.$job->provider,
+            'Attempts: '.(int) $job->attempt_count.' / '.$maxAttempts,
+            'Reason: '.$message,
+            '',
+            'If this is a mapping issue, please configure provisioning mapping and retry in service details.',
+        ]);
+
+        NotificationHelper::sendSystemEmailNotification(
+            subject: $subject,
+            body: $body,
+            email: $service->user->email
+        );
     }
 
     protected function hasServerMapping(Service $service): bool
