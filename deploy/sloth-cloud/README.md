@@ -61,6 +61,8 @@ The compose stack forwards these values to:
 - `sloth-cloud-proxy-relay`, which forwards container traffic to the WSL-local proxy on `127.0.0.1:12334`
 - `host.docker.internal` host-gateway mapping for build and runtime network access
 
+If your target VPS does not run a local proxy on `127.0.0.1:12334`, set all `BUILD_*PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` values to empty strings or replace them with the VPS-local proxy address before building.
+
 ## First-time Laravel initialization
 
 ```bash
