@@ -90,6 +90,8 @@ services:
       args:
         APP_ENV: ${APP_ENV}
     container_name: sloth-convoy-workers
+    profiles:
+      - workers
     restart: unless-stopped
     env_file:
       - ../../runtime/env/convoy.env

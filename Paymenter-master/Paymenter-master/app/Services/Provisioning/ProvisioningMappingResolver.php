@@ -8,11 +8,15 @@ use Illuminate\Support\Str;
 
 class ProvisioningMappingResolver
 {
+    public function __construct(
+        protected ProvisioningFallbackMappingLoader $fallbackMappingLoader
+    ) {}
+
     public function resolve(Service $service, string $provider = 'convoy'): ?ProvisioningMapping
     {
         $service->loadMissing(['product', 'plan']);
 
-        $mappings = ProvisioningMapping::query()
+        $dbMappings = ProvisioningMapping::query()
             ->active()
             ->where('provider', $provider)
             ->orderBy('priority')
@@ -23,7 +27,7 @@ class ProvisioningMappingResolver
         $winner = null;
         $winnerScore = -1;
 
-        foreach ($mappings as $mapping) {
+        foreach ($dbMappings as $mapping) {
             $score = $this->scoreMapping($service, $mapping);
             if ($score < 0) {
                 continue;
@@ -33,6 +37,43 @@ class ProvisioningMappingResolver
                 $winner = $mapping;
                 $winnerScore = $score;
             }
+        }
+
+        if ($winner) {
+            $winner->setAttribute('_source', 'database');
+
+            return $winner;
+        }
+
+        $fallbackMappings = $this->fallbackMappingLoader->load($provider);
+        foreach ($fallbackMappings as $entry) {
+            $mapping = new ProvisioningMapping([
+                'provider' => $provider,
+                'product_id' => $entry['product_id'] ?? null,
+                'product_slug' => $entry['product_slug'] ?? null,
+                'plan_id' => $entry['plan_id'] ?? null,
+                'plan_name' => $entry['plan_name'] ?? null,
+                'template_ref' => $entry['template_ref'] ?? null,
+                'node_ref' => $entry['node_ref'] ?? null,
+                'config' => $entry['config'] ?? [],
+                'priority' => $entry['priority'] ?? 100,
+                'enabled' => true,
+            ]);
+            $mapping->exists = false;
+
+            $score = $this->scoreMapping($service, $mapping);
+            if ($score < 0) {
+                continue;
+            }
+
+            if ($score > $winnerScore) {
+                $winner = $mapping;
+                $winnerScore = $score;
+            }
+        }
+
+        if ($winner) {
+            $winner->setAttribute('_source', 'config');
         }
 
         return $winner;
@@ -46,6 +87,24 @@ class ProvisioningMappingResolver
         $rawConfig = $mapping->config ?? [];
         $config = is_array($rawConfig) ? $rawConfig : [];
         $properties = is_array($config['properties'] ?? null) ? $config['properties'] : [];
+
+        if ($mapping->provider === ProvisioningMapping::PROVIDER_MANAGED_APP) {
+            $properties['runtime_kind'] = 'managed-app';
+
+            if (is_string($config['cluster_ref'] ?? null) && trim((string) $config['cluster_ref']) !== '') {
+                $properties['k8s_cluster_ref'] = trim((string) $config['cluster_ref']);
+            }
+
+            if (is_string($config['default_domain_suffix'] ?? null) && trim((string) $config['default_domain_suffix']) !== '') {
+                $properties['managed_app_domain_suffix'] = trim((string) $config['default_domain_suffix']);
+            }
+
+            if (is_string($config['build_namespace'] ?? null) && trim((string) $config['build_namespace']) !== '') {
+                $properties['managed_app_build_namespace'] = trim((string) $config['build_namespace']);
+            }
+
+            return $properties;
+        }
 
         if ($mapping->node_ref) {
             $properties['node'] = $mapping->node_ref;
@@ -136,5 +195,19 @@ class ProvisioningMappingResolver
         }
 
         return sprintf('%s-%d.sloth.local', $base, $service->id);
+    }
+
+    public function mappingSource(?ProvisioningMapping $mapping): string
+    {
+        if (!$mapping) {
+            return 'none';
+        }
+
+        $source = $mapping->getAttribute('_source');
+        if (is_string($source) && $source !== '') {
+            return $source;
+        }
+
+        return $mapping->exists ? 'database' : 'config';
     }
 }

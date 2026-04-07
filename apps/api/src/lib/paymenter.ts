@@ -1,4 +1,6 @@
 ﻿import type {
+  ActionResponse,
+  ActionResult,
   ApiMeta,
   AuthUser,
   CartResponse,
@@ -33,6 +35,8 @@
   ProvisioningStatus,
   RegisterInput,
   ServiceDetail,
+  ServiceOperationLogSummary,
+  ServiceOperationLogsResponse,
   ServiceProvisioningResponse,
   ServiceProvisioningRetryResponse,
   ServiceResponse,
@@ -66,6 +70,17 @@ export interface CheckoutInput {
 export interface CancelServiceInput {
   type: 'end_of_period' | 'immediate';
   reason: string;
+}
+
+export interface CreateServiceOperationLogInput {
+  source?: string;
+  action: string;
+  success?: boolean | null;
+  code?: string | null;
+  message?: string | null;
+  detail?: string | null;
+  requestPayload?: Record<string, unknown> | null;
+  responsePayload?: Record<string, unknown> | null;
 }
 
 export interface PayInvoiceInput {
@@ -594,6 +609,7 @@ function normalizeProvisioningStatus(raw: unknown): ProvisioningStatus | null {
     provider: readString(value.provider, 'convoy'),
     attemptCount: readNumber(value.attempt_count ?? value.attemptCount) ?? 0,
     errorMessage: readNullableString(value.error_message ?? value.errorMessage),
+    errorCode: readNullableString(value.error_code ?? value.errorCode),
     lastAttemptAt: readNullableString(value.last_attempt_at ?? value.lastAttemptAt),
     completedAt: readNullableString(value.completed_at ?? value.completedAt),
   };
@@ -611,6 +627,60 @@ function normalizeProvisioningJobSummary(raw: unknown) {
     id: toStringId(value.id),
     ...base,
     createdAt: readNullableString(value.created_at ?? value.createdAt),
+  };
+}
+
+function normalizeActionResult(raw: unknown): ActionResult | null {
+  const value = asRecord(raw);
+
+  if (Object.keys(value).length === 0) {
+    return null;
+  }
+
+  return {
+    success: readBoolean(value.success),
+    code: readNullableString(value.code),
+    detail: readNullableString(value.detail),
+    operationId: readNullableString(value.operation_id ?? value.operationId),
+  };
+}
+
+function normalizeServiceOperationLogSummary(raw: unknown): ServiceOperationLogSummary | null {
+  const value = asRecord(raw);
+  if (Object.keys(value).length === 0) {
+    return null;
+  }
+
+  const actor = asRecord(value.actor);
+
+  return {
+    id: toStringId(value.id),
+    operationId: readString(value.operation_id ?? value.operationId),
+    action: readString(value.action),
+    source: readString(value.source, 'client'),
+    success: value.success === null || value.success === undefined
+      ? null
+      : readBoolean(value.success),
+    code: readNullableString(value.code),
+    message: readNullableString(value.message),
+    detail: readNullableString(value.detail),
+    requestPayload: (() => {
+      const payload = asRecord(value.request_payload ?? value.requestPayload);
+      return Object.keys(payload).length > 0 ? payload : null;
+    })(),
+    responsePayload: (() => {
+      const payload = asRecord(value.response_payload ?? value.responsePayload);
+      return Object.keys(payload).length > 0 ? payload : null;
+    })(),
+    actor: Object.keys(actor).length > 0
+      ? {
+        id: toStringId(actor.id),
+        name: readString(actor.name),
+        email: readString(actor.email),
+      }
+      : null,
+    createdAt: readNullableString(value.created_at ?? value.createdAt),
+    updatedAt: readNullableString(value.updated_at ?? value.updatedAt),
   };
 }
 
@@ -884,6 +954,54 @@ function ensureToken(token?: string) {
   }
 
   return token;
+}
+
+function isNumericInvoiceId(value: string) {
+  return /^\d+$/.test(value);
+}
+
+function extractNumericInvoiceId(value: string) {
+  const match = value.match(/^inv[-_ ]?(\d+)$/i);
+  return match ? match[1] : null;
+}
+
+async function resolveInvoicePathId(config: GatewayConfig, token: string, invoiceRef: string) {
+  const normalized = invoiceRef.trim();
+  if (normalized === '') {
+    throw notFound('Invoice id is required.');
+  }
+
+  if (isNumericInvoiceId(normalized)) {
+    return normalized;
+  }
+
+  const extracted = extractNumericInvoiceId(normalized);
+  if (extracted) {
+    return extracted;
+  }
+
+  try {
+    const response = await requestPaymenter<{ data?: unknown }>(config, '/invoices?per_page=100', {
+      token,
+    });
+
+    const target = normalized.toLowerCase();
+    const hit = readArray<unknown>(response.data).find((entry) => {
+      const record = asRecord(entry);
+      const id = toStringId(record.id);
+      const number = readString(record.number).toLowerCase();
+
+      return id === normalized || number === target;
+    });
+
+    if (hit) {
+      return toStringId(asRecord(hit).id);
+    }
+  } catch {
+    // Fallback to the original reference if lookup endpoint is unavailable.
+  }
+
+  return normalized;
 }
 
 export function createGateway(config: GatewayConfig) {
@@ -1439,10 +1557,17 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
-    async retryServiceProvisioning(token: string | undefined, serviceId: string): Promise<ServiceProvisioningRetryResponse> {
+    async retryServiceProvisioning(
+      token: string | undefined,
+      serviceId: string,
+      options: { force?: boolean } = {},
+    ): Promise<ServiceProvisioningRetryResponse> {
       const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/provisioning/retry`, {
         method: 'POST',
         token: ensureToken(token),
+        body: {
+          force: Boolean(options.force),
+        },
       });
       const data = asRecord(response.data);
 
@@ -1452,6 +1577,7 @@ export function createGateway(config: GatewayConfig) {
           jobId: toStringId(data.job_id ?? data.jobId),
           status: readString(data.status),
           attemptCount: readNumber(data.attempt_count ?? data.attemptCount) ?? 0,
+          force: readBoolean(data.force),
         },
         meta: baseMeta(config.mode),
       };
@@ -1474,8 +1600,8 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
-    async cancelService(token: string | undefined, serviceId: string, input: CancelServiceInput) {
-      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/cancel`, {
+    async cancelService(token: string | undefined, serviceId: string, input: CancelServiceInput): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(config, `/services/${serviceId}/cancel`, {
         method: 'POST',
         token: ensureToken(token),
         body: {
@@ -1487,12 +1613,18 @@ export function createGateway(config: GatewayConfig) {
       return {
         message: readString(response.message, 'Cancellation requested.'),
         data: response.data,
+        actionResult: normalizeActionResult(response.action_result),
         meta: baseMeta(config.mode),
       };
     },
 
-    async serviceAction(token: string | undefined, serviceId: string, action: string, payload: Record<string, unknown> = {}) {
-      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/actions/${encodeURIComponent(action)}`, {
+    async serviceAction(
+      token: string | undefined,
+      serviceId: string,
+      action: string,
+      payload: Record<string, unknown> = {},
+    ): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(config, `/services/${serviceId}/actions/${encodeURIComponent(action)}`, {
         method: 'POST',
         token: ensureToken(token),
         body: payload,
@@ -1501,6 +1633,70 @@ export function createGateway(config: GatewayConfig) {
       return {
         message: readString(response.message, 'Service action executed.'),
         data: response.data,
+        actionResult: normalizeActionResult(response.action_result),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async serviceOperationLogs(
+      token: string | undefined,
+      serviceId: string,
+      limit = 10,
+    ): Promise<ServiceOperationLogsResponse> {
+      const query = new URLSearchParams();
+      query.set('limit', String(limit));
+
+      const response = await requestPaymenter<{ data?: unknown }>(
+        config,
+        `/services/${serviceId}/operation-logs?${query.toString()}`,
+        {
+          token: ensureToken(token),
+        },
+      );
+      const data = asRecord(response.data);
+
+      return {
+        data: {
+          serviceId: toStringId(data.service_id ?? data.serviceId),
+          logs: readArray<unknown>(data.logs)
+            .map(normalizeServiceOperationLogSummary)
+            .filter((entry): entry is ServiceOperationLogSummary => entry !== null),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async createServiceOperationLog(
+      token: string | undefined,
+      serviceId: string,
+      input: CreateServiceOperationLogInput,
+    ): Promise<ActionResponse<{ log: ServiceOperationLogSummary | null }>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(
+        config,
+        `/services/${serviceId}/operation-logs`,
+        {
+          method: 'POST',
+          token: ensureToken(token),
+          body: {
+            source: input.source,
+            action: input.action,
+            success: input.success,
+            code: input.code,
+            message: input.message,
+            detail: input.detail,
+            request_payload: input.requestPayload,
+            response_payload: input.responsePayload,
+          },
+        },
+      );
+      const data = asRecord(response.data);
+
+      return {
+        message: readString(response.message, 'Service operation log recorded.'),
+        data: {
+          log: normalizeServiceOperationLogSummary(data.log),
+        },
+        actionResult: normalizeActionResult(response.action_result),
         meta: baseMeta(config.mode),
       };
     },
@@ -1521,9 +1717,15 @@ export function createGateway(config: GatewayConfig) {
     },
 
     async invoice(token: string | undefined, invoiceId: string): Promise<InvoiceResponse> {
-      const response = await requestPaymenter<{ data?: unknown }>(config, `/invoices/${invoiceId}`, {
-        token: ensureToken(token),
-      });
+      const accessToken = ensureToken(token);
+      const resolvedInvoiceId = await resolveInvoicePathId(config, accessToken, invoiceId);
+      const response = await requestPaymenter<{ data?: unknown }>(
+        config,
+        `/invoices/${encodeURIComponent(resolvedInvoiceId)}`,
+        {
+          token: accessToken,
+        },
+      );
 
       const data = asRecord(response.data);
 
@@ -1565,16 +1767,22 @@ export function createGateway(config: GatewayConfig) {
     },
 
     async payInvoice(token: string | undefined, invoiceId: string, input: PayInvoiceInput): Promise<InvoicePayResponse> {
-      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/invoices/${invoiceId}/pay`, {
-        method: 'POST',
-        token: ensureToken(token),
-        body: {
-          method: input.method,
-          gateway_id: input.gatewayId,
-          billing_agreement_ulid: input.billingAgreementUlid,
-          set_as_default: input.setAsDefault,
+      const accessToken = ensureToken(token);
+      const resolvedInvoiceId = await resolveInvoicePathId(config, accessToken, invoiceId);
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(
+        config,
+        `/invoices/${encodeURIComponent(resolvedInvoiceId)}/pay`,
+        {
+          method: 'POST',
+          token: accessToken,
+          body: {
+            method: input.method,
+            gateway_id: input.gatewayId,
+            billing_agreement_ulid: input.billingAgreementUlid,
+            set_as_default: input.setAsDefault,
+          },
         },
-      });
+      );
 
       const data = asRecord(response.data);
 
@@ -1592,4 +1800,3 @@ export function createGateway(config: GatewayConfig) {
 }
 
 export { GatewayError };
-

@@ -94,7 +94,8 @@ class SettingsProvider extends ServiceProvider
 
     private static function resolvePublicAppUrl(): string
     {
-        $configured = trim((string) (env('SLOTH_PAYMENTER_PUBLIC_URL') ?: config('settings.app_url') ?: config('app.url') ?: ''));
+        $explicitPublicUrl = trim((string) env('SLOTH_PAYMENTER_PUBLIC_URL', ''));
+        $configured = trim((string) ($explicitPublicUrl !== '' ? $explicitPublicUrl : (config('settings.app_url') ?: config('app.url') ?: '')));
 
         if ($configured === '') {
             $configured = 'http://localhost';
@@ -102,6 +103,12 @@ class SettingsProvider extends ServiceProvider
 
         if (!preg_match('#^https?://#i', $configured)) {
             $configured = 'http://' . ltrim($configured, '/');
+        }
+
+        // If an explicit public URL is provided, trust it and do not override it with
+        // request-derived localhost hostnames that may drop ports (for example localhost:18080).
+        if ($explicitPublicUrl !== '') {
+            return $configured;
         }
 
         $requestRootUrl = self::detectRequestRootUrl();
@@ -132,8 +139,8 @@ class SettingsProvider extends ServiceProvider
             $request->headers->get('x-forwarded-host'),
             $request->headers->get('x-original-host'),
             $request->headers->get('x-host'),
-            $request->getHost(),
             $request->server->get('HTTP_HOST'),
+            $request->getHost(),
         ])
             ->map(fn ($candidate) => trim(explode(',', (string) ($candidate ?? ''))[0] ?? ''))
             ->filter(fn (string $candidate) => $candidate !== '')

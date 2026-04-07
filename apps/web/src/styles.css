@@ -929,6 +929,22 @@ select.text-input option {
   gap: 6px;
 }
 
+.payment-embed {
+  margin-top: 6px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 78%, black);
+}
+
+.payment-embed-frame {
+  width: 100%;
+  min-height: 560px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+}
+
 .compact {
   padding: 14px 16px;
 }
@@ -952,6 +968,11 @@ select.text-input option {
 
 .service-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Override possible encoding corruption in previous bullet glyph declarations. */
+.bullet-list span::before {
+  content: '\2022';
 }
 
 .detail-grid,
@@ -1013,6 +1034,27 @@ select.text-input option {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operation-log {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 82%, black);
+}
+
+.operation-log p {
+  margin: 0;
+}
+
+.operation-log__header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .text-link {

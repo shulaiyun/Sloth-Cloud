@@ -13,6 +13,8 @@ class Convoy extends Server
 {
     public function request($url, $method = 'get', $data = []): array
     {
+        $this->guardHost($this->config('host'));
+
         // Trim any leading slashes from the base url and add the path URL to it
         $req_url = rtrim($this->config('host'), '/') . '/api/application/' . $url;
         $response = Http::withHeaders([
@@ -21,7 +23,9 @@ class Convoy extends Server
         ])->$method($req_url, $data);
 
         if (!$response->successful()) {
-            throw new Exception($response->json()['message']);
+            $payload = $response->json();
+            $message = $this->extractErrorMessage($payload) ?: sprintf('Convoy request failed with status %d.', $response->status());
+            throw new Exception($message);
         }
 
         return $response->json() ?? [];
@@ -141,11 +145,9 @@ class Convoy extends Server
 
         $os = $this->request('nodes/' . $node . '/template-groups');
         $options = [];
-        foreach ($os['data'] as $os) {
-            foreach ($os['templates'] as $template) {
-                foreach ($template as $template1) {
-                    $options[$template1['uuid']] = $template1['name'];
-                }
+        foreach ($os['data'] as $group) {
+            foreach ($this->extractTemplatesFromGroup($group) as $template) {
+                $options[(string) $template['uuid']] = (string) $template['name'];
             }
         }
 
@@ -174,6 +176,7 @@ class Convoy extends Server
     public function testConfig(): bool|string
     {
         try {
+            $this->guardHost($this->config('host'));
             $this->request('servers');
 
             return true;
@@ -182,6 +185,138 @@ class Convoy extends Server
         }
 
         return true;
+    }
+
+    protected function guardHost(?string $host): void
+    {
+        $host = is_string($host) ? trim($host) : '';
+        if ($host === '') {
+            throw new Exception('Convoy host is required.');
+        }
+
+        $parsedHost = strtolower((string) parse_url($host, PHP_URL_HOST));
+        if (in_array($parsedHost, ['localhost', '127.0.0.1', '::1', 'host.docker.internal'], true)) {
+            throw new Exception(
+                'Convoy host cannot be localhost/host.docker.internal in Docker runtime. Use a container-reachable host, for example http://sloth-convoy-web.'
+            );
+        }
+    }
+
+    /**
+     * @return array<int, array{uuid: string, name: string}>
+     */
+    protected function extractTemplatesFromGroup(array $group): array
+    {
+        $rawTemplates = $group['templates']['data'] ?? $group['templates'] ?? [];
+        if (!is_array($rawTemplates)) {
+            return [];
+        }
+
+        $templates = [];
+        foreach ($rawTemplates as $rawTemplate) {
+            if (!is_array($rawTemplate)) {
+                continue;
+            }
+
+            // Backward compatibility: some Convoy responses return a nested list.
+            if (array_is_list($rawTemplate) && isset($rawTemplate[0]) && is_array($rawTemplate[0])) {
+                foreach ($rawTemplate as $nestedTemplate) {
+                    if (!is_array($nestedTemplate)) {
+                        continue;
+                    }
+
+                    $uuid = trim((string) ($nestedTemplate['uuid'] ?? ''));
+                    $name = trim((string) ($nestedTemplate['name'] ?? ''));
+                    if ($uuid === '') {
+                        continue;
+                    }
+
+                    $templates[] = ['uuid' => $uuid, 'name' => $name];
+                }
+
+                continue;
+            }
+
+            $uuid = trim((string) ($rawTemplate['uuid'] ?? ''));
+            $name = trim((string) ($rawTemplate['name'] ?? ''));
+            if ($uuid === '') {
+                continue;
+            }
+
+            $templates[] = ['uuid' => $uuid, 'name' => $name];
+        }
+
+        return $templates;
+    }
+
+    protected function resolveTemplateUuid(int $nodeId, mixed $rawTemplate): string
+    {
+        $candidate = trim((string) $rawTemplate);
+        if ($candidate === '') {
+            throw new Exception('The selected template uuid is invalid.');
+        }
+
+        if (preg_match('/^[0-9a-fA-F-]{36}$/', $candidate) === 1) {
+            return $candidate;
+        }
+
+        $groups = $this->request('nodes/' . $nodeId . '/template-groups');
+        foreach ($groups['data'] ?? [] as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+
+            foreach ($this->extractTemplatesFromGroup($group) as $template) {
+                $name = (string) ($template['name'] ?? '');
+                $uuid = (string) ($template['uuid'] ?? '');
+
+                if ($uuid === '') {
+                    continue;
+                }
+
+                if (
+                    mb_strtolower($candidate) === mb_strtolower($name)
+                    || Str::slug($candidate) === Str::slug($name)
+                ) {
+                    return $uuid;
+                }
+            }
+        }
+
+        throw new Exception('The selected template uuid is invalid.');
+    }
+
+    protected function extractErrorMessage(mixed $payload): string
+    {
+        if (is_string($payload) && trim($payload) !== '') {
+            return trim($payload);
+        }
+
+        if (!is_array($payload)) {
+            return '';
+        }
+
+        foreach (['message', 'error', 'detail', 'title'] as $key) {
+            if (isset($payload[$key]) && is_string($payload[$key]) && trim($payload[$key]) !== '') {
+                return trim($payload[$key]);
+            }
+        }
+
+        if (isset($payload['errors']) && is_array($payload['errors'])) {
+            foreach ($payload['errors'] as $entry) {
+                if (is_array($entry)) {
+                    foreach ($entry as $item) {
+                        if (is_string($item) && trim($item) !== '') {
+                            return trim($item);
+                        }
+                    }
+                } elseif (is_string($entry) && trim($entry) !== '') {
+                    return trim($entry);
+                }
+            }
+        }
+
+        return '';
     }
 
     // Convoy is reallyy strict (The account password must contain 8 - 50 characters, 1 uppercase, 1 lowercase, 1 number and 1 special character.)
@@ -230,8 +365,8 @@ class Convoy extends Server
      */
     public function createServer(Service $service, $settings, $properties)
     {
-        $node = $properties['node'] ?? $settings['node'];
-        $os = $properties['os'];
+        $node = (int) ($properties['node'] ?? $settings['node']);
+        $os = $this->resolveTemplateUuid($node, $properties['os'] ?? null);
         $hostname = $properties['hostname'];
         $password = $properties['password'] ?? $this->createPassword();
         $cpu = $properties['cpu'] ?? $settings['cpu'];

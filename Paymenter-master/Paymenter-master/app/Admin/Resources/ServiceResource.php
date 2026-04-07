@@ -10,6 +10,7 @@ use App\Admin\Resources\ServiceResource\Pages\EditService;
 use App\Admin\Resources\ServiceResource\Pages\ListService;
 use App\Admin\Resources\ServiceResource\RelationManagers\ConfigOptionsRelationManager;
 use App\Admin\Resources\ServiceResource\RelationManagers\InvoicesRelationManager;
+use App\Admin\Resources\ServiceResource\RelationManagers\ServiceOperationLogsRelationManager;
 use App\Helpers\ExtensionHelper;
 use App\Models\Currency;
 use App\Models\Product;
@@ -307,6 +308,7 @@ class ServiceResource extends Resource
             InvoicesRelationManager::class,
             PropertiesRelationManager::class,
             ConfigOptionsRelationManager::class,
+            ServiceOperationLogsRelationManager::class,
         ];
     }
 

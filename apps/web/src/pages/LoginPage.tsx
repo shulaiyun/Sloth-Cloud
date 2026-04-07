@@ -3,10 +3,11 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
+import { toFriendlyError } from '../lib/friendly-error';
 import { useSite } from '../lib/site-context';
 
 export function LoginPage() {
-  const { text } = useSite();
+  const { text, locale } = useSite();
   const { login } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -42,7 +43,7 @@ export function LoginPage() {
         setRequiresCode(true);
         setError(text.auth.tfaHint);
       } else {
-        setError(apiError.message);
+        setError(toFriendlyError(apiError, locale));
       }
     } finally {
       setSubmitting(false);

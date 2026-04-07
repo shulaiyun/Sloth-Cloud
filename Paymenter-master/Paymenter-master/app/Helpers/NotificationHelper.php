@@ -57,6 +57,7 @@ class NotificationHelper
         string $subject,
         string $body,
         array $attachments = [],
+        ?User $user = null,
         ?string $email = null,
     ): void {
         if (!$email) {
@@ -69,11 +70,12 @@ class NotificationHelper
             'subject' => $subject,
             'body' => $body,
         ]);
-        $emailLog = EmailLog::create([
+        $emailLog = EmailLog::create(array_filter([
+            'user_id' => $user?->id,
             'subject' => $mail->envelope()->subject,
             'to' => $email,
             'body' => $mail->render(),
-        ]);
+        ], static fn ($value) => $value !== null));
 
         // Add the email log id to the payload
         $mail->email_log_id = $emailLog->id;

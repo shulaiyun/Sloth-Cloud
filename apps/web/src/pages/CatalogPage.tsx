@@ -35,6 +35,9 @@ export function CatalogPage() {
     return <div className="error-card">{text.common.error}</div>;
   }
 
+  const managedCategory = categoriesState.data.data.find((category) => category.slug === 'app-hosting') ?? null;
+  const managedCategorySelected = categorySlug === 'app-hosting';
+
   return (
     <div className="stack-24">
       <section className="section-frame section-shell">
@@ -58,6 +61,29 @@ export function CatalogPage() {
               {localizeText(category.name, locale, category.name)}
             </Link>
           ))}
+        </div>
+      </section>
+
+      <section className="section-frame section-shell">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91' : 'Managed App Hosting'}</p>
+            <h2>
+              {locale.startsWith('zh')
+                ? '\u4e0b\u5355\u540e\u81ea\u52a8\u521b\u5efa\u9694\u79bb\u5e94\u7528\u8fd0\u884c\u73af\u5883'
+                : 'Provision isolated app runtime after checkout'}
+            </h2>
+          </div>
+          <Link className={`button ${managedCategorySelected ? 'secondary' : 'ghost'}`} to={managedCategory ? `/catalog/${managedCategory.slug}` : '/catalog'}>
+            {locale.startsWith('zh') ? '\u67e5\u770b\u6258\u7ba1\u5957\u9910' : 'Browse managed plans'}
+          </Link>
+        </div>
+        <div className="chip-row">
+          <span className="chip">{locale.startsWith('zh') ? '\u5e94\u7528\u72b6\u6001' : 'App status'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u8bbf\u95ee\u5730\u5740' : 'Endpoint'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u65e5\u5fd7' : 'Logs'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u57df\u540d\u4e0e HTTPS' : 'Domain and HTTPS'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u6269\u5bb9\u80fd\u529b' : 'Scaling capability'}</span>
         </div>
       </section>
 

@@ -2,8 +2,18 @@ FROM php:8.2-fpm-alpine
 
 ARG APP_ENV
 
-COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql pcntl redis opcache
+RUN ALPINE_MINOR="$(cut -d. -f1,2 /etc/alpine-release)" \
+    && printf '%s\n' \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v${ALPINE_MINOR}/main" \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v${ALPINE_MINOR}/community" \
+        > /etc/apk/repositories \
+    && apk update \
+    && apk add --no-cache \
+        $PHPIZE_DEPS \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && docker-php-ext-install -j"$(nproc)" pdo_mysql pcntl opcache \
+    && apk del --no-network $PHPIZE_DEPS
 RUN echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
 RUN if [ $APP_ENV = "local" ]; then \
                 echo "opcache.validate_timestamps=1" >> /usr/local/etc/php/conf.d/docker-php-ext-opcache-cli.ini; \

@@ -21,7 +21,7 @@ fi
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R ug+rwX /var/www/html/storage /var/www/html/bootstrap/cache
 
-php /var/www/html/artisan storage:link >/dev/null 2>&1 || true
+php /var/www/html/artisan storage:link --force --no-interaction >/dev/null 2>&1 || true
 
 attempt=1
 max_attempts=40

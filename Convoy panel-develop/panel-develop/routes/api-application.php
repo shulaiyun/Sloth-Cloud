@@ -129,10 +129,14 @@ Route::prefix('/servers')->group(function () {
 
             Route::prefix('/settings')->group(function () {
                 Route::patch('/build', [Admin\ServerController::class, 'updateBuild']);
+                Route::post('/reinstall', [Admin\ServerController::class, 'reinstall']);
+                Route::post('/password', [Admin\ServerController::class, 'rotatePassword']);
 
                 Route::post('/suspend', [Admin\ServerController::class, 'suspend']);
                 Route::post('/unsuspend', [Admin\ServerController::class, 'unsuspend']);
             });
+
+            Route::post('/power', [Admin\ServerController::class, 'power']);
         });
 });
 

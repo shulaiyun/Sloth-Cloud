@@ -13,15 +13,15 @@ class ProcessProvisioningJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public bool $afterCommit = true;
-
     public int $tries = 1;
 
     public int $timeout = 120;
 
     public function __construct(
         public int $provisioningJobId
-    ) {}
+    ) {
+        $this->afterCommit = true;
+    }
 
     public function handle(ProvisioningOrchestrator $orchestrator): void
     {

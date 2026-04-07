@@ -29,11 +29,37 @@ This stack is designed to run on the same server as an existing Paymenter or Con
 3. Copy `deploy/sloth-cloud/env/api.env.example` to `runtime/env/api.env`.
 4. Keep `SLOTH_DB_PASSWORD` in `deploy/sloth-cloud/.env` the same as `DB_PASSWORD` in `runtime/env/paymenter.env`.
 5. Fill in real domains and passwords. `paymenter.env` can keep `APP_KEY=` empty before first boot.
-6. Start the stack:
+6. If your host uses a local proxy, keep the proxy values in `deploy/sloth-cloud/.env`. The stack distinguishes between build-time and runtime proxy endpoints.
+7. Start the stack:
 
 ```bash
+docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml up -d sloth-cloud-proxy-relay
 docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml up -d --build
 ```
+
+## Proxy-aware builds
+
+`deploy/sloth-cloud/.env` now supports:
+
+```bash
+BUILD_HTTP_PROXY=http://127.0.0.1:12334
+BUILD_HTTPS_PROXY=http://127.0.0.1:12334
+build_http_proxy=http://127.0.0.1:12334
+build_https_proxy=http://127.0.0.1:12334
+HTTP_PROXY=http://host.docker.internal:12335
+HTTPS_PROXY=http://host.docker.internal:12335
+http_proxy=http://host.docker.internal:12335
+https_proxy=http://host.docker.internal:12335
+NO_PROXY=localhost,127.0.0.1,host.docker.internal,sloth-cloud-paymenter,sloth-cloud-api,sloth-cloud-web
+no_proxy=localhost,127.0.0.1,host.docker.internal,sloth-cloud-paymenter,sloth-cloud-api,sloth-cloud-web
+```
+
+The compose stack forwards these values to:
+
+- Docker build args for `sloth-cloud-paymenter`, `sloth-cloud-api`, `sloth-cloud-web`, using the WSL-local proxy on `127.0.0.1:12334` together with `build.network: host`
+- Runtime container environments for the same services, using a relay endpoint on `host.docker.internal:12335`
+- `sloth-cloud-proxy-relay`, which forwards container traffic to the WSL-local proxy on `127.0.0.1:12334`
+- `host.docker.internal` host-gateway mapping for build and runtime network access
 
 ## First-time Laravel initialization
 

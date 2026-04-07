@@ -9,6 +9,8 @@ export interface ConvoyConfig {
   applicationPrefix: string;
 }
 
+type PowerState = 'start' | 'kill' | 'restart' | 'shutdown';
+
 function normalizeBaseUrl(baseUrl: string, applicationPrefix: string) {
   const trimmedBase = baseUrl.replace(/\/+$/, '');
   const normalizedPrefix = applicationPrefix.startsWith('/')
@@ -72,7 +74,23 @@ async function requestConvoy<T>(
       : await response.text();
 
     if (!response.ok) {
-      throw new GatewayError(`Convoy request failed with status ${response.status}.`, response.status, payload);
+      const payloadRecord = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
+      const code = typeof payloadRecord.code === 'string'
+        ? payloadRecord.code
+        : (typeof payloadRecord.error_code === 'string' ? payloadRecord.error_code : 'CONVOY_UPSTREAM_ERROR');
+      const detail = typeof payloadRecord.detail === 'string'
+        ? payloadRecord.detail
+        : (typeof payloadRecord.message === 'string' ? payloadRecord.message : null);
+      const message = typeof payloadRecord.message === 'string' && payloadRecord.message.trim() !== ''
+        ? payloadRecord.message.trim()
+        : `Convoy request failed with status ${response.status}.`;
+
+      throw new GatewayError(message, response.status, {
+        code,
+        detail,
+        status: response.status,
+        upstream: payload,
+      });
     }
 
     return payload as T;
@@ -100,6 +118,12 @@ export function createConvoyClient(config: ConvoyConfig) {
     getServer(serverRef: string) {
       return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}`);
     },
+    getNodeTemplateGroups(nodeRef: string | number) {
+      return requestConvoy<{ data: Array<Record<string, unknown>> }>(
+        config,
+        `/nodes/${encodeURIComponent(String(nodeRef))}/template-groups`,
+      );
+    },
     patchServer(serverRef: string, body: Record<string, unknown>) {
       return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}`, {
         method: 'PATCH',
@@ -119,11 +143,13 @@ export function createConvoyClient(config: ConvoyConfig) {
     suspend(serverRef: string) {
       return requestConvoy<unknown>(config, `/servers/${encodeURIComponent(serverRef)}/settings/suspend`, {
         method: 'POST',
+        body: {},
       });
     },
     unsuspend(serverRef: string) {
       return requestConvoy<unknown>(config, `/servers/${encodeURIComponent(serverRef)}/settings/unsuspend`, {
         method: 'POST',
+        body: {},
       });
     },
     destroy(serverRef: string, noPurge = false) {
@@ -132,6 +158,38 @@ export function createConvoyClient(config: ConvoyConfig) {
         `/servers/${encodeURIComponent(serverRef)}?no_purge=${noPurge ? '1' : '0'}`,
         {
           method: 'DELETE',
+        },
+      );
+    },
+    power(serverRef: string, state: PowerState) {
+      return requestConvoy<{ data?: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/power`,
+        {
+          method: 'POST',
+          body: {
+            state,
+          },
+        },
+      );
+    },
+    reinstall(serverRef: string, body: Record<string, unknown>) {
+      return requestConvoy<{ data?: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/settings/reinstall`,
+        {
+          method: 'POST',
+          body,
+        },
+      );
+    },
+    rotatePassword(serverRef: string, body: Record<string, unknown> = {}) {
+      return requestConvoy<{ data?: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/settings/password`,
+        {
+          method: 'POST',
+          body,
         },
       );
     },

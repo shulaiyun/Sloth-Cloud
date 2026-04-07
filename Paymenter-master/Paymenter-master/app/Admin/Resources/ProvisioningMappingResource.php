@@ -54,10 +54,9 @@ class ProvisioningMappingResource extends Resource
         return $schema->components([
             Select::make('provider')
                 ->required()
-                ->default('convoy')
-                ->options([
-                    'convoy' => 'Convoy',
-                ]),
+                ->default(ProvisioningMapping::PROVIDER_CONVOY)
+                ->options(ProvisioningMapping::providerOptions())
+                ->helperText('Use convoy for VPS and managed-app for Managed App Hosting contracts.'),
             TextInput::make('priority')
                 ->numeric()
                 ->default(100)
@@ -92,7 +91,7 @@ class ProvisioningMappingResource extends Resource
                 ->helperText('Default node reference to write into service properties.'),
             KeyValue::make('config')
                 ->nullable()
-                ->helperText('Optional provider config (e.g. cpu/ram/disk/bandwidth/hostname).'),
+                ->helperText('Optional provider config (e.g. cpu/ram/disk for convoy, runtime_ref/replica_limit for managed-app).'),
         ])->columns(2);
     }
 
@@ -165,4 +164,3 @@ class ProvisioningMappingResource extends Resource
         ];
     }
 }
-

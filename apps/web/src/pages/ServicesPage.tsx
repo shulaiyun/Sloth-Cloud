@@ -12,7 +12,7 @@ type ServiceSort = 'status' | 'price-desc' | 'price-asc' | 'expires-asc';
 function normalizeServiceStatus(status: string): Exclude<ServiceStatusFilter, 'all'> {
   const value = status.trim().toLowerCase();
   if (value === 'active') return 'active';
-  if (value === 'pending') return 'pending';
+  if (value === 'pending' || value === 'provisioning') return 'pending';
   if (value === 'suspended') return 'suspended';
   if (value === 'cancelled' || value === 'canceled') return 'cancelled';
   return 'unknown';
@@ -45,12 +45,13 @@ function serviceStatusLabel(status: string, locale: string) {
 }
 
 function isPurchasedService(service: ServiceSummary) {
+  const normalizedId = service.id.trim();
   const hasLabel = (service.label || service.baseLabel || '').trim().length > 0;
   const hasProduct = Boolean(service.product?.id || service.product?.slug || service.product?.name);
   const hasPlan = Boolean(service.plan?.id || service.plan?.name);
   const hasLifecycleMeta = Boolean(service.expiresAt || service.cancellable || service.upgradable);
 
-  return Boolean(service.id) && (hasLabel || hasProduct || hasPlan || hasLifecycleMeta);
+  return normalizedId !== '' && (hasLabel || hasProduct || hasPlan || hasLifecycleMeta);
 }
 
 export function ServicesPage() {
@@ -199,31 +200,34 @@ export function ServicesPage() {
         <div className="callout">{text.services.noServices}</div>
       ) : (
         <section className="service-grid">
-          {visibleServices.map((service) => (
-            <article className="panel stack-12" key={service.id}>
-              <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
-              <p className="muted">
-                {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
-              </p>
-              <div className="detail-grid">
-                <div>
-                  <span>{text.common.status}</span>
-                  <strong>
-                    <span className={`status-pill ${serviceStatusClassName(service.status)}`}>
-                      {serviceStatusLabel(service.status, locale)}
-                    </span>
-                  </strong>
+          {visibleServices.map((service) => {
+            const normalizedId = service.id.trim();
+            return (
+              <article className="panel stack-12" key={normalizedId}>
+                <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
+                <p className="muted">
+                  {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
+                </p>
+                <div className="detail-grid">
+                  <div>
+                    <span>{text.common.status}</span>
+                    <strong>
+                      <span className={`status-pill ${serviceStatusClassName(service.status)}`}>
+                        {serviceStatusLabel(service.status, locale)}
+                      </span>
+                    </strong>
+                  </div>
+                  <div>
+                    <span>{text.common.total}</span>
+                    <strong>{service.formattedPrice}</strong>
+                  </div>
                 </div>
-                <div>
-                  <span>{text.common.total}</span>
-                  <strong>{service.formattedPrice}</strong>
-                </div>
-              </div>
-              <Link className="button ghost" to={`/services/${service.id}`}>
-                {text.common.inspect}
-              </Link>
-            </article>
-          ))}
+                <Link className="button ghost" to={`/services/${encodeURIComponent(normalizedId)}`}>
+                  {text.common.inspect}
+                </Link>
+              </article>
+            );
+          })}
         </section>
       )}
     </div>

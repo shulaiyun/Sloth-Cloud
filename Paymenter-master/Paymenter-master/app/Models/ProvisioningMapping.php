@@ -9,6 +9,10 @@ class ProvisioningMapping extends Model
 {
     use HasFactory;
 
+    public const PROVIDER_CONVOY = 'convoy';
+
+    public const PROVIDER_MANAGED_APP = 'managed-app';
+
     protected $fillable = [
         'provider',
         'product_id',
@@ -30,5 +34,16 @@ class ProvisioningMapping extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('enabled', true);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function providerOptions(): array
+    {
+        return [
+            self::PROVIDER_CONVOY => 'Convoy (VPS)',
+            self::PROVIDER_MANAGED_APP => 'Managed App Hosting',
+        ];
     }
 }

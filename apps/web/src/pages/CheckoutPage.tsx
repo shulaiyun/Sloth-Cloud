@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { CartResponse, CheckoutResponse } from '../lib/types';
@@ -21,7 +22,7 @@ export function CheckoutPage() {
       await requestJson(path, { method, body });
       window.location.reload();
     } catch (caughtError) {
-      setActionError((caughtError as ApiError).message);
+      setActionError(toFriendlyError(caughtError as ApiError, locale));
     } finally {
       setPending(false);
     }
@@ -47,7 +48,7 @@ export function CheckoutPage() {
       }
       setOrderResult(response);
     } catch (caughtError) {
-      setActionError((caughtError as ApiError).message);
+      setActionError(toFriendlyError(caughtError as ApiError, locale));
     } finally {
       if (!redirected) {
         setPending(false);

@@ -4,8 +4,8 @@
     "scripts": {
         "dev": "node vite.js dev",
         "build": "node vite.js && npm run build:admin",
-        "dev:admin": "npx @tailwindcss/cli@4.1.11 -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --watch",
-        "build:admin": "npx @tailwindcss/cli@4.1.11 -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --minify"
+        "dev:admin": "tailwindcss -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --watch",
+        "build:admin": "tailwindcss -i ./resources/css/filament/admin/theme.css -o ./public/css/filament/admin/theme.css --minify"
     },
     "devDependencies": {
         "@tailwindcss/cli": "^4.1.11",

@@ -264,6 +264,7 @@ export interface ProvisioningStatus {
   provider: string;
   attemptCount: number;
   errorMessage: string | null;
+  errorCode: string | null;
   lastAttemptAt: string | null;
   completedAt: string | null;
 }
@@ -271,6 +272,80 @@ export interface ProvisioningStatus {
 export interface ProvisioningJobSummary extends ProvisioningStatus {
   id: string;
   createdAt: string | null;
+}
+
+export interface ActionResult {
+  success: boolean;
+  code: string | null;
+  detail: string | null;
+  operationId: string | null;
+}
+
+export type RuntimeKind = 'vps' | 'managed-app' | 'unknown';
+
+export interface RuntimeActionCapabilities {
+  start: boolean;
+  stop: boolean;
+  restart: boolean;
+  suspend: boolean;
+  unsuspend: boolean;
+  reinstall: boolean;
+  revealPassword: boolean;
+  delete: boolean;
+}
+
+export interface RuntimeCapabilities {
+  status: boolean;
+  logs: boolean;
+  actions: RuntimeActionCapabilities;
+  env: boolean;
+  domain: boolean;
+  tls: boolean;
+  scale: boolean;
+}
+
+export interface ServiceRuntimeSnapshot {
+  kind: RuntimeKind;
+  contractVersion: string;
+  runtimeRef: string | null;
+  status: string | null;
+  endpoint: string | null;
+  lastDeployAt: string | null;
+  domain?: string | null;
+  tlsStatus?: string | null;
+  replicas?: number | null;
+  envJson?: string | null;
+  managedApp: {
+    clusterRef: string | null;
+    namespace: string | null;
+    workload: string | null;
+    service: string | null;
+    ingressUrl: string | null;
+  } | null;
+  vps: {
+    serverRef: string | null;
+    convoyStatus: string | null;
+  } | null;
+}
+
+export interface ServiceOperationLogSummary {
+  id: string;
+  operationId: string;
+  action: string;
+  source: string;
+  success: boolean | null;
+  code: string | null;
+  message: string | null;
+  detail: string | null;
+  requestPayload: Record<string, unknown> | null;
+  responsePayload: Record<string, unknown> | null;
+  actor: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export interface ServiceSummary {
@@ -496,8 +571,51 @@ export interface ServiceProvisioningRetryResponse {
     jobId: string;
     status: string;
     attemptCount: number;
+    force?: boolean;
   };
   meta: ApiMeta;
+}
+
+export interface ServiceRuntimeResponse {
+  data: {
+    serviceId: string;
+    runtime: ServiceRuntimeSnapshot;
+    provisioning: ProvisioningStatus | null;
+    capabilities: RuntimeCapabilities;
+    actions: {
+      buttons: Array<Record<string, unknown>>;
+    };
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceRuntimeCapabilitiesResponse {
+  data: {
+    serviceId: string;
+    runtimeKind: RuntimeKind;
+    runtimeRef: string | null;
+    provisioning: ProvisioningStatus | null;
+    capabilities: RuntimeCapabilities;
+    actions: {
+      buttons: Array<Record<string, unknown>>;
+    };
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceOperationLogsResponse {
+  data: {
+    serviceId: string;
+    logs: ServiceOperationLogSummary[];
+  };
+  meta: ApiMeta;
+}
+
+export interface ActionResponse<TData = Record<string, unknown> | null> {
+  message: string;
+  data: TData;
+  actionResult: ActionResult | null;
+  meta?: ApiMeta;
 }
 
 export interface InvoicesResponse {

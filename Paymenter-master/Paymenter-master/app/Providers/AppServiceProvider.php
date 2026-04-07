@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Laravel\Passport\Passport;
@@ -134,6 +135,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $appUrl = config('app.url');
+        if (is_string($appUrl) && $appUrl !== '') {
+            URL::forceRootUrl($appUrl);
+
+            $scheme = parse_url($appUrl, PHP_URL_SCHEME);
+            if (is_string($scheme) && in_array(strtolower($scheme), ['http', 'https'], true)) {
+                URL::forceScheme(strtolower($scheme));
+            }
+        }
+
         // Change livewire url
         Livewire::setUpdateRoute(function ($handle) {
             return Route::post('/paymenter/update', $handle)->middleware('web')->name('paymenter.');

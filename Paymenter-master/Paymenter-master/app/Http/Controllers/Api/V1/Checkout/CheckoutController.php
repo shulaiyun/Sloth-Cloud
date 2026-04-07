@@ -184,8 +184,10 @@ class CheckoutController extends Controller
                     } else {
                         if ($service->product->server) {
                             $orchestrator = app(ProvisioningOrchestrator::class);
-                            if ($orchestrator->supports($service, 'convoy')) {
-                                $orchestrator->enqueueForService($service, 'convoy', [
+                            $provider = $orchestrator->providerForService($service);
+
+                            if ($provider && $orchestrator->supports($service, $provider)) {
+                                $orchestrator->enqueueForService($service, $provider, [
                                     'trigger' => 'checkout.free',
                                 ]);
                             } else {

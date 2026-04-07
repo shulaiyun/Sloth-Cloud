@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { toFriendlyError } from '../lib/friendly-error';
 import { useAuth } from '../lib/auth-context';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
@@ -152,7 +153,7 @@ export function ProductPage() {
 
       setSubmitSuccess(text.product.addSuccess);
     } catch (caughtError) {
-      setSubmitError((caughtError as ApiError).message);
+      setSubmitError(toFriendlyError(caughtError as ApiError, locale));
     } finally {
       setSubmitting(false);
     }
@@ -182,8 +183,8 @@ export function ProductPage() {
 
       navigate('/checkout');
     } catch (caughtError) {
-      const message = (caughtError as ApiError).message;
-      const normalized = message.toLowerCase();
+      const apiError = caughtError as ApiError;
+      const normalized = apiError.message.toLowerCase();
 
       if (
         normalized.includes('already in your cart')
@@ -194,7 +195,7 @@ export function ProductPage() {
         return;
       }
 
-      setSubmitError(message);
+      setSubmitError(toFriendlyError(apiError, locale));
     } finally {
       setSubmitting(false);
     }
@@ -208,8 +209,6 @@ export function ProductPage() {
     return <div className="error-card">{text.common.error}: {error}</div>;
   }
 
-  const sourceMode = data?.meta.sourceMode ?? 'live';
-
   return (
     <div className="stack-24">
       <section className="detail-hero">
@@ -217,7 +216,6 @@ export function ProductPage() {
           <Link className="text-link" to="/catalog">{text.common.backToCatalog}</Link>
           <div className="chip-row">
             {product.category ? <span className="chip">{localizeText(product.category.name, locale, product.category.name)}</span> : null}
-            <span className="chip">{text.common.sourceMode}: {sourceMode === 'live' ? text.common.live : text.common.mock}</span>
             <span className="chip">{text.common.stock}: {product.stock ?? '-'}</span>
           </div>
           <h1>{localizeText(product.name, locale, product.name)}</h1>

@@ -11,11 +11,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Paymenter\Extensions\Gateways\Epay\Support\Signer;
 
 #[ExtensionMeta(
-    name: '在线支付',
-    description: 'Unified online payment gateway for Epay/V免签 callbacks.',
+    name: 'Online Payment',
+    description: 'Unified online payment gateway for Epay/V-sign callbacks.',
     version: '1.0.0',
     author: 'Sloth Cloud',
     url: 'https://app.jxjvip.help',
@@ -70,7 +71,7 @@ class Epay extends Gateway
                 'name' => 'payment_type',
                 'label' => 'Upstream Channel Type',
                 'type' => 'select',
-                'description' => 'Default channel passed upstream. For aggregated checkout, channel selection is handled by V免签/Epay side.',
+                'description' => 'Default channel passed upstream. For aggregated checkout, channel selection is handled by V-sign/Epay side.',
                 'required' => true,
                 'default' => 'alipay',
                 'options' => [
@@ -125,13 +126,14 @@ class Epay extends Gateway
         $notifyUrl = $this->resolveNotifyUrl();
         // For headless flow, send users back to frontend invoice page directly.
         $returnUrl = $this->resolveFrontendReturnUrl($invoice);
+        $merchantOrderNo = $this->buildMerchantOrderNo($invoice);
 
         $params = [
             'pid' => (string) $this->config('app_id'),
             'type' => (string) ($this->config('payment_type') ?: 'alipay'),
             'notify_url' => $notifyUrl,
             'return_url' => $returnUrl,
-            'out_trade_no' => (string) $invoice->id,
+            'out_trade_no' => $merchantOrderNo,
             'name' => 'Invoice #' . ($invoice->number ?: $invoice->id),
             'money' => number_format((float) $total, 2, '.', ''),
             'param' => (string) ($invoice->number ?: $invoice->id),
@@ -148,6 +150,7 @@ class Epay extends Gateway
             'currency' => $currency,
             'notify_url' => $notifyUrl,
             'return_url' => $returnUrl,
+            'merchant_order_no' => $merchantOrderNo,
             'api_url' => (string) $this->config('api_url'),
             'redirect_url' => $redirect,
         ]);
@@ -286,12 +289,7 @@ class Epay extends Gateway
 
     private function resolveFrontendReturnUrl(Invoice $invoice, array $query = []): string
     {
-        $configured = trim((string) $this->config('frontend_return_url'));
-        $frontendBase = trim((string) env('SLOTH_FRONTEND_URL', 'https://app.jxjvip.help'));
-        $frontendBase = rtrim($frontendBase, '/');
-        $fallback = $frontendBase . '/invoices/{number}';
-
-        $baseUrl = $configured !== '' ? $configured : $fallback;
+        $baseUrl = $this->resolveFrontendUrlTemplate();
         $baseUrl = str_replace(
             ['{invoice}', '{number}'],
             [(string) $invoice->id, (string) ($invoice->number ?: $invoice->id)],
@@ -321,6 +319,11 @@ class Epay extends Gateway
         }
 
         return route('extensions.gateways.epay.notify');
+    }
+
+    private function buildMerchantOrderNo(Invoice $invoice): string
+    {
+        return sprintf('%d-%s', (int) $invoice->id, Str::lower(Str::random(12)));
     }
 
     private function recordPaymentIfApplicable(Invoice $invoice, array $payload, string $source): bool
@@ -516,10 +519,10 @@ class Epay extends Gateway
             ['pid', 'partner', 'merchant_id', 'app_id', 'uid', 'user_id', 'mid']
         );
 
-        $invoiceId = (int) $this->firstNonEmpty(
+        $invoiceId = $this->extractInvoiceId($this->firstNonEmpty(
             $payload,
             ['out_trade_no', 'order_id', 'invoice_id', 'invoice', 'payId', 'pay_id']
-        );
+        ));
 
         $tradeStatus = strtoupper($this->firstNonEmpty(
             $payload,
@@ -609,7 +612,7 @@ class Epay extends Gateway
         }
 
         $msg = strtoupper($this->firstNonEmpty($payload, ['msg', 'message'], ''));
-        if (str_contains($msg, 'SUCCESS') || str_contains($msg, 'PAID') || str_contains($msg, '支付成功')) {
+        if (str_contains($msg, 'SUCCESS') || str_contains($msg, 'PAID')) {
             return true;
         }
 
@@ -624,11 +627,11 @@ class Epay extends Gateway
 
     private function resolveInvoiceFromPayload(array $payload): ?Invoice
     {
-        $invoiceId = (int) $this->firstNonEmpty(
+        $invoiceId = $this->extractInvoiceId($this->firstNonEmpty(
             $payload,
             ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'],
             '0'
-        );
+        ));
 
         if ($invoiceId <= 0) {
             return null;
@@ -639,18 +642,20 @@ class Epay extends Gateway
 
     private function resolveFallbackFrontendUrl(array $payload): string
     {
-        $configured = trim((string) $this->config('frontend_return_url'));
-        if ($configured === '') {
-            return config('app.url');
-        }
+        $invoiceReference = $this->firstNonEmpty(
+            $payload,
+            ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'],
+            ''
+        );
+        $invoiceId = (string) $this->extractInvoiceId($invoiceReference);
 
         $baseUrl = str_replace(
             ['{invoice}', '{number}'],
             [
-                $this->firstNonEmpty($payload, ['out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
+                $invoiceId,
                 $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
             ],
-            $configured
+            $this->resolveFrontendUrlTemplate()
         );
 
         $separator = str_contains($baseUrl, '?') ? '&' : '?';
@@ -659,6 +664,91 @@ class Epay extends Gateway
             'trade_no' => (string) ($payload['trade_no'] ?? ''),
             'out_trade_no' => (string) ($payload['out_trade_no'] ?? ($payload['payId'] ?? ($payload['pay_id'] ?? ''))),
         ]));
+    }
+
+
+    private function resolveFrontendUrlTemplate(): string
+    {
+        $configured = trim((string) $this->config('frontend_return_url'));
+        if ($configured !== '') {
+            if ($this->isPublicFrontendUrl($configured)) {
+                return $configured;
+            }
+
+            $this->logWarning('Epay frontend_return_url rejected (localhost/private host). Falling back.', [
+                'frontend_return_url' => $configured,
+            ]);
+        }
+
+        $frontendBase = trim((string) env('SLOTH_FRONTEND_URL', ''));
+        if ($frontendBase !== '') {
+            $candidate = rtrim($frontendBase, '/') . '/invoices/{number}';
+            if ($this->isPublicFrontendUrl($candidate)) {
+                return $candidate;
+            }
+
+            $this->logWarning('Epay SLOTH_FRONTEND_URL rejected (localhost/private host). Falling back.', [
+                'SLOTH_FRONTEND_URL' => $frontendBase,
+            ]);
+        }
+
+        return 'https://app.jxjvip.help/invoices/{number}';
+    }
+
+    private function isPublicFrontendUrl(string $url): bool
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return false;
+        }
+
+        $parts = parse_url($url);
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return false;
+        }
+
+        if (
+            $host === 'localhost'
+            || $host === '127.0.0.1'
+            || $host === '::1'
+            || str_ends_with($host, '.localhost')
+        ) {
+            return false;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            $isPublicIp = filter_var(
+                $host,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+            ) !== false;
+
+            if (!$isPublicIp) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+    private function extractInvoiceId(string $reference): int
+    {
+        $reference = trim($reference);
+        if ($reference === '') {
+            return 0;
+        }
+
+        if (ctype_digit($reference)) {
+            return (int) $reference;
+        }
+
+        if (preg_match('/^(\d+)(?:[-_:].*)?$/', $reference, $matches) === 1) {
+            return (int) ($matches[1] ?? 0);
+        }
+
+        return 0;
     }
 
     private function logInfo(string $message, array $context = []): void
@@ -683,3 +773,4 @@ class Epay extends Gateway
         }
     }
 }
+

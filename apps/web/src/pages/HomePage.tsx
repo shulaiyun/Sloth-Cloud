@@ -47,6 +47,8 @@ export function HomePage() {
 
   const featuredProducts = data.data.featuredProducts;
   const categories = data.data.categories;
+  const managedCategory = categories.find((category) => category.slug === 'app-hosting') ?? null;
+  const managedProducts = featuredProducts.filter((product) => product.category?.slug === 'app-hosting');
   const hasProducts = featuredProducts.length > 0;
   const hasCategories = categories.length > 0;
 
@@ -62,12 +64,6 @@ export function HomePage() {
       value: String(featuredProducts.length),
       hint: text.home.featuredSubtitle,
       tone: 'products',
-    },
-    {
-      label: text.common.sourceMode,
-      value: data.meta.sourceMode === 'live' ? text.common.live : text.common.mock,
-      hint: text.footer.statement,
-      tone: 'platform',
     },
   ] as const;
 
@@ -105,9 +101,9 @@ export function HomePage() {
               </div>
             </div>
             <div className="brand-signal-list" aria-label="Brand capability highlights">
-              <span className="brand-signal">Headless Billing</span>
-              <span className="brand-signal">Provisioning Orchestrator</span>
-              <span className="brand-signal">Service Control API</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '统一商业账本' : 'Unified commerce ledger'}</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '自动化开通编排' : 'Automated provisioning orchestrator'}</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '统一运行时控制' : 'Unified runtime control API'}</span>
             </div>
           </div>
         </div>
@@ -116,8 +112,8 @@ export function HomePage() {
       <section className="section-frame section-shell">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">{text.common.sourceMode}</p>
-            <h2>{`${brand.nameCn} Headless`}</h2>
+            <p className="section-kicker">{locale.startsWith('zh') ? '运营总览' : 'Operations Overview'}</p>
+            <h2>{locale.startsWith('zh') ? `${brand.nameCn} 产品规模` : `${brand.nameEn} Product Footprint`}</h2>
           </div>
         </div>
         <div className="metrics-grid">
@@ -173,6 +169,62 @@ export function HomePage() {
                   {text.nav.catalog}
                 </Link>
               </div>
+            </article>
+          )}
+        </div>
+      </section>
+
+      <section className="section-frame section-shell section-products">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91' : 'Managed App Hosting'}</p>
+            <h2>
+              {locale.startsWith('zh')
+                ? '\u5728\u6811\u61d2\u4e91\u524d\u53f0\u7ba1\u7406\u5e94\u7528\u3001\u57df\u540d\u3001HTTPS \u4e0e\u6269\u5bb9'
+                : 'Run your app with domain, HTTPS, logs, env, and scaling in one panel'}
+            </h2>
+          </div>
+          <Link className="button ghost" to={managedCategory ? `/catalog/${managedCategory.slug}` : '/catalog'}>
+            {locale.startsWith('zh') ? '\u8fdb\u5165\u4ea7\u54c1\u7ebf' : 'Open product line'}
+          </Link>
+        </div>
+        <div className="chip-row">
+          <span className="chip">{locale.startsWith('zh') ? '\u5e94\u7528\u5b9e\u4f8b' : 'Application instance'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u65e5\u5fd7' : 'Logs'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u73af\u5883\u53d8\u91cf' : 'Environment variables'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u57df\u540d + HTTPS' : 'Domain + HTTPS'}</span>
+          <span className="chip">{locale.startsWith('zh') ? '\u6269\u5bb9' : 'Scaling'}</span>
+        </div>
+        <div className="card-grid product-grid">
+          {managedProducts.length > 0 ? (
+            managedProducts.map((product) => (
+              <article className="product-card" key={product.id}>
+                <div className="chip-row">
+                  <span className="chip">{product.slug}</span>
+                  <span className="chip">
+                    {localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}
+                  </span>
+                </div>
+                <h3>{localizeText(product.name, locale, product.name)}</h3>
+                <p>{localizeText(product.description, locale, product.description)}</p>
+                <div className="card-footer">
+                  <strong>
+                    {formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}
+                  </strong>
+                  <Link className="button ghost" to={`/product/${product.slug}`}>
+                    {text.common.inspect}
+                  </Link>
+                </div>
+              </article>
+            ))
+          ) : (
+            <article className="product-card">
+              <h3>{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91\u5957\u9910\u5373\u5c06\u4e0a\u7ebf' : 'Managed app plans are being prepared'}</h3>
+              <p>
+                {locale.startsWith('zh')
+                  ? '\u8bf7\u5728 Paymenter \u4e2d\u6267\u884c app \u76ee\u5f55\u542f\u52a8\u547d\u4ee4\uff0c\u7136\u540e\u5237\u65b0\u672c\u9875\u3002'
+                  : 'Run the managed-app catalog bootstrap command in Paymenter, then refresh this page.'}
+              </p>
             </article>
           )}
         </div>

@@ -1,60 +1,30 @@
-FROM php:8.3-cli-alpine AS composer_deps
-
-WORKDIR /app
-
-RUN apk add --no-cache \
-    bash \
-    git \
-    unzip \
-    icu-dev \
-    libzip-dev \
-    gmp-dev \
-    oniguruma-dev \
-    linux-headers \
-    $PHPIZE_DEPS \
-    && docker-php-ext-configure zip \
-    && docker-php-ext-install intl pdo_mysql zip gmp mbstring \
-    && apk del $PHPIZE_DEPS
-
-COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
-
-COPY composer.json composer.lock ./
-
-RUN composer install \
-    --no-dev \
-    --no-interaction \
-    --prefer-dist \
-    --no-scripts \
-    --no-autoloader
-
-FROM node:22-alpine AS asset_builder
-
-WORKDIR /app
-
-COPY package.json package-lock.json ./
-
-RUN npm ci
-
-COPY . .
-COPY --from=composer_deps /app/vendor /app/vendor
-
-RUN set -eux; \
-    npm run build; \
-    test -s /app/public/css/filament/admin/theme.css; \
-    if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi; \
-    if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi; \
-    (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json); \
-    test -s /app/public/css/filament/admin/theme.css
-
-FROM php:8.3-fpm-alpine AS runtime
+FROM php:8.3-fpm-alpine AS php_base
 
 WORKDIR /var/www/html
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG NO_PROXY
+ARG no_proxy
+
+ENV COMPOSER_ALLOW_SUPERUSER=1 \
+    COMPOSER_PROCESS_TIMEOUT=1800 \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    NO_PROXY=${NO_PROXY} \
+    no_proxy=${no_proxy}
 
 RUN apk add --no-cache \
     nginx \
     supervisor \
     curl \
     bash \
+    git \
+    unzip \
     icu-data-full \
     icu-dev \
     libzip-dev \
@@ -73,14 +43,73 @@ RUN apk add --no-cache \
 
 COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
 
-COPY . .
-COPY --from=composer_deps /app/vendor ./vendor
+RUN if [ -n "$HTTP_PROXY" ]; then git config --global http.proxy "$HTTP_PROXY"; fi \
+    && if [ -n "$HTTPS_PROXY" ]; then git config --global https.proxy "$HTTPS_PROXY"; fi \
+    && composer config -g process-timeout "${COMPOSER_PROCESS_TIMEOUT}"
+
+FROM php_base AS composer_deps
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
 
 RUN composer install \
     --no-dev \
     --no-interaction \
     --prefer-dist \
-    --optimize-autoloader \
+    --no-scripts \
+    --no-autoloader
+
+FROM node:22-alpine AS asset_builder
+
+WORKDIR /app
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG NO_PROXY
+ARG no_proxy
+
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    NO_PROXY=${NO_PROXY} \
+    no_proxy=${no_proxy}
+
+COPY package.json package-lock.json ./
+
+RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
+    && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
+    && if [ -n "$NO_PROXY" ]; then npm config set noproxy "$NO_PROXY"; fi \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm config set fetch-timeout 600000 \
+    && npm config set maxsockets 5
+
+RUN npm ci
+
+COPY . .
+COPY --from=composer_deps /app/vendor /app/vendor
+
+RUN set -eux; \
+    npm run build; \
+    test -s /app/public/css/filament/admin/theme.css; \
+    if [ -d /app/public/default ] && [ ! -f /app/public/build/manifest.json ]; then mkdir -p /app/public/build && cp -R /app/public/default/. /app/public/build/; fi; \
+    if [ -d /app/public/build ] && [ ! -f /app/public/default/manifest.json ]; then mkdir -p /app/public/default && cp -R /app/public/build/. /app/public/default/; fi; \
+    (test -f /app/public/default/manifest.json || test -f /app/public/build/manifest.json); \
+    test -s /app/public/css/filament/admin/theme.css
+
+FROM php_base AS runtime
+
+WORKDIR /var/www/html
+
+COPY . .
+COPY --from=composer_deps /app/vendor ./vendor
+
+RUN composer dump-autoload --no-dev --optimize \
     && chmod -R ug+rwX storage bootstrap/cache
 
 COPY --from=asset_builder /app/public /var/www/html/public

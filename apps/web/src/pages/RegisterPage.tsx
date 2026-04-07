@@ -3,10 +3,11 @@ import { Link, useNavigate } from 'react-router-dom';
 
 import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
+import { toFriendlyError } from '../lib/friendly-error';
 import { useSite } from '../lib/site-context';
 
 export function RegisterPage() {
-  const { text } = useSite();
+  const { text, locale } = useSite();
   const { register } = useAuth();
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
@@ -28,7 +29,7 @@ export function RegisterPage() {
       await register(form);
       navigate('/catalog', { replace: true });
     } catch (caughtError) {
-      setError((caughtError as ApiError).message);
+      setError(toFriendlyError(caughtError as ApiError, locale));
     } finally {
       setSubmitting(false);
     }

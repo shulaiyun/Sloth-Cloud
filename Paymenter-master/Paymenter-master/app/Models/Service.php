@@ -6,6 +6,7 @@ use App\Classes\Price;
 use App\Classes\Settings;
 use App\Models\Traits\HasProperties;
 use App\Models\ProvisioningJob;
+use App\Models\ServiceOperationLog;
 use App\Observers\ServiceObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -257,6 +258,16 @@ class Service extends Model implements Auditable
     public function billingAgreement()
     {
         return $this->belongsTo(BillingAgreement::class, 'billing_agreement_id');
+    }
+
+    public function operationLogs()
+    {
+        return $this->serviceOperationLogs();
+    }
+
+    public function serviceOperationLogs()
+    {
+        return $this->hasMany(ServiceOperationLog::class)->latest('id');
     }
 
     public function provisioningJobs()

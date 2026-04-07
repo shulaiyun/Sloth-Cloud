@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\Log;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use OwenIt\Auditing\Events\AuditCustom;
 use ReflectionClass;
+use ReflectionMethod;
 
 class ExtensionHelper
 {
@@ -230,7 +231,14 @@ class ExtensionHelper
                 throw new Exception('Function not found');
             }
 
-            return self::getExtension($extension->type, $extension->extension, $extension->settings)->$function(...$args);
+            $instance = self::getExtension($extension->type, $extension->extension, $extension->settings);
+            $method = new ReflectionMethod($instance, $function);
+
+            if (!$method->isVariadic()) {
+                $args = array_slice($args, 0, $method->getNumberOfParameters());
+            }
+
+            return $instance->$function(...$args);
         } catch (Exception $e) {
             // If mayFail is true, just report the exception instead of throwing it
             if (!$mayFail) {
@@ -257,6 +265,43 @@ class ExtensionHelper
         }
 
         return self::call($server, $function, [$service, self::settingsToArray($service->product->settings), self::getServiceProperties($service), ...$args], $mayFail);
+    }
+
+    public static function callServiceAction(Service $service, string $function, array $payload = [], $mayFail = false)
+    {
+        $server = $service->product->server;
+
+        if (!$server) {
+            if ($mayFail) {
+                throw new Exception('No server assigned to this product');
+            } else {
+                return;
+            }
+        }
+
+        $extension = self::getExtension('server', $server->extension, $server->settings);
+        $method = new ReflectionMethod($extension, $function);
+        $args = [
+            $service,
+            self::settingsToArray($service->product->settings),
+            self::getServiceProperties($service),
+        ];
+
+        if ($method->isVariadic() || $method->getNumberOfParameters() >= 4) {
+            $args[] = $payload;
+        }
+
+        try {
+            return $extension->$function(...$args);
+        } catch (Exception $e) {
+            if (!$mayFail) {
+                throw $e;
+            }
+
+            if (\Str::doesntEndWith($e->getMessage(), 'not found')) {
+                report($e);
+            }
+        }
     }
 
     /**

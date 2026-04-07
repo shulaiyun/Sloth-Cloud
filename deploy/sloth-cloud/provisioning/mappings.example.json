@@ -1,0 +1,78 @@
+[
+  {
+    "provider": "convoy",
+    "enabled": true,
+    "priority": 10,
+    "product_slug": "starter-vps",
+    "plan_name": "monthly",
+    "node_ref": "1",
+    "template_ref": "ubuntu-22-04",
+    "config": {
+      "cpu": 2,
+      "ram": 4096,
+      "disk": 40960,
+      "bandwidth": 2048,
+      "ipv4": 1,
+      "ipv6": 0,
+      "snapshot": 1,
+      "backups": 1,
+      "start_on_create": true
+    }
+  },
+  {
+    "provider": "convoy",
+    "enabled": true,
+    "priority": 20,
+    "product_slug": "pro-vps",
+    "plan_name": "monthly",
+    "node_ref": "1",
+    "template_ref": "ubuntu-24-04",
+    "config": {
+      "cpu": 4,
+      "ram": 8192,
+      "disk": 81920,
+      "bandwidth": 4096,
+      "ipv4": 1,
+      "ipv6": 0,
+      "snapshot": 2,
+      "backups": 2,
+      "start_on_create": true
+    }
+  },
+  {
+    "provider": "managed-app",
+    "enabled": true,
+    "priority": 10,
+    "product_slug": "app-starter",
+    "plan_name": "monthly",
+    "config": {
+      "app_type": "container",
+      "port": 8080,
+      "initial_domain": "",
+      "persistent_storage_size": "5Gi",
+      "replica_limit": 1,
+      "properties": {
+        "runtime_kind": "managed-app",
+        "k8s_cluster_ref": "default"
+      }
+    }
+  },
+  {
+    "provider": "managed-app",
+    "enabled": true,
+    "priority": 20,
+    "product_slug": "app-pro",
+    "plan_name": "monthly",
+    "config": {
+      "app_type": "container",
+      "port": 8080,
+      "initial_domain": "",
+      "persistent_storage_size": "20Gi",
+      "replica_limit": 3,
+      "properties": {
+        "runtime_kind": "managed-app",
+        "k8s_cluster_ref": "default"
+      }
+    }
+  }
+]
