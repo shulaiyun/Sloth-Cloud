@@ -109,6 +109,45 @@ function mapKnownCode(code: string, zh: boolean) {
 
 export function toFriendlyError(error: unknown, locale: string) {
   const zh = locale.startsWith('zh');
+  const internalFailureMessage = zh
+    ? '服务暂时不可用，请稍后重试；若持续出现，请联系技术支持。'
+    : 'The service is temporarily unavailable. Please try again later or contact support.';
+  const upstreamUnavailableMessage = zh
+    ? '上游资源服务暂时不可用，请稍后重试。'
+    : 'The upstream infrastructure service is temporarily unavailable. Please try again later.';
+
+  const rawMessage = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : '';
+  const rawLower = rawMessage.toLowerCase();
+
+  if (
+    rawLower.includes('/var/www/html/storage/logs')
+    || rawLower.includes('laravel-20')
+    || (rawLower.includes('permission denied') && rawLower.includes('storage/logs'))
+  ) {
+    return internalFailureMessage;
+  }
+
+  if (
+    rawLower.includes('curl error')
+    || rawLower.includes('connection refused')
+    || rawLower.includes('failed to connect')
+    || rawLower.includes('could not resolve host')
+  ) {
+    return upstreamUnavailableMessage;
+  }
+
+  if (
+    rawLower.includes('provisioning_mapping_not_found')
+    || rawLower.includes('no provisioning mapping found')
+  ) {
+    return zh
+      ? '当前商品尚未完成开通映射配置，请联系支持处理。'
+      : 'This product is not fully configured for provisioning yet. Please contact support.';
+  }
 
   if (!(error instanceof ApiError)) {
     if (error instanceof Error) {

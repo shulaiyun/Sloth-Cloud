@@ -103,6 +103,9 @@ class ProvisioningOrchestrator
     {
         $service->loadMissing(['product', 'plan', 'properties']);
 
+        $trigger = trim((string) ($context['trigger'] ?? ''));
+        $forceReprovision = filter_var((string) ($context['force_reprovision'] ?? false), FILTER_VALIDATE_BOOL);
+
         $existing = ProvisioningJob::query()
             ->where('service_id', $service->id)
             ->where('provider', $provider)
@@ -114,7 +117,23 @@ class ProvisioningOrchestrator
             return $existing;
         }
 
-        $forceReprovision = filter_var((string) ($context['force_reprovision'] ?? false), FILTER_VALIDATE_BOOL);
+        $latest = ProvisioningJob::query()
+            ->where('service_id', $service->id)
+            ->where('provider', $provider)
+            ->latest('id')
+            ->first();
+
+        // Prevent automated batch/sync paths from recreating the same terminal
+        // failure forever, which would otherwise spam customers with duplicates.
+        if (
+            $latest
+            && (string) $latest->status === ProvisioningJob::STATUS_FAILED
+            && !$forceReprovision
+            && $trigger !== 'user.retry'
+        ) {
+            return $latest;
+        }
+
         if (!$forceReprovision && $this->hasMapping($service, $provider)) {
             return ProvisioningJob::query()->create([
                 'service_id' => $service->id,
@@ -538,6 +557,10 @@ class ProvisioningOrchestrator
 
     protected function notifyFailure(ProvisioningJob $job, string $message, string $errorCode, ?Service $service = null): void
     {
+        if (data_get($job->response_payload, 'provisioning.failure_notified_at')) {
+            return;
+        }
+
         $service ??= Service::query()->with(['user', 'product'])->find($job->service_id);
         if (!$service || !$service->user) {
             return;
@@ -558,6 +581,21 @@ class ProvisioningOrchestrator
         ]);
 
         try {
+            $isInternalConfigurationIssue = in_array($errorCode, [
+                'PROVISIONING_MAPPING_NOT_FOUND',
+                'PROVISIONING_PROVIDER_UNSUPPORTED',
+                'PROVISIONING_MAPPING_WRITE_MISSING',
+            ], true);
+
+            if ($isInternalConfigurationIssue) {
+                NotificationHelper::sendSystemEmailNotification(
+                    subject: '[Sloth Cloud] Provisioning configuration attention required',
+                    body: $body,
+                    attachments: [],
+                    user: null,
+                    email: null,
+                );
+            } else {
             NotificationHelper::sendSystemEmailNotification(
                 subject: $subject,
                 body: $body,
@@ -565,6 +603,12 @@ class ProvisioningOrchestrator
                 user: $service->user,
                 email: $service->user->email,
             );
+            }
+
+            $responsePayload = is_array($job->response_payload) ? $job->response_payload : [];
+            data_set($responsePayload, 'provisioning.failure_notified_at', now()->toISOString());
+            $job->response_payload = $responsePayload;
+            $job->save();
         } catch (Throwable $exception) {
             report($exception);
         }

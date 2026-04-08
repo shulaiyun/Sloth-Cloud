@@ -37,6 +37,19 @@ docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-c
 docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml up -d --build
 ```
 
+## Updating an existing server
+
+If `/opt/sloth-cloud` already exists, do not clone again. Update it in place:
+
+```bash
+cd /opt/sloth-cloud
+git remote -v
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+git rev-parse --short HEAD
+```
+
 ## Proxy-aware builds
 
 `deploy/sloth-cloud/.env` now supports:

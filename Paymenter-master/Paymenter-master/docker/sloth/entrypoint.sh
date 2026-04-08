@@ -20,6 +20,11 @@ fi
 
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R ug+rwX /var/www/html/storage /var/www/html/bootstrap/cache
+find /var/www/html/storage -type d -exec chmod ug+rwx {} \; >/dev/null 2>&1 || true
+find /var/www/html/storage -type f -exec chmod ug+rw {} \; >/dev/null 2>&1 || true
+touch /var/www/html/storage/logs/laravel-$(date +%F).log >/dev/null 2>&1 || true
+chown www-data:www-data /var/www/html/storage/logs/laravel-*.log >/dev/null 2>&1 || true
+chmod ug+rw /var/www/html/storage/logs/laravel-*.log >/dev/null 2>&1 || true
 
 php /var/www/html/artisan storage:link --force --no-interaction >/dev/null 2>&1 || true
 

@@ -968,7 +968,7 @@ export function ServiceDetailPage() {
   }
 
   if (error || !data) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
+    return <div className="error-card">{text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}</div>;
   }
 
   const { service, invoices } = data.data;

@@ -206,7 +206,7 @@ export function ProductPage() {
   }
 
   if (error || !product) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
+    return <div className="error-card">{text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}</div>;
   }
 
   return (
