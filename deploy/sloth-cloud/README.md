@@ -50,6 +50,24 @@ git pull --ff-only origin main
 git rev-parse --short HEAD
 ```
 
+## Local WSL one-command repair
+
+If product pages show raw backend errors, provisioning reports `PROVISIONING_MAPPING_NOT_FOUND`, or Paymenter log permissions are broken, run:
+
+```bash
+cd /home/shu/code/vps
+bash deploy/sloth-cloud/scripts/wsl-repair-local.sh
+```
+
+This script is idempotent and will:
+
+- rebuild/restart local core containers
+- repair Paymenter storage/log permissions
+- bootstrap managed-app catalog
+- bootstrap + sync convoy mappings for all visible VPS products/plans
+- enqueue and process provisioning jobs
+- run smoke checks
+
 ## Proxy-aware builds
 
 `deploy/sloth-cloud/.env` now supports:

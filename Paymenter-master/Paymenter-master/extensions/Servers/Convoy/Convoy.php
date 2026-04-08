@@ -141,14 +141,39 @@ class Convoy extends Server
 
     public function getCheckoutConfig(Product $product): array
     {
-        $node = $product->settings()->where('key', 'node')->first()->value;
-
-        $os = $this->request('nodes/' . $node . '/template-groups');
         $options = [];
-        foreach ($os['data'] as $group) {
-            foreach ($this->extractTemplatesFromGroup($group) as $template) {
-                $options[(string) $template['uuid']] = (string) $template['name'];
+        $node = trim((string) ($product->settings()->where('key', 'node')->first()?->value ?? ''));
+        $defaultTemplate = trim((string) ($product->settings()->where('key', 'os')->first()?->value ?? ''));
+
+        if ($defaultTemplate !== '') {
+            $options[$defaultTemplate] = $defaultTemplate;
+        }
+
+        if ($node !== '') {
+            try {
+                $os = $this->request('nodes/' . $node . '/template-groups');
+                foreach (($os['data'] ?? []) as $group) {
+                    if (!is_array($group)) {
+                        continue;
+                    }
+
+                    foreach ($this->extractTemplatesFromGroup($group) as $template) {
+                        $uuid = trim((string) ($template['uuid'] ?? ''));
+                        if ($uuid === '') {
+                            continue;
+                        }
+
+                        $name = trim((string) ($template['name'] ?? $uuid));
+                        $options[$uuid] = $name !== '' ? $name : $uuid;
+                    }
+                }
+            } catch (Exception $exception) {
+                report($exception);
             }
+        }
+
+        if ($options === []) {
+            $options['ubuntu-22-04'] = 'Ubuntu 22.04 LTS';
         }
 
         return [

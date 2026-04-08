@@ -22,7 +22,8 @@ $SL exec -T sloth-cloud-paymenter php artisan optimize:clear
 echo "[4/8] Bootstrap managed-app catalog"
 $SL exec -T sloth-cloud-paymenter php artisan app:catalog:bootstrap-managed-app
 
-echo "[5/8] Sync provisioning mappings"
+echo "[5/8] Bootstrap + sync provisioning mappings"
+$SL exec -T sloth-cloud-paymenter php artisan app:provisioning:mappings:bootstrap --provider=convoy --sync-file
 $SL exec -T sloth-cloud-paymenter php artisan app:provisioning:mappings:sync --provider=convoy --enqueue-services
 $SL exec -T sloth-cloud-paymenter php artisan app:provisioning:mappings:sync --provider=managed-app --enqueue-services
 

@@ -157,9 +157,14 @@ class ProvisioningMappingResolver
             $serviceSlug = mb_strtolower((string) ($service->product?->slug ?? ''));
             $mappingSlug = mb_strtolower((string) $mapping->product_slug);
             if ($serviceSlug !== $mappingSlug) {
-                return -1;
+                $productIdMatches = $mapping->product_id !== null
+                    && (int) $mapping->product_id === (int) $service->product_id;
+                if (!$productIdMatches) {
+                    return -1;
+                }
+            } else {
+                $score += 4;
             }
-            $score += 4;
         }
 
         if ($mapping->plan_id !== null) {
@@ -173,9 +178,14 @@ class ProvisioningMappingResolver
             $servicePlanName = (string) Str::of((string) ($service->plan?->name ?? ''))->lower()->slug('-');
             $mappingPlanName = (string) Str::of((string) $mapping->plan_name)->lower()->slug('-');
             if ($servicePlanName !== $mappingPlanName) {
-                return -1;
+                $planIdMatches = $mapping->plan_id !== null
+                    && (int) $mapping->plan_id === (int) $service->plan_id;
+                if (!$planIdMatches) {
+                    return -1;
+                }
+            } else {
+                $score += 3;
             }
-            $score += 3;
         }
 
         return $score;

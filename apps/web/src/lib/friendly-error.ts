@@ -110,10 +110,10 @@ function mapKnownCode(code: string, zh: boolean) {
 export function toFriendlyError(error: unknown, locale: string) {
   const zh = locale.startsWith('zh');
   const internalFailureMessage = zh
-    ? '服务暂时不可用，请稍后重试；若持续出现，请联系技术支持。'
+    ? '\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u82e5\u6301\u7eed\u51fa\u73b0\uff0c\u8bf7\u8054\u7cfb\u6280\u672f\u652f\u6301\u3002'
     : 'The service is temporarily unavailable. Please try again later or contact support.';
   const upstreamUnavailableMessage = zh
-    ? '上游资源服务暂时不可用，请稍后重试。'
+    ? '\u4e0a\u6e38\u8d44\u6e90\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002'
     : 'The upstream infrastructure service is temporarily unavailable. Please try again later.';
 
   const rawMessage = typeof error === 'string'
@@ -145,7 +145,7 @@ export function toFriendlyError(error: unknown, locale: string) {
     || rawLower.includes('no provisioning mapping found')
   ) {
     return zh
-      ? '当前商品尚未完成开通映射配置，请联系支持处理。'
+      ? '\u5f53\u524d\u5546\u54c1\u5c1a\u672a\u5b8c\u6210\u5f00\u901a\u6620\u5c04\u914d\u7f6e\uff0c\u8bf7\u8054\u7cfb\u652f\u6301\u5904\u7406\u3002'
       : 'This product is not fully configured for provisioning yet. Please contact support.';
   }
 

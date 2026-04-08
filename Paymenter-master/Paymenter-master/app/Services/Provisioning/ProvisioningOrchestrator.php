@@ -170,13 +170,7 @@ class ProvisioningOrchestrator
     {
         $jobs = ProvisioningJob::query()
             ->when($provider, fn ($query) => $query->where('provider', $provider))
-            ->where(function ($query) {
-                $query->whereIn('status', ProvisioningJob::activeStatuses())
-                    ->orWhere(function ($inner) {
-                        $inner->where('status', ProvisioningJob::STATUS_FAILED)
-                            ->where('attempt_count', '<', $this->maxAttempts());
-                    });
-            })
+            ->whereIn('status', ProvisioningJob::activeStatuses())
             ->orderBy('id')
             ->limit(max($limit, 1) * 8)
             ->get();

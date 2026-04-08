@@ -4,6 +4,7 @@ import { BrandLogo } from '../components/BrandLogo';
 import { useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { brand } from '../lib/brand';
+import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { HomeResponse } from '../lib/types';
@@ -42,7 +43,7 @@ export function HomePage() {
   }
 
   if (error || !data) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
+    return <div className="error-card">{text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}</div>;
   }
 
   const featuredProducts = data.data.featuredProducts;
@@ -101,9 +102,9 @@ export function HomePage() {
               </div>
             </div>
             <div className="brand-signal-list" aria-label="Brand capability highlights">
-              <span className="brand-signal">{locale.startsWith('zh') ? '统一商业账本' : 'Unified commerce ledger'}</span>
-              <span className="brand-signal">{locale.startsWith('zh') ? '自动化开通编排' : 'Automated provisioning orchestrator'}</span>
-              <span className="brand-signal">{locale.startsWith('zh') ? '统一运行时控制' : 'Unified runtime control API'}</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '\u7edf\u4e00\u5546\u4e1a\u8d26\u672c' : 'Unified commerce ledger'}</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '\u81ea\u52a8\u5316\u5f00\u901a\u7f16\u6392' : 'Automated provisioning orchestrator'}</span>
+              <span className="brand-signal">{locale.startsWith('zh') ? '\u7edf\u4e00\u8fd0\u884c\u65f6\u63a7\u5236 API' : 'Unified runtime control API'}</span>
             </div>
           </div>
         </div>
@@ -112,8 +113,8 @@ export function HomePage() {
       <section className="section-frame section-shell">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">{locale.startsWith('zh') ? '运营总览' : 'Operations Overview'}</p>
-            <h2>{locale.startsWith('zh') ? `${brand.nameCn} 产品规模` : `${brand.nameEn} Product Footprint`}</h2>
+            <p className="section-kicker">{locale.startsWith('zh') ? '\u8fd0\u8425\u603b\u89c8' : 'Operations Overview'}</p>
+            <h2>{locale.startsWith('zh') ? `${brand.nameCn} \u4ea7\u54c1\u89c4\u6a21` : `${brand.nameEn} Product Footprint`}</h2>
           </div>
         </div>
         <div className="metrics-grid">
@@ -222,8 +223,8 @@ export function HomePage() {
               <h3>{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91\u5957\u9910\u5373\u5c06\u4e0a\u7ebf' : 'Managed app plans are being prepared'}</h3>
               <p>
                 {locale.startsWith('zh')
-                  ? '\u8bf7\u5728 Paymenter \u4e2d\u6267\u884c app \u76ee\u5f55\u542f\u52a8\u547d\u4ee4\uff0c\u7136\u540e\u5237\u65b0\u672c\u9875\u3002'
-                  : 'Run the managed-app catalog bootstrap command in Paymenter, then refresh this page.'}
+                  ? '\u5957\u9910\u6b63\u5728\u914d\u7f6e\u4e2d\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u6216\u8054\u7cfb\u5ba2\u670d\u5f00\u901a\u3002'
+                  : 'Plans are being configured. Please refresh later or contact support.'}
               </p>
             </article>
           )}

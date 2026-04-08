@@ -15,6 +15,8 @@ class ProvisioningBootstrapMappings extends Command
         {--provider=convoy : Provisioning provider name}
         {--node= : Default node reference}
         {--template= : Default template reference}
+        {--include-app-hosting : Include app-hosting category when provider is convoy}
+        {--include-non-app-hosting : Include non app-hosting products when provider is managed-app}
         {--cpu=2 : Default cpu cores}
         {--ram=4096 : Default ram in MB}
         {--disk=40960 : Default disk in MB}
@@ -33,6 +35,10 @@ class ProvisioningBootstrapMappings extends Command
         $provider = Str::lower((string) $this->option('provider'));
         $dryRun = (bool) $this->option('dry-run');
         $syncFile = (bool) $this->option('sync-file');
+        $includeAppHosting = (bool) $this->option('include-app-hosting');
+        $includeNonAppHosting = (bool) $this->option('include-non-app-hosting');
+
+        $fallbackDefaults = $this->loadFallbackDefaults($provider);
 
         $products = Product::query()
             ->when(
@@ -42,7 +48,27 @@ class ProvisioningBootstrapMappings extends Command
                     ? $query->where('hidden', false)
                     : $query
             )
-            ->with(['plans' => fn ($query) => $query->orderBy('sort')->orderBy('id')])
+            ->with([
+                'plans' => fn ($query) => $query->orderBy('sort')->orderBy('id'),
+                'settings',
+                'category',
+                'server',
+            ])
+            ->when($provider === ProvisioningMapping::PROVIDER_CONVOY && !$includeAppHosting, function ($query) {
+                $query->where(function ($inner) {
+                    $inner->whereNull('category_id')
+                        ->orWhereHas('category', fn ($categoryQuery) => $categoryQuery->where('slug', '!=', 'app-hosting'));
+                })->where(function ($inner) {
+                    $inner->whereNull('server_id')
+                        ->orWhereHas('server', fn ($serverQuery) => $serverQuery->where('extension', '!=', 'ManagedAppHosting'));
+                });
+            })
+            ->when($provider === ProvisioningMapping::PROVIDER_MANAGED_APP && !$includeNonAppHosting, function ($query) {
+                $query->where(function ($inner) {
+                    $inner->whereHas('category', fn ($categoryQuery) => $categoryQuery->where('slug', 'app-hosting'))
+                        ->orWhereHas('server', fn ($serverQuery) => $serverQuery->where('extension', 'ManagedAppHosting'));
+                });
+            })
             ->orderBy('id')
             ->get();
 
@@ -52,15 +78,15 @@ class ProvisioningBootstrapMappings extends Command
             return self::SUCCESS;
         }
 
-        $defaultNode = $this->normalizeOption($this->option('node'));
-        $defaultTemplate = $this->normalizeOption($this->option('template'));
+        $defaultNode = $this->normalizeOption($this->option('node')) ?? $this->normalizeOption($fallbackDefaults['node_ref'] ?? null);
+        $defaultTemplate = $this->normalizeOption($this->option('template')) ?? $this->normalizeOption($fallbackDefaults['template_ref'] ?? null);
         $defaults = [
-            'cpu' => (int) $this->option('cpu'),
-            'ram' => (int) $this->option('ram'),
-            'disk' => (int) $this->option('disk'),
-            'bandwidth' => (int) $this->option('bandwidth'),
-            'ipv4' => max((int) $this->option('ipv4'), 0),
-            'ipv6' => max((int) $this->option('ipv6'), 0),
+            'cpu' => (int) ($fallbackDefaults['config']['cpu'] ?? $this->option('cpu')),
+            'ram' => (int) ($fallbackDefaults['config']['ram'] ?? $this->option('ram')),
+            'disk' => (int) ($fallbackDefaults['config']['disk'] ?? $this->option('disk')),
+            'bandwidth' => (int) ($fallbackDefaults['config']['bandwidth'] ?? $this->option('bandwidth')),
+            'ipv4' => max((int) ($fallbackDefaults['config']['ipv4'] ?? $this->option('ipv4')), 0),
+            'ipv6' => max((int) ($fallbackDefaults['config']['ipv6'] ?? $this->option('ipv6')), 0),
             'snapshot' => 1,
             'backups' => 1,
             'start_on_create' => filter_var((string) $this->option('start-on-create'), FILTER_VALIDATE_BOOL),
@@ -71,6 +97,25 @@ class ProvisioningBootstrapMappings extends Command
         $priority = 10;
 
         foreach ($products as $product) {
+            $productSettings = $product->settings
+                ->pluck('value', 'key')
+                ->mapWithKeys(fn ($value, $key) => [trim((string) $key) => $value])
+                ->all();
+
+            $productDefaults = $defaults;
+            foreach (['cpu', 'ram', 'disk', 'bandwidth', 'ipv4', 'ipv6', 'snapshot', 'backups'] as $numericKey) {
+                if (array_key_exists($numericKey, $productSettings) && is_numeric($productSettings[$numericKey])) {
+                    $productDefaults[$numericKey] = max((int) $productSettings[$numericKey], 0);
+                }
+            }
+
+            if (array_key_exists('start_on_create', $productSettings)) {
+                $productDefaults['start_on_create'] = filter_var((string) $productSettings['start_on_create'], FILTER_VALIDATE_BOOL);
+            }
+
+            $resolvedNode = $this->normalizeOption($productSettings['node'] ?? null) ?? $defaultNode;
+            $resolvedTemplate = $this->normalizeOption($productSettings['os'] ?? null) ?? $defaultTemplate;
+
             foreach ($product->plans as $plan) {
                 $identity = [
                     'provider' => $provider,
@@ -82,9 +127,9 @@ class ProvisioningBootstrapMappings extends Command
 
                 $payload = [
                     'provider' => $provider,
-                    'template_ref' => $defaultTemplate,
-                    'node_ref' => $defaultNode,
-                    'config' => $defaults,
+                    'template_ref' => $resolvedTemplate,
+                    'node_ref' => $resolvedNode,
+                    'config' => $productDefaults,
                     'priority' => $priority,
                     'enabled' => true,
                 ];
@@ -147,5 +192,50 @@ class ProvisioningBootstrapMappings extends Command
         $normalized = trim((string) $value);
 
         return $normalized === '' ? null : $normalized;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function loadFallbackDefaults(string $provider): array
+    {
+        $file = config('provisioning.fallback_file');
+        if (!is_string($file) || trim($file) === '' || !is_file($file)) {
+            return [];
+        }
+
+        $raw = @file_get_contents($file);
+        if (!is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        foreach ($decoded as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $entryProvider = Str::lower((string) ($entry['provider'] ?? ''));
+            if ($entryProvider !== $provider) {
+                continue;
+            }
+
+            $enabled = filter_var((string) ($entry['enabled'] ?? true), FILTER_VALIDATE_BOOL);
+            if (!$enabled) {
+                continue;
+            }
+
+            return [
+                'node_ref' => $this->normalizeOption($entry['node_ref'] ?? null),
+                'template_ref' => $this->normalizeOption($entry['template_ref'] ?? null),
+                'config' => is_array($entry['config'] ?? null) ? $entry['config'] : [],
+            ];
+        }
+
+        return [];
     }
 }

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
+import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
 import type { ServiceSummary, ServicesResponse } from '../lib/types';
@@ -141,7 +142,7 @@ export function ServicesPage() {
   }
 
   if (error || !data) {
-    return <div className="error-card">{text.common.error}: {error}</div>;
+    return <div className="error-card">{text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}</div>;
   }
 
   return (

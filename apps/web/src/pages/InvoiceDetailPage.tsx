@@ -292,7 +292,7 @@ export function InvoiceDetailPage() {
   if (error || !data || !invoice) {
     return (
       <div className="error-card">
-        {text.common.error}: {error}
+        {text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}
       </div>
     );
   }

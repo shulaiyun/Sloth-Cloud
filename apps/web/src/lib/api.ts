@@ -26,20 +26,49 @@ export interface RemoteState<T> {
   loading: boolean;
 }
 
+function sanitizeBackendMessage(message: string) {
+  const compact = message.replace(/\s+/g, ' ').trim();
+  if (compact === '') {
+    return '';
+  }
+
+  const lower = compact.toLowerCase();
+  if (
+    lower.includes('/var/www/html/storage/logs')
+    || lower.includes('failed to open stream')
+    || lower.includes('permission denied')
+    || lower.includes('laravel-20')
+    || (lower.includes('context:') && lower.includes('exception'))
+  ) {
+    return 'Service temporarily unavailable. Please try again later.';
+  }
+
+  if (
+    lower.includes('curl error')
+    || lower.includes('failed to connect')
+    || lower.includes('connection refused')
+    || lower.includes('could not resolve host')
+  ) {
+    return 'Upstream infrastructure service is temporarily unavailable.';
+  }
+
+  return compact.length > 280 ? `${compact.slice(0, 280)}...` : compact;
+}
+
 function errorMessageFromPayload(payload: unknown, statusCode: number) {
   if (typeof payload === 'string' && payload.length > 0) {
-    return payload;
+    return sanitizeBackendMessage(payload);
   }
 
   if (typeof payload === 'object' && payload !== null) {
     const record = payload as Record<string, unknown>;
 
     if (typeof record.message === 'string' && record.message.length > 0) {
-      return record.message;
+      return sanitizeBackendMessage(record.message);
     }
 
     if (typeof record.error === 'string' && record.error.length > 0) {
-      return record.error;
+      return sanitizeBackendMessage(record.error);
     }
 
     if (typeof record.errors === 'object' && record.errors !== null) {
