@@ -58,6 +58,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/services/{service}', [HeadlessServiceController::class, 'show']);
         Route::patch('/services/{service}/label', [HeadlessServiceController::class, 'updateLabel']);
         Route::post('/services/{service}/cancel', [HeadlessServiceController::class, 'cancel']);
+        Route::delete('/services/{service}/cancel', [HeadlessServiceController::class, 'revokeCancellation']);
+        Route::post('/services/{service}/renew', [HeadlessServiceController::class, 'renew']);
         Route::post('/services/{service}/actions/{action}', [HeadlessServiceController::class, 'action']);
         Route::get('/services/{service}/operation-logs', [HeadlessServiceController::class, 'operationLogs']);
         Route::post('/services/{service}/operation-logs', [HeadlessServiceController::class, 'storeOperationLog']);

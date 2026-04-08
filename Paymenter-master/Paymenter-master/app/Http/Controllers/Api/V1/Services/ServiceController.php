@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Services;
 use App\Helpers\ExtensionHelper;
 use App\Http\Controllers\Api\V1\Concerns\SerializesHeadlessResources;
 use App\Http\Controllers\Controller;
+use App\Models\Invoice;
 use App\Models\Service;
 use App\Models\ServiceCancellation;
 use App\Models\ServiceOperationLog;
@@ -149,6 +150,115 @@ class ServiceController extends Controller
                     'reason' => $cancellation->reason,
                     'created_at' => optional($cancellation->created_at)?->toISOString(),
                 ],
+            ],
+        ], 201);
+    }
+
+    public function revokeCancellation(Request $request, Service $service): JsonResponse
+    {
+        abort_unless((int) $service->user_id === (int) $request->user()->id, 404);
+
+        $cancellation = ServiceCancellation::query()
+            ->where('service_id', $service->id)
+            ->first();
+
+        if (!$cancellation) {
+            $service->load(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation']);
+            $service->load('latestProvisioningJob');
+
+            return response()->json([
+                'message' => 'No cancellation request found for this service.',
+                'data' => [
+                    'service' => $this->serializeService($service, true),
+                ],
+            ]);
+        }
+
+        $cancellation->delete();
+
+        $service->load(['product.category', 'plan', 'currency', 'billingAgreement.gateway', 'cancellation']);
+        $service->load('latestProvisioningJob');
+
+        return response()->json([
+            'message' => 'Cancellation request removed.',
+            'data' => [
+                'service' => $this->serializeService($service, true),
+            ],
+        ]);
+    }
+
+    public function renew(Request $request, Service $service): JsonResponse
+    {
+        abort_unless((int) $service->user_id === (int) $request->user()->id, 404);
+
+        $service->load([
+            'product.category',
+            'plan',
+            'currency',
+            'billingAgreement.gateway',
+            'cancellation',
+            'latestProvisioningJob',
+        ]);
+
+        if ((string) $service->status === Service::STATUS_CANCELLED) {
+            return response()->json([
+                'message' => 'Cancelled services cannot be renewed.',
+            ], 422);
+        }
+
+        if (!$service->plan || in_array((string) $service->plan->type, ['free', 'one-time'], true)) {
+            return response()->json([
+                'message' => 'This service does not support renewal invoices.',
+            ], 422);
+        }
+
+        if ($service->cancellation) {
+            return response()->json([
+                'message' => 'This service already has a cancellation request. Remove cancellation before renewing.',
+            ], 422);
+        }
+
+        $pendingInvoice = $service->invoices()
+            ->where('status', Invoice::STATUS_PENDING)
+            ->latest('id')
+            ->first();
+
+        if ($pendingInvoice) {
+            $pendingInvoice->loadMissing(['currency']);
+
+            return response()->json([
+                'message' => 'A pending renewal invoice already exists.',
+                'data' => [
+                    'invoice' => $this->serializeInvoice($pendingInvoice),
+                    'service' => $this->serializeService($service, true),
+                ],
+            ]);
+        }
+
+        // Keep manual renew behavior aligned with cron-generated recurring invoices.
+        $invoice = $service->invoices()->make([
+            'user_id' => $service->user_id,
+            'status' => Invoice::STATUS_PENDING,
+            'due_at' => $service->expires_at ?: now(),
+            'currency_code' => $service->currency_code,
+        ]);
+        $invoice->save();
+
+        $invoice->items()->create([
+            'reference_id' => $service->id,
+            'reference_type' => Service::class,
+            'price' => $service->price,
+            'quantity' => $service->quantity,
+            'description' => $service->description,
+        ]);
+
+        $invoice = $invoice->fresh(['currency']);
+
+        return response()->json([
+            'message' => 'Renewal invoice created.',
+            'data' => [
+                'invoice' => $this->serializeInvoice($invoice),
+                'service' => $this->serializeService($service, true),
             ],
         ], 201);
     }

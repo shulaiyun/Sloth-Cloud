@@ -340,7 +340,7 @@ function buildCapabilities(buttons: Array<Record<string, unknown>>, hasServerRef
     actionBridge: {
       power: convoyDirect || lookup(['start', 'stop', 'restart', 'reboot', 'power']),
       reinstall: convoyDirect || lookup(['reinstall', 'rebuild', 'reset-os']),
-      revealPassword: lookup(['password', 'reveal', 'show-password']),
+      revealPassword: convoyDirect || lookup(['password', 'reveal', 'show-password']),
     },
   };
 }
@@ -1569,7 +1569,7 @@ app.get('/api/v1/services/:serviceId/provisioning', async (request) => {
 app.post('/api/v1/services/:serviceId/provisioning/retry', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const body = z.object({
-    force: z.boolean().optional().default(true),
+    force: z.boolean().optional().default(false),
   }).parse(request.body ?? {});
 
   return gateway.retryServiceProvisioning(requireToken(request), params.serviceId, {
@@ -1602,6 +1602,36 @@ app.post('/api/v1/services/:serviceId/cancel', async (request) => {
     successCode: 'SERVICE_CANCEL_REQUESTED',
     failureCode: 'SERVICE_CANCEL_FAILED',
     run: () => gateway.cancelService(token, params.serviceId, body),
+  });
+});
+
+app.delete('/api/v1/services/:serviceId/cancel', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+
+  return executeLoggedAction(request, {
+    token,
+    serviceId: params.serviceId,
+    action: 'cancel-revoke',
+    requestPayload: {},
+    successCode: 'SERVICE_CANCEL_REVOKED',
+    failureCode: 'SERVICE_CANCEL_REVOKE_FAILED',
+    run: () => gateway.revokeServiceCancellation(token, params.serviceId),
+  });
+});
+
+app.post('/api/v1/services/:serviceId/renew', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+
+  return executeLoggedAction(request, {
+    token,
+    serviceId: params.serviceId,
+    action: 'renew',
+    requestPayload: {},
+    successCode: 'SERVICE_RENEW_INVOICE_CREATED',
+    failureCode: 'SERVICE_RENEW_FAILED',
+    run: () => gateway.renewService(token, params.serviceId),
   });
 });
 

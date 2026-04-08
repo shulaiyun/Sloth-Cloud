@@ -1618,6 +1618,34 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
+    async revokeServiceCancellation(token: string | undefined, serviceId: string): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(config, `/services/${serviceId}/cancel`, {
+        method: 'DELETE',
+        token: ensureToken(token),
+      });
+
+      return {
+        message: readString(response.message, 'Cancellation request removed.'),
+        data: response.data,
+        actionResult: normalizeActionResult(response.action_result),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async renewService(token: string | undefined, serviceId: string): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(config, `/services/${serviceId}/renew`, {
+        method: 'POST',
+        token: ensureToken(token),
+      });
+
+      return {
+        message: readString(response.message, 'Renewal invoice created.'),
+        data: response.data,
+        actionResult: normalizeActionResult(response.action_result),
+        meta: baseMeta(config.mode),
+      };
+    },
+
     async serviceAction(
       token: string | undefined,
       serviceId: string,

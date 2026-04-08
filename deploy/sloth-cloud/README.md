@@ -63,10 +63,21 @@ This script is idempotent and will:
 
 - rebuild/restart local core containers
 - repair Paymenter storage/log permissions
+- configure Epay callback/return URLs (avoids localhost and stale fallback domains)
 - bootstrap managed-app catalog
+- bootstrap US/HK VPS catalog (`1c1g`, `2c2g`, `4c6g`)
 - bootstrap + sync convoy mappings for all visible VPS products/plans
 - enqueue and process provisioning jobs
 - run smoke checks
+
+It also clears inherited shell proxy variables first, so your current WSL `HTTP_PROXY` / `HTTPS_PROXY` exports will not override the stack's own runtime proxy settings from `deploy/sloth-cloud/.env`.
+
+To adjust VPS regions/templates manually:
+
+```bash
+docker compose --env-file deploy/sloth-cloud/.env -f deploy/sloth-cloud/docker-compose.yml exec -T sloth-cloud-paymenter \
+  php artisan app:catalog:bootstrap-vps-regional --currency=CNY --us-node=1 --hk-node=2 --template=ubuntu-22-04
+```
 
 ## Proxy-aware builds
 

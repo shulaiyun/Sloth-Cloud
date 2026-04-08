@@ -692,7 +692,27 @@ class Epay extends Gateway
             ]);
         }
 
-        return 'https://app.jxjvip.help/invoices/{number}';
+        $appUrl = trim((string) config('app.url', ''));
+        if ($appUrl !== '') {
+            $candidate = rtrim($appUrl, '/') . '/invoices/{number}';
+            if ($this->isPublicFrontendUrl($candidate)) {
+                return $candidate;
+            }
+
+            $this->logWarning('Epay APP_URL rejected (localhost/private host). Falling back.', [
+                'APP_URL' => $appUrl,
+            ]);
+        }
+
+        $callbackBase = trim((string) $this->config('callback_base_url'));
+        if ($callbackBase !== '') {
+            $candidate = rtrim($callbackBase, '/') . '/invoices/{number}';
+            if ($this->isPublicFrontendUrl($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return 'https://billing.sloth-cloud.example/invoices/{number}';
     }
 
     private function isPublicFrontendUrl(string $url): bool

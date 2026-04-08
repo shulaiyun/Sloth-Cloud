@@ -135,7 +135,7 @@ class ProvisioningOrchestrator
         }
 
         if (!$forceReprovision && $this->hasMapping($service, $provider)) {
-            return ProvisioningJob::query()->create([
+            $job = ProvisioningJob::query()->create([
                 'service_id' => $service->id,
                 'provider' => $provider,
                 'status' => ProvisioningJob::STATUS_READY,
@@ -143,6 +143,21 @@ class ProvisioningOrchestrator
                 'response_payload' => $this->buildProvisioningPayload(null, ProvisioningJob::STATUS_READY, 'Runtime mapping already exists.'),
                 'completed_at' => now(),
             ]);
+
+            if ($service->status === Service::STATUS_PENDING) {
+                $service->status = Service::STATUS_ACTIVE;
+                $service->expires_at = $service->expires_at ?: $service->calculateNextDueDate();
+                $service->save();
+            }
+
+            $this->recordOperationLog($service, $job, 'success', 'Runtime mapping already exists.', [
+                'runtime' => [
+                    'runtime_kind' => $provider === ProvisioningMapping::PROVIDER_MANAGED_APP ? 'managed-app' : 'vps',
+                    'mapping' => $this->readMapping($service, $provider),
+                ],
+            ]);
+
+            return $job;
         }
 
         $job = ProvisioningJob::query()->create([
@@ -423,6 +438,8 @@ class ProvisioningOrchestrator
      */
     protected function persistProperties(Service $service, array $payload): void
     {
+        $persisted = false;
+
         foreach ($payload as $key => $value) {
             if (!is_string($key) || trim($key) === '' || $value === null) {
                 continue;
@@ -434,6 +451,11 @@ class ProvisioningOrchestrator
             }
 
             $service->properties()->updateOrCreate(['key' => $key], ['name' => $key, 'value' => $normalized]);
+            $persisted = true;
+        }
+
+        if ($persisted) {
+            $service->unsetRelation('properties');
         }
     }
 
@@ -555,6 +577,16 @@ class ProvisioningOrchestrator
             return;
         }
 
+        if ($this->recentFailureNotificationExists($job, $errorCode)) {
+            $responsePayload = is_array($job->response_payload) ? $job->response_payload : [];
+            data_set($responsePayload, 'provisioning.failure_notified_at', now()->toISOString());
+            data_set($responsePayload, 'provisioning.failure_notification_suppressed', true);
+            $job->response_payload = $responsePayload;
+            $job->save();
+
+            return;
+        }
+
         $service ??= Service::query()->with(['user', 'product'])->find($job->service_id);
         if (!$service || !$service->user) {
             return;
@@ -608,6 +640,39 @@ class ProvisioningOrchestrator
         }
     }
 
+    protected function recentFailureNotificationExists(ProvisioningJob $job, string $errorCode): bool
+    {
+        $cooldownMinutes = max((int) config(
+            'provisioning.failure_notify_cooldown_minutes',
+            env('PROVISIONING_FAILURE_NOTIFY_COOLDOWN_MINUTES', 180)
+        ), 1);
+
+        $recentFailures = ProvisioningJob::query()
+            ->where('service_id', $job->service_id)
+            ->where('provider', $job->provider)
+            ->where('id', '!=', $job->id)
+            ->where('status', ProvisioningJob::STATUS_FAILED)
+            ->where('updated_at', '>=', now()->subMinutes($cooldownMinutes))
+            ->latest('id')
+            ->limit(10)
+            ->get();
+
+        foreach ($recentFailures as $previousFailure) {
+            $payload = is_array($previousFailure->response_payload) ? $previousFailure->response_payload : [];
+            $previousErrorCode = (string) ($payload['error_code'] ?? '');
+
+            if ($previousErrorCode !== $errorCode) {
+                continue;
+            }
+
+            if (data_get($payload, 'provisioning.failure_notified_at')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * @param  array<string, mixed>  $responsePayload
      */
@@ -621,15 +686,26 @@ class ProvisioningOrchestrator
         ?string $errorDetail = null
     ): void {
         try {
+            $normalizedMessage = trim($message);
+            $normalizedErrorDetail = $errorDetail;
+
+            if ($normalizedMessage !== '' && Str::length($normalizedMessage) > 255) {
+                $normalizedErrorDetail = trim(implode("\n\n", array_filter([
+                    $normalizedErrorDetail,
+                    $normalizedMessage,
+                ])));
+                $normalizedMessage = Str::limit($normalizedMessage, 252, '...');
+            }
+
             $service->operationLogs()->create([
                 'operation_id' => (string) Str::ulid(),
                 'user_id' => $service->user_id,
                 'source' => 'provisioning',
                 'action' => 'provisioning:'.$job->provider,
                 'status' => $status,
-                'message' => $message,
+                'message' => $normalizedMessage,
                 'error_code' => $errorCode,
-                'error_detail' => $errorDetail,
+                'error_detail' => $normalizedErrorDetail,
                 'request_payload' => is_array($job->request_payload) ? $job->request_payload : null,
                 'response_payload' => $responsePayload,
                 'actor_type' => 'system',

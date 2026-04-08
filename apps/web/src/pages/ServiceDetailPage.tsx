@@ -217,36 +217,6 @@ function managedRuntimeStatusLabel(status: string, locale: string) {
   return status;
 }
 
-function normalizeActionName(action: string) {
-  return action.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-}
-
-function readActionName(button: Record<string, unknown>) {
-  const candidates = [button.function, button.action, button.name, button.label];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim() !== '') {
-      return candidate.trim();
-    }
-  }
-  return null;
-}
-
-function findActionName(buttons: Array<Record<string, unknown>>, aliases: string[]) {
-  const normalizedAliases = aliases.map((alias) => normalizeActionName(alias));
-
-  for (const button of buttons) {
-    const name = readActionName(button);
-    if (!name) continue;
-
-    const normalized = normalizeActionName(name);
-    if (normalizedAliases.some((alias) => normalized.includes(alias))) {
-      return name;
-    }
-  }
-
-  return null;
-}
-
 function extractRevealedPassword(payload: unknown) {
   return pickString(payload, [
     'password',
@@ -442,6 +412,7 @@ export function ServiceDetailPage() {
   const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
   const [showStoredPassword, setShowStoredPassword] = useState(false);
   const [renewingService, setRenewingService] = useState(false);
+  const [revokingCancellation, setRevokingCancellation] = useState(false);
   const [retryingProvisioning, setRetryingProvisioning] = useState(false);
   const [provisioningMessage, setProvisioningMessage] = useState<string | null>(null);
   const [reinstallTemplateChoice, setReinstallTemplateChoice] = useState('');
@@ -517,7 +488,7 @@ export function ServiceDetailPage() {
       const response = await requestJson<ServiceProvisioningRetryResponse>(`/api/v1/services/${serviceId}/provisioning/retry`, {
         method: 'POST',
         body: {
-          force: true,
+          force: false,
         },
       });
       setProvisioningMessage(response.message);
@@ -530,18 +501,17 @@ export function ServiceDetailPage() {
     }
   }
 
-  async function renewService(actionName: string | null) {
-    if (!serviceId || !actionName) return;
+  async function renewService() {
+    if (!serviceId) return;
 
     setRenewingService(true);
     setActionError(null);
     setMessage(null);
     try {
       const response = await requestJson<ActionResponse<Record<string, unknown>>>(
-        `/api/v1/services/${serviceId}/actions/${encodeURIComponent(actionName)}`,
+        `/api/v1/services/${serviceId}/renew`,
         {
           method: 'POST',
-          body: {},
         },
       );
       const operationHint = response.actionResult?.operationId
@@ -656,6 +626,29 @@ export function ServiceDetailPage() {
       refreshPageState();
     } finally {
       setServerBusy(null);
+    }
+  }
+
+  async function revokeCancellation() {
+    if (!serviceId) return;
+    setRevokingCancellation(true);
+    setMessage(null);
+    setActionError(null);
+    try {
+      const response = await requestJson<ActionResponse<Record<string, unknown>>>(`/api/v1/services/${serviceId}/cancel`, {
+        method: 'DELETE',
+      });
+      const operationHint = response.actionResult?.operationId
+        ? (zh ? ` 操作 ID: ${response.actionResult.operationId}` : ` Operation ID: ${response.actionResult.operationId}`)
+        : '';
+      setMessage(`${response.message || (zh ? '已撤销取消请求。' : 'Cancellation request removed.')}${operationHint}`);
+      refreshPageState();
+      refreshPageState(1200);
+    } catch (caughtError) {
+      setActionError(toFriendlyError(caughtError as ApiError, locale));
+      refreshPageState();
+    } finally {
+      setRevokingCancellation(false);
     }
   }
 
@@ -972,15 +965,21 @@ export function ServiceDetailPage() {
   }
 
   const { service, invoices } = data.data;
-  const serviceButtons = (data.data.actions?.buttons ?? []) as Array<Record<string, unknown>>;
   const provisioning = provisioningData?.data.latest ?? null;
   const provisioningStatus = (provisioning?.status ?? '').toLowerCase();
-  const provisioningCanRetry = provisioningStatus === 'failed';
+  const provisioningSucceeded = ['success', 'completed', 'ready'].includes(provisioningStatus);
+  const provisioningFailed = provisioningStatus === 'failed' || provisioningStatus === 'build_failed';
+  const provisioningCanRetry = provisioningFailed;
   const provisioningCanStart = provisioningStatus === '' || provisioning === null;
-  const provisioningInFlight = provisioningStatus === 'pending' || provisioningStatus === 'provisioning';
-  const renewActionName = findActionName(serviceButtons, ['renew', 'extend', 'recurring', 'cycle']);
-  const canRenewService = renewActionName !== null && !provisioningInFlight;
-  const canCancelService = service.cancellable && !provisioningInFlight;
+  const provisioningInFlight = ['pending', 'provisioning', 'queued', 'building', 'pushing', 'deploying', 'retrying', 'deleting']
+    .includes(provisioningStatus);
+  const serviceStatus = (service.status ?? '').toLowerCase();
+  const serviceCancellation = service.cancellation ?? null;
+  const hasPendingInvoice = invoices.some((invoice) => (invoice.status ?? '').toLowerCase() === 'pending');
+  const canRenewByPlanType = !['free', 'one-time'].includes((service.plan?.type ?? '').toLowerCase());
+  const canRenewByStatus = serviceStatus !== 'cancelled';
+  const canRenewService = !provisioningInFlight && canRenewByPlanType && canRenewByStatus && !hasPendingInvoice && !serviceCancellation;
+  const canCancelService = service.cancellable && !provisioningInFlight && !serviceCancellation;
   const canRunServerActions = !isManagedRuntime && !serverLoading && !serverError && !provisioningInFlight && !provisioningCanRetry;
 
   const defaultTemplateUuid = reinstallOptionsData?.data.defaultTemplateUuid
@@ -1057,25 +1056,33 @@ export function ServiceDetailPage() {
   const managedCanDomain = Boolean(runtimeCapabilities?.domain);
   const managedCanTls = Boolean(runtimeCapabilities?.tls);
   const managedCanScale = Boolean(runtimeCapabilities?.scale);
+  const provisioningTimestamp = provisioning?.lastAttemptAt ?? provisioning?.completedAt ?? null;
+  const provisioningAttemptLabel = provisioningTimestamp
+    ? formatDate(provisioningTimestamp)
+    : provisioningInFlight
+      ? (zh ? '\u5904\u7406\u4e2d' : 'In progress')
+      : provisioningSucceeded
+        ? (zh ? '\u5df2\u5b8c\u6210' : 'Completed')
+        : (zh ? '\u6682\u65e0\u8bb0\u5f55' : 'No attempts yet');
 
   const provisioningLabel = isManagedRuntime
     ? managedProvisioningStageLabel(provisioningStatus, locale)
     : (
       zh
         ? (
-          provisioningStatus === 'failed'
+          provisioningFailed
             ? '\u5f00\u901a\u5931\u8d25'
-            : provisioningStatus === 'success' || provisioningStatus === 'completed'
-              ? '\u5f00\u901a\u6210\u529f'
+            : provisioningSucceeded
+              ? '\u5df2\u5f00\u901a'
               : provisioningStatus
                 ? '\u5f00\u901a\u4e2d'
                 : '\u5f85\u5f00\u901a'
         )
         : (
-          provisioningStatus === 'failed'
+          provisioningFailed
             ? 'Provisioning failed'
-            : provisioningStatus === 'success' || provisioningStatus === 'completed'
-              ? 'Provisioning completed'
+            : provisioningSucceeded
+              ? 'Provisioned'
               : provisioningStatus
                 ? 'Provisioning in progress'
                 : 'Provisioning pending'
@@ -1106,7 +1113,7 @@ export function ServiceDetailPage() {
               {provisioning?.errorMessage ? <p className="muted">{provisioning.errorMessage}</p> : null}
               {provisioning?.errorCode ? <p className="muted">{zh ? '\u9519\u8bef\u7f16\u53f7' : 'Error code'}: {provisioning.errorCode}</p> : null}
               <p className="muted">
-                {zh ? '\u6700\u8fd1\u5c1d\u8bd5' : 'Last attempt'}: {formatDate(provisioning?.lastAttemptAt ?? null)}
+                {zh ? '\u6700\u8fd1\u5c1d\u8bd5' : 'Last attempt'}: {provisioningAttemptLabel}
                 {' | '}
                 {zh ? '\u5c1d\u8bd5\u6b21\u6570' : 'Attempts'}: {provisioning?.attemptCount ?? 0}
               </p>
@@ -1165,17 +1172,37 @@ export function ServiceDetailPage() {
           </button>
           {!canCancelService ? (
             <p className="muted">
-              {provisioningInFlight
+              {serviceCancellation
+                ? (zh ? '当前服务已提交取消请求，若要续费请先撤销取消。' : 'Cancellation is already requested. Revoke it first if you want to renew.')
+                : provisioningInFlight
                 ? (zh ? '\u670d\u52a1\u6b63\u5728\u5f00\u901a\u4e2d\uff0c\u6682\u65f6\u4e0d\u53ef\u53d6\u6d88\u3002' : 'Cancellation is disabled while provisioning is in progress.')
                 : (zh ? '\u5f53\u524d\u670d\u52a1\u72b6\u6001\u4e0d\u652f\u6301\u53d6\u6d88\u64cd\u4f5c\u3002' : 'Cancellation is unavailable for the current service state.')}
             </p>
+          ) : null}
+          {serviceCancellation ? (
+            <div className="stack-8">
+              <p className="muted">
+                {zh ? '取消类型' : 'Cancellation type'}: {serviceCancellation.type}
+                {serviceCancellation.reason ? ` | ${zh ? '原因' : 'Reason'}: ${serviceCancellation.reason}` : ''}
+              </p>
+              <button
+                className="button ghost"
+                disabled={revokingCancellation || provisioningInFlight}
+                type="button"
+                onClick={() => void revokeCancellation()}
+              >
+                {revokingCancellation
+                  ? (zh ? '撤销中...' : 'Revoking...')
+                  : (zh ? '撤销取消请求' : 'Revoke cancellation')}
+              </button>
+            </div>
           ) : null}
 
           <button
             className="button primary"
             disabled={renewingService || !canRenewService}
             type="button"
-            onClick={() => void renewService(renewActionName)}
+            onClick={() => void renewService()}
           >
             {renewingService
               ? (zh ? '\u7eed\u8d39\u5904\u7406\u4e2d...' : 'Renewing...')
@@ -1185,7 +1212,11 @@ export function ServiceDetailPage() {
             <p className="muted">
               {provisioningInFlight
                 ? (zh ? '\u670d\u52a1\u6b63\u5728\u5f00\u901a\u4e2d\uff0c\u5f00\u901a\u5b8c\u6210\u540e\u53ef\u7eed\u8d39\u3002' : 'Renewal will be available after provisioning completes.')
-                : (zh ? '\u5f53\u524d\u670d\u52a1\u672a\u5f00\u653e\u7eed\u8d39\u52a8\u4f5c\u3002' : 'Renewal action is not available for this service.')}
+                : (serviceCancellation
+                    ? (zh ? '服务已提交取消请求，请先撤销取消后再续费。' : 'This service has a cancellation request. Revoke it before renewing.')
+                    : (hasPendingInvoice
+                    ? (zh ? '\u5df2\u5b58\u5728\u5f85\u652f\u4ed8\u8d26\u5355\uff0c\u8bf7\u5148\u5b8c\u6210\u652f\u4ed8\u6216\u53d6\u6d88\u8be5\u8d26\u5355\u3002' : 'A pending renewal invoice already exists. Pay or cancel that invoice first.')
+                    : (zh ? '\u5f53\u524d\u670d\u52a1\u72b6\u6001\u4e0d\u652f\u6301\u7eed\u8d39\u3002' : 'Renewal is not available for the current service state.')))}
             </p>
           ) : null}
         </article>
@@ -1437,7 +1468,7 @@ export function ServiceDetailPage() {
               </button>
               <button
                 className="button secondary"
-                disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.revealPassword}
+                disabled={serverBusy !== null || !canRunServerActions || !(runtimeCapabilities?.actions.revealPassword ?? false)}
                 type="button"
                 onClick={() => void runServerAction('reveal-password')}
               >
