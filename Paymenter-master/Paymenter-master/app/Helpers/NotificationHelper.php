@@ -22,6 +22,54 @@ use Illuminate\View\Compilers\BladeCompiler;
 
 class NotificationHelper
 {
+    protected static function buildFrontendUrl(string $path): ?string
+    {
+        $base = trim((string) (env('SLOTH_FRONTEND_URL') ?: env('SLOTH_WEB_PUBLIC_URL') ?: ''));
+        if ($base === '') {
+            return null;
+        }
+
+        return rtrim($base, '/').'/'.ltrim($path, '/');
+    }
+
+    protected static function servicePropertyMap(?Service $service): array
+    {
+        if (!$service) {
+            return [];
+        }
+
+        $service->loadMissing('properties');
+
+        $map = [];
+        foreach ($service->properties as $property) {
+            if (!$property->key) {
+                continue;
+            }
+
+            $map[$property->key] = $property->value;
+        }
+
+        return $map;
+    }
+
+    protected static function appendOperatorServiceData(array &$data, ?Service $service): void
+    {
+        if (!$service) {
+            return;
+        }
+
+        $properties = self::servicePropertyMap($service);
+        $data['service'] = $service;
+        $data['service_url'] = self::buildFrontendUrl('/services/'.$service->id);
+        $data['operator_capsule_url'] = !empty($properties['operator_capsule_id'])
+            ? self::buildFrontendUrl('/capsules/'.$properties['operator_capsule_id'])
+            : null;
+        $data['operator_preview_url'] = $properties['operator_preview_url'] ?? null;
+        $data['operator_production_url'] = $properties['operator_production_url'] ?? null;
+        $data['operator_source_bundle_url'] = $properties['operator_project_bundle_url'] ?? null;
+        $data['operator_capsule_name'] = $properties['operator_capsule_name'] ?? null;
+    }
+
     /**
      * Send an email notification.
      */
@@ -136,12 +184,22 @@ class NotificationHelper
 
     public static function invoiceNotification(User $user, Invoice $invoice, $key = 'new_invoice_created'): void
     {
+        $serviceIds = $invoice->items
+            ->filter(fn ($item) => $item->reference_type === Service::class && $item->reference_id)
+            ->pluck('reference_id')
+            ->filter()
+            ->unique()
+            ->values();
+        $relatedService = $serviceIds->count() === 1
+            ? Service::query()->find($serviceIds->first())
+            : null;
         $data = [
             'invoice' => $invoice,
             'items' => $invoice->items,
             'total' => $invoice->formattedTotal,
             'has_subscription' => $invoice->items->filter(fn ($item) => $item->reference_type === Service::class && $item->reference->subscription_id)->isNotEmpty(),
         ];
+        self::appendOperatorServiceData($data, $relatedService);
 
         // Generate the invoice PDF
         $pdf = PDF::generateInvoice($invoice);
@@ -192,8 +250,14 @@ class NotificationHelper
 
     public static function serverCreatedNotification(User $user, Service $service, array $data = []): void
     {
-        $data['service'] = $service;
+        self::appendOperatorServiceData($data, $service);
         self::sendNotification('new_server_created', $data, $user);
+    }
+
+    public static function vpsAppInstallReadyNotification(User $user, Service $service, array $data = []): void
+    {
+        self::appendOperatorServiceData($data, $service);
+        self::sendNotification('vps_app_install_ready', $data, $user);
     }
 
     public static function serverSuspendedNotification(User $user, Service $service, array $data = []): void

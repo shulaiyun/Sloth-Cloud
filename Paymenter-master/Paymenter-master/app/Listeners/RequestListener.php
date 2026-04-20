@@ -14,7 +14,7 @@ use Symfony\Component\HttpFoundation\File\File;
 // Part of this code is from the Laravel Telescope package
 class RequestListener
 {
-    private const hiddenParamaters = ['authorization', 'password', 'password_confirmation'];
+    private const hiddenParamaters = ['authorization', 'password', 'password_confirmation', 'account_password', 'current_password'];
 
     /**
      * Handle the event.

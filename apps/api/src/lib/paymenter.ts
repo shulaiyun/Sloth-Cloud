@@ -1,6 +1,8 @@
 ﻿import type {
   ActionResponse,
   ActionResult,
+  AffiliateOrderSummary,
+  AffiliateProfile,
   ApiMeta,
   AuthUser,
   CartResponse,
@@ -35,6 +37,10 @@
   ProvisioningStatus,
   RegisterInput,
   ServiceDetail,
+  ServiceAppInstall,
+  ServiceAppInstallLogsResponse,
+  ServiceAppsInstallResponse,
+  ServiceAppsResponse,
   ServiceOperationLogSummary,
   ServiceOperationLogsResponse,
   ServiceProvisioningResponse,
@@ -43,12 +49,25 @@
   ServiceSummary,
   ServicesResponse,
   SourceMode,
+  VpsAppMarketplace,
+  VpsAppMarketplaceCapability,
+  VpsAppMarketplaceResponse,
+  VpsMarketplaceApp,
+  VpsMarketplaceCategory,
+  VpsMarketplaceOsOption,
+  VpsMarketplaceRecipe,
 } from './types.js';
 
 export interface GatewayConfig {
   apiUrl?: string;
   mode: SourceMode;
   timeoutMs: number;
+}
+
+type CatalogVisibility = 'public' | 'all';
+
+interface CatalogReadOptions {
+  visibility?: CatalogVisibility;
 }
 
 export interface AddCartItemInput {
@@ -65,11 +84,18 @@ export interface UpdateCartItemInput {
 
 export interface CheckoutInput {
   tos?: boolean;
+  referralCode?: string;
 }
 
 export interface CancelServiceInput {
   type: 'end_of_period' | 'immediate';
   reason: string;
+  currentPassword: string;
+}
+
+export interface UpgradeServiceInput {
+  productId?: string | number | null;
+  configOptions?: Record<string, string | number | null>;
 }
 
 export interface CreateServiceOperationLogInput {
@@ -83,11 +109,36 @@ export interface CreateServiceOperationLogInput {
   responsePayload?: Record<string, unknown> | null;
 }
 
+export interface StoreServicePasswordInput {
+  password: string;
+  source?: string;
+  username?: string | null;
+  applyMode?: string | null;
+  restartRequired?: boolean;
+  appliedLive?: boolean;
+  note?: string | null;
+}
+
+export interface ClearRuntimeMappingInput {
+  provider?: 'convoy' | 'managed-app';
+  reason?: string | null;
+  currentRefs?: string[];
+  force?: boolean;
+}
+
 export interface PayInvoiceInput {
   method: 'credit' | 'gateway' | 'saved';
   gatewayId?: number;
   billingAgreementUlid?: string;
   setAsDefault?: boolean;
+  frontendReturnUrl?: string;
+}
+
+export interface ReinstallServiceAppsInput {
+  selectedOs: string;
+  primaryAppSlug?: string | null;
+  addonAppSlugs?: string[];
+  previewOnly?: boolean;
 }
 
 export interface SessionAuthResponse {
@@ -147,6 +198,10 @@ function readNullableString(value: unknown) {
 }
 
 function readNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -169,6 +224,36 @@ function readBoolean(value: unknown) {
 
 function readArray<T>(value: unknown) {
   return Array.isArray(value) ? value as T[] : [];
+}
+
+function readStringArray(value: unknown) {
+  return readArray<unknown>(value)
+    .map((entry) => String(entry ?? '').trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function parseLocalizedRecord(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return null;
+    }
+
+    const record = Object.values(parsed as Record<string, unknown>)
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+
+    return record.length > 0 ? [...new Set(record)] : null;
+  } catch {
+    return null;
+  }
 }
 
 function stripHtml(input: string) {
@@ -252,7 +337,7 @@ async function requestPaymenter<T>(
   config: GatewayConfig,
   path: string,
   options: {
-    method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+    method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
     body?: unknown;
     token?: string;
   } = {},
@@ -325,8 +410,243 @@ function normalizeCurrency(raw: unknown): CurrencyInfo | null {
   };
 }
 
+type RegionMetadata = {
+  regionCode: string | null;
+  countryCode: string | null;
+};
+
+const regionAliases: Array<{ regionCode: string; countryCode: string; aliases: string[] }> = [
+  { regionCode: 'us', countryCode: 'US', aliases: ['us', 'usa', 'united states', 'america', 'los angeles', 'new york'] },
+  { regionCode: 'hk', countryCode: 'HK', aliases: ['hk', 'hong kong'] },
+  { regionCode: 'jp', countryCode: 'JP', aliases: ['jp', 'japan', 'tokyo'] },
+  { regionCode: 'sg', countryCode: 'SG', aliases: ['sg', 'singapore'] },
+  { regionCode: 'de', countryCode: 'DE', aliases: ['de', 'germany', 'frankfurt'] },
+  { regionCode: 'gb', countryCode: 'GB', aliases: ['gb', 'uk', 'united kingdom', 'great britain', 'london'] },
+  { regionCode: 'nl', countryCode: 'NL', aliases: ['nl', 'netherlands', 'amsterdam'] },
+  { regionCode: 'fr', countryCode: 'FR', aliases: ['fr', 'france', 'paris'] },
+  { regionCode: 'es', countryCode: 'ES', aliases: ['es', 'spain', 'madrid'] },
+  { regionCode: 'it', countryCode: 'IT', aliases: ['it', 'italy', 'milan'] },
+  { regionCode: 'pl', countryCode: 'PL', aliases: ['pl', 'poland', 'warsaw'] },
+  { regionCode: 'ch', countryCode: 'CH', aliases: ['ch', 'switzerland', 'zurich'] },
+  { regionCode: 'tr', countryCode: 'TR', aliases: ['tr', 'turkey', 'istanbul'] },
+  { regionCode: 'is', countryCode: 'IS', aliases: ['is', 'iceland', 'reykjavik'] },
+  { regionCode: 'kr', countryCode: 'KR', aliases: ['kr', 'korea', 'seoul'] },
+  { regionCode: 'cn', countryCode: 'CN', aliases: ['cn', 'china', 'beijing', 'shanghai', 'guangzhou', 'shenzhen'] },
+  { regionCode: 'br', countryCode: 'BR', aliases: ['br', 'brazil', 'sao paulo'] },
+];
+
+function normalizeTokenList(...parts: Array<unknown>) {
+  return parts
+    .flatMap((part) => {
+      const direct = typeof part === 'string' ? part.trim() : String(part ?? '').trim();
+      const localized = typeof part === 'string' ? parseLocalizedRecord(part) : null;
+      return localized ?? (direct.length > 0 ? [direct] : []);
+    })
+    .flatMap((part) => part.toLowerCase().split(/[^a-z0-9]+/))
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function normalizeHaystack(...parts: Array<unknown>) {
+  return parts
+    .flatMap((part) => {
+      const direct = typeof part === 'string' ? part.trim() : String(part ?? '').trim();
+      const localized = typeof part === 'string' ? parseLocalizedRecord(part) : null;
+      return localized ?? (direct.length > 0 ? [direct] : []);
+    })
+    .map((part) => part.toLowerCase())
+    .filter((part) => part.length > 0)
+    .join(' ');
+}
+
+function normalizeRegionCode(value: unknown) {
+  const token = readNullableString(value)?.trim().toLowerCase() ?? null;
+  if (!token) {
+    return null;
+  }
+
+  const direct = regionAliases.find((entry) => entry.regionCode === token || entry.aliases.includes(token));
+  if (direct) {
+    return direct.regionCode;
+  }
+
+  const fromSlug = token.match(/\b(us|hk|jp|sg|de|gb|uk|nl|fr|es|it|pl|ch|tr|is|kr|cn|br)\b/);
+  if (!fromSlug) {
+    return null;
+  }
+
+  return fromSlug[1] === 'uk' ? 'gb' : fromSlug[1];
+}
+
+function normalizeCountryCode(value: unknown) {
+  const token = readNullableString(value)?.trim().toUpperCase() ?? null;
+  if (!token) {
+    return null;
+  }
+
+  if (token === 'UK') {
+    return 'GB';
+  }
+
+  if (regionAliases.some((entry) => entry.countryCode === token)) {
+    return token;
+  }
+
+  return null;
+}
+
+function detectRegionMetadata(...parts: Array<unknown>): RegionMetadata {
+  const tokens = normalizeTokenList(...parts);
+  const haystack = normalizeHaystack(...parts);
+
+  for (const entry of regionAliases) {
+    const matched = entry.aliases.some((alias) => {
+      const normalized = alias.toLowerCase();
+      return normalized.includes(' ')
+        ? haystack.includes(normalized)
+        : tokens.includes(normalized);
+    });
+
+    if (matched) {
+      return {
+        regionCode: entry.regionCode,
+        countryCode: entry.countryCode,
+      };
+    }
+  }
+
+  return {
+    regionCode: null,
+    countryCode: null,
+  };
+}
+
+function resolveRegionMetadata(
+  explicitRegion: unknown,
+  explicitCountry: unknown,
+  ...parts: Array<unknown>
+): RegionMetadata {
+  const detected = detectRegionMetadata(...parts);
+  const regionCode = normalizeRegionCode(explicitRegion) ?? detected.regionCode;
+  const regionEntry = regionAliases.find((entry) => entry.regionCode === regionCode);
+  const countryCode = normalizeCountryCode(explicitCountry) ?? regionEntry?.countryCode ?? detected.countryCode;
+
+  return {
+    regionCode,
+    countryCode,
+  };
+}
+
+function buildPropertyMap(raw: unknown) {
+  return readArray<unknown>(raw).reduce<Record<string, string>>((carry, entry) => {
+    const value = asRecord(entry);
+    const key = readString(value.key).trim();
+    if (key.length === 0) {
+      return carry;
+    }
+
+    carry[key] = readString(value.value);
+    return carry;
+  }, {});
+}
+
+function readPropertyString(propertyMap: Record<string, string>, keys: string[]) {
+  for (const key of keys) {
+    const value = propertyMap[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function readListValue(raw: unknown) {
+  if (Array.isArray(raw)) {
+    return readStringArray(raw);
+  }
+
+  const direct = readNullableString(raw);
+  if (!direct) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(direct) as unknown;
+    if (Array.isArray(parsed)) {
+      return readStringArray(parsed);
+    }
+  } catch {
+    // Fall through to plain-text parsing.
+  }
+
+  return direct
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeRuntimeKind(raw: unknown, ...parts: Array<unknown>) {
+  const explicit = readNullableString(raw)?.trim().toLowerCase() ?? null;
+  if (explicit === 'managed-app' || explicit === 'vps' || explicit === 'unknown') {
+    return explicit;
+  }
+
+  const haystack = normalizeHaystack(...parts);
+  if (haystack.includes('managed-app') || haystack.includes('managed app') || haystack.includes('app-hosting')) {
+    return 'managed-app' as const;
+  }
+
+  if (haystack.includes('vps') || haystack.includes('server')) {
+    return 'vps' as const;
+  }
+
+  return null;
+}
+
+function normalizeCatalogVisibility(options?: CatalogReadOptions) {
+  return options?.visibility === 'all' ? 'all' : 'public';
+}
+
+function isInternalCatalogCategorySlug(slug: string | null | undefined) {
+  return (slug ?? '').trim().toLowerCase() === 'app-hosting';
+}
+
+function isPublicCatalogCategory(category: CategorySummary) {
+  return !isInternalCatalogCategorySlug(category.slug);
+}
+
+function isPublicCatalogProduct(product: ProductSummary) {
+  if (isInternalCatalogCategorySlug(product.category?.slug)) {
+    return false;
+  }
+
+  const slug = product.slug.trim().toLowerCase();
+  if (product.runtimeKind === 'managed-app') {
+    return false;
+  }
+
+  return !(slug === 'app-hosting' || slug.startsWith('app-') || slug.includes('app-hosting'));
+}
+
+function filterCatalogCategories(categories: CategorySummary[], visibility: CatalogVisibility) {
+  return visibility === 'all' ? categories : categories.filter(isPublicCatalogCategory);
+}
+
+function filterCatalogProducts(products: ProductSummary[], visibility: CatalogVisibility) {
+  return visibility === 'all' ? products : products.filter(isPublicCatalogProduct);
+}
+
 function normalizeCategory(raw: unknown): CategorySummary {
   const value = asRecord(raw);
+  const metadata = resolveRegionMetadata(
+    value.region_code ?? value.regionCode,
+    value.country_code ?? value.countryCode,
+    value.slug,
+    value.full_slug,
+    value.name,
+    value.description,
+  );
 
   return {
     id: String(value.id ?? ''),
@@ -338,6 +658,8 @@ function normalizeCategory(raw: unknown): CategorySummary {
     parentId: value.parent_id === null || value.parent_id === undefined ? null : String(value.parent_id),
     sort: readNumber(value.sort),
     productCount: readNumber(value.product_count) ?? 0,
+    regionCode: metadata.regionCode,
+    countryCode: metadata.countryCode,
   };
 }
 
@@ -365,6 +687,24 @@ function normalizeProductSummary(raw: unknown): ProductSummary {
   const value = asRecord(raw);
   const categoryValue = asRecord(value.category);
   const hasCategory = Object.keys(categoryValue).length > 0;
+  const category = hasCategory ? normalizeCategory(categoryValue) : null;
+  const metadata = resolveRegionMetadata(
+    value.region_code ?? value.regionCode,
+    value.country_code ?? value.countryCode,
+    value.slug,
+    value.name,
+    value.description,
+    category?.slug,
+    category?.fullSlug,
+    category?.name,
+  );
+  const runtimeKind = normalizeRuntimeKind(
+    value.runtime_kind ?? value.runtimeKind,
+    value.slug,
+    category?.slug,
+    category?.fullSlug,
+    value.name,
+  );
 
   return {
     id: toStringId(value.id),
@@ -375,12 +715,20 @@ function normalizeProductSummary(raw: unknown): ProductSummary {
     stock: readNumber(value.stock),
     perUserLimit: readNumber(value.per_user_limit ?? value.perUserLimit),
     allowQuantityMode: readNullableString(value.allow_quantity ?? value.allowQuantityMode ?? value.allowQuantity),
-    category: hasCategory ? {
-      id: toStringId(categoryValue.id),
-      slug: readString(categoryValue.slug),
-      name: readString(categoryValue.name, 'Catalog'),
+    category: category ? {
+      id: category.id,
+      slug: category.slug,
+      name: category.name,
+      countryCode: category.countryCode ?? null,
+      regionCode: category.regionCode ?? null,
     } : null,
     pricing: normalizeProductPricing(value.pricing),
+    countryCode: metadata.countryCode,
+    regionCode: metadata.regionCode,
+    selectedOs: readNullableString(value.selected_os ?? value.selectedOs),
+    primaryAppSlug: readNullableString(value.primary_app_slug ?? value.primaryAppSlug),
+    addonAppSlugs: readListValue(value.addon_app_slugs ?? value.addonAppSlugs),
+    runtimeKind,
   };
 }
 
@@ -438,6 +786,20 @@ function flattenOptionPricing(raw: unknown) {
   });
 }
 
+function readDisplayString(value: Record<string, unknown>, key: string) {
+  const display = asRecord(value.display);
+  const meta = asRecord(value.meta);
+
+  return readNullableString(
+    value[key]
+      ?? value[key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())]
+      ?? display[key]
+      ?? display[key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())]
+      ?? meta[key]
+      ?? meta[key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())],
+  );
+}
+
 function normalizeConfigOptionChoice(raw: unknown): ConfigOptionChoice {
   const value = asRecord(raw);
 
@@ -446,6 +808,10 @@ function normalizeConfigOptionChoice(raw: unknown): ConfigOptionChoice {
     name: readString(value.name, 'Option'),
     description: stripHtml(readString(value.description)),
     envVariable: readNullableString(value.env_variable ?? value.envVariable),
+    countryCode: readDisplayString(value, 'country_code'),
+    icon: readDisplayString(value, 'icon'),
+    badge: readDisplayString(value, 'badge'),
+    hint: readDisplayString(value, 'hint'),
     pricing: flattenOptionPricing(value.prices),
   };
 }
@@ -471,6 +837,23 @@ function normalizeProductDetail(raw: unknown): ProductDetail {
   const configOptions = readArray<unknown>(value.config_options ?? value.configOptions).map(normalizeConfigOption);
   const operatingSystemOptions = readArray<unknown>(value.operating_system_options ?? value.operatingSystemOptions).map(normalizeConfigOption);
   const checkoutFields = readArray<unknown>(value.checkout_fields ?? value.checkoutFields).map(normalizeCheckoutField);
+  const metadata = resolveRegionMetadata(
+    value.region_code ?? value.regionCode,
+    value.country_code ?? value.countryCode,
+    value.slug,
+    value.name,
+    value.description,
+    categoryValue?.slug,
+    categoryValue?.fullSlug,
+    categoryValue?.name,
+  );
+  const runtimeKind = normalizeRuntimeKind(
+    value.runtime_kind ?? value.runtimeKind,
+    value.slug,
+    categoryValue?.slug,
+    categoryValue?.fullSlug,
+    value.name,
+  );
 
   return {
     id: toStringId(value.id),
@@ -486,6 +869,13 @@ function normalizeProductDetail(raw: unknown): ProductDetail {
     configOptions,
     operatingSystemOptions,
     checkoutFields,
+    vpsAppMarketplace: normalizeVpsAppMarketplaceCapability(value.vps_app_marketplace ?? value.vpsAppMarketplace),
+    countryCode: metadata.countryCode,
+    regionCode: metadata.regionCode,
+    selectedOs: readNullableString(value.selected_os ?? value.selectedOs),
+    primaryAppSlug: readNullableString(value.primary_app_slug ?? value.primaryAppSlug),
+    addonAppSlugs: readListValue(value.addon_app_slugs ?? value.addonAppSlugs),
+    runtimeKind,
   };
 }
 
@@ -497,6 +887,10 @@ function normalizeCheckoutField(raw: unknown): CheckoutField {
     return {
       value: readString(option.value),
       label: readString(option.label),
+      countryCode: readDisplayString(option, 'country_code'),
+      icon: readDisplayString(option, 'icon'),
+      badge: readDisplayString(option, 'badge'),
+      hint: readDisplayString(option, 'hint'),
     };
   });
 
@@ -510,6 +904,134 @@ function normalizeCheckoutField(raw: unknown): CheckoutField {
     placeholder: readNullableString(value.placeholder),
     options,
     validation: (value.validation ?? null) as string | string[] | null,
+  };
+}
+
+function normalizeVpsMarketplaceOsOption(raw: unknown): VpsMarketplaceOsOption {
+  const value = asRecord(raw);
+
+  return {
+    value: readString(value.value),
+    label: readString(value.label, readString(value.value)),
+    icon: readDisplayString(value, 'icon'),
+    family: readDisplayString(value, 'family'),
+    templateRef: readNullableString(value.template_ref ?? value.templateRef),
+    templateUuid: readNullableString(value.template_uuid ?? value.templateUuid),
+  };
+}
+
+function normalizeVpsAppMarketplaceCapability(raw: unknown): VpsAppMarketplaceCapability | null {
+  const value = asRecord(raw);
+  if (Object.keys(value).length === 0 || !readBoolean(value.enabled)) {
+    return null;
+  }
+
+  return {
+    enabled: true,
+    osFieldName: readString(value.os_field_name ?? value.osFieldName, 'os'),
+    hostnameFieldName: readString(value.hostname_field_name ?? value.hostnameFieldName, 'hostname'),
+    primaryAppFieldName: readString(value.primary_app_field_name ?? value.primaryAppFieldName, 'primary_app_slug'),
+    addonAppFieldName: readString(value.addon_app_field_name ?? value.addonAppFieldName, 'addon_app_slugs'),
+    supportedOs: readArray<unknown>(value.supported_os ?? value.supportedOs).map(normalizeVpsMarketplaceOsOption),
+  };
+}
+
+function normalizeVpsMarketplaceCategory(raw: unknown): VpsMarketplaceCategory {
+  const value = asRecord(raw);
+
+  return {
+    id: toStringId(value.id),
+    slug: readString(value.slug),
+    name: readString(value.name),
+    description: readNullableString(value.description),
+    icon: readNullableString(value.icon),
+    sort: readNumber(value.sort),
+    searchKeywords: readStringArray(value.search_keywords ?? value.searchKeywords),
+  };
+}
+
+function normalizeVpsMarketplaceRecipe(raw: unknown): VpsMarketplaceRecipe | null {
+  const value = asRecord(raw);
+  if (Object.keys(value).length === 0) {
+    return null;
+  }
+
+  return {
+    id: toStringId(value.id),
+    osVersion: readNullableString(value.os_version ?? value.osVersion),
+    installStrategy: readNullableString(value.install_strategy ?? value.installStrategy),
+    effectiveInstallStrategy: readNullableString(value.effective_install_strategy ?? value.effectiveInstallStrategy),
+    templateRef: readNullableString(value.template_ref ?? value.templateRef),
+    templateAvailable: readBoolean(value.template_available ?? value.templateAvailable),
+    dependencies: readStringArray(value.dependencies),
+    conflicts: readStringArray(value.conflicts),
+    defaultLoginUsername: readNullableString(value.default_login_username ?? value.defaultLoginUsername),
+    panelPort: readNumber(value.panel_port ?? value.panelPort),
+    panelPath: readNullableString(value.panel_path ?? value.panelPath),
+    panelScheme: readNullableString(value.panel_scheme ?? value.panelScheme),
+    panelLabel: readNullableString(value.panel_label ?? value.panelLabel),
+    allowOnExistingService: readBoolean(value.allow_on_existing_service ?? value.allowOnExistingService),
+  };
+}
+
+function normalizeVpsMarketplaceApp(raw: unknown): VpsMarketplaceApp {
+  const value = asRecord(raw);
+  const categoryValue = asRecord(value.category);
+
+  return {
+    id: toStringId(value.id),
+    slug: readString(value.slug),
+    name: readString(value.name),
+    description: stripHtml(readString(value.description)),
+    icon: readNullableString(value.icon),
+    type: readString(value.type, 'addon'),
+    tagline: readNullableString(value.tagline),
+    featured: readBoolean(value.featured),
+    allowOnExistingService: readBoolean(value.allow_on_existing_service ?? value.allowOnExistingService),
+    category: Object.keys(categoryValue).length > 0
+      ? {
+        id: toStringId(categoryValue.id),
+        slug: readString(categoryValue.slug),
+        name: readString(categoryValue.name),
+        icon: readNullableString(categoryValue.icon),
+      }
+      : null,
+    recipe: normalizeVpsMarketplaceRecipe(value.recipe),
+    available: readBoolean(value.available),
+    unavailableReason: readNullableString(value.unavailable_reason ?? value.unavailableReason),
+  };
+}
+
+function normalizeVpsAppMarketplace(raw: unknown): VpsAppMarketplace {
+  const value = asRecord(raw);
+  const rules = asRecord(value.rules);
+  const currentSelection = asRecord(value.current_selection ?? value.currentSelection);
+  const compatibility = asRecord(value.compatibility);
+
+  return {
+    enabled: readBoolean(value.enabled),
+    selectedOs: readNullableString(value.selected_os ?? value.selectedOs),
+    supportedOs: readArray<unknown>(value.supported_os ?? value.supportedOs).map(normalizeVpsMarketplaceOsOption),
+    categories: readArray<unknown>(value.categories).map(normalizeVpsMarketplaceCategory),
+    primaryApps: readArray<unknown>(value.primary_apps ?? value.primaryApps).map(normalizeVpsMarketplaceApp),
+    addonApps: readArray<unknown>(value.addon_apps ?? value.addonApps).map(normalizeVpsMarketplaceApp),
+    rules: {
+      primaryRequired: readBoolean(rules.primary_required ?? rules.primaryRequired),
+      maxPrimary: readNumber(rules.max_primary ?? rules.maxPrimary) ?? 1,
+      allowAddons: readBoolean(rules.allow_addons ?? rules.allowAddons),
+    },
+    currentSelection: {
+      primaryAppSlug: readNullableString(currentSelection.primary_app_slug ?? currentSelection.primaryAppSlug),
+      addonAppSlugs: readStringArray(currentSelection.addon_app_slugs ?? currentSelection.addonAppSlugs),
+    },
+    compatibility: Object.keys(compatibility).length > 0
+      ? {
+        mode: readString(compatibility.mode, 'native') === 'fallback' ? 'fallback' : 'native',
+        requestedOs: readNullableString(compatibility.requested_os ?? compatibility.requestedOs),
+        fallbackOs: readNullableString(compatibility.fallback_os ?? compatibility.fallbackOs),
+        note: readNullableString(compatibility.note),
+      }
+      : null,
   };
 }
 
@@ -533,6 +1055,70 @@ function normalizeAuthUser(raw: unknown): AuthUser {
         value: String(propertyValue.value ?? ''),
       };
     }),
+  };
+}
+
+function normalizeMoneyRecord(raw: unknown): Record<string, number> {
+  const value = asRecord(raw);
+
+  return Object.entries(value).reduce<Record<string, number>>((carry, [currency, amount]) => {
+    const parsed = readNumber(amount);
+    if (parsed !== null) {
+      carry[currency] = parsed;
+    }
+    return carry;
+  }, {});
+}
+
+function normalizeAffiliateProfile(raw: unknown): AffiliateProfile {
+  const value = asRecord(raw);
+  const program = asRecord(value.program);
+  const affiliateValue = asRecord(value.affiliate);
+
+  return {
+    program: {
+      defaultReward: readNumber(program.default_reward ?? program.defaultReward) ?? 0,
+      codeType: readString(program.code_type ?? program.codeType, 'random'),
+    },
+    affiliate: Object.keys(affiliateValue).length > 0
+      ? {
+        id: toStringId(affiliateValue.id),
+        code: readString(affiliateValue.code),
+        enabled: readBoolean(affiliateValue.enabled),
+        visitors: readNumber(affiliateValue.visitors) ?? 0,
+        signups: readNumber(affiliateValue.signups) ?? 0,
+        validOrders: readNumber(affiliateValue.valid_orders ?? affiliateValue.validOrders) ?? 0,
+        reward: readNumber(affiliateValue.reward) ?? 0,
+        customReward: readNumber(affiliateValue.custom_reward ?? affiliateValue.customReward),
+        discount: readNumber(affiliateValue.discount),
+        earnings: normalizeMoneyRecord(affiliateValue.earnings),
+        credits: readArray<unknown>(affiliateValue.credits).map((entry) => {
+          const credit = asRecord(entry);
+          return {
+            currencyCode: readString(credit.currency_code ?? credit.currencyCode),
+            currencyName: readNullableString(credit.currency_name ?? credit.currencyName),
+            amount: readNumber(credit.amount) ?? 0,
+          };
+        }),
+        createdAt: readNullableString(affiliateValue.created_at ?? affiliateValue.createdAt),
+        updatedAt: readNullableString(affiliateValue.updated_at ?? affiliateValue.updatedAt),
+      }
+      : null,
+  };
+}
+
+function normalizeAffiliateOrderSummary(raw: unknown): AffiliateOrderSummary {
+  const value = asRecord(raw);
+
+  return {
+    id: toStringId(value.id),
+    orderId: readNullableString(value.order_id ?? value.orderId),
+    serviceId: readNullableString(value.service_id ?? value.serviceId),
+    serviceLabel: readNullableString(value.service_label ?? value.serviceLabel),
+    productName: readNullableString(value.product_name ?? value.productName),
+    earnings: normalizeMoneyRecord(value.earnings),
+    paidInvoicesCount: readNumber(value.paid_invoices_count ?? value.paidInvoicesCount) ?? 0,
+    lastPaidAt: readNullableString(value.last_paid_at ?? value.lastPaidAt),
   };
 }
 
@@ -758,6 +1344,43 @@ function normalizeCartSummary(raw: unknown): CartSummary {
 
 function normalizeServiceSummary(raw: unknown): ServiceSummary {
   const value = asRecord(raw);
+  const product = value.product ? normalizeProductSummary(value.product) : null;
+  const propertyMap = buildPropertyMap(value.properties);
+  const regionHint = readPropertyString(propertyMap, ['region', 'region_code', 'location', 'node', 'country']);
+  const metadata = resolveRegionMetadata(
+    value.region_code ?? value.regionCode ?? propertyMap.region ?? propertyMap.region_code,
+    value.country_code ?? value.countryCode ?? propertyMap.country_code ?? propertyMap.country,
+    regionHint,
+    value.label,
+    value.base_label ?? value.baseLabel,
+    product?.slug,
+    product?.category?.slug,
+    product?.category?.name,
+    product?.name,
+  );
+  const runtimeKind = normalizeRuntimeKind(
+    value.runtime_kind ?? value.runtimeKind ?? propertyMap.runtime_kind,
+    product?.slug,
+    product?.category?.slug,
+    value.label,
+  );
+  const rawOperatorOrigin = asRecord(value.operator_origin ?? value.operatorOrigin);
+  const operatorOrigin = Object.keys(rawOperatorOrigin).length > 0
+    ? {
+      capsuleId: readNullableString(rawOperatorOrigin.capsule_id ?? rawOperatorOrigin.capsuleId),
+      capsuleName: readString(rawOperatorOrigin.capsule_name ?? rawOperatorOrigin.capsuleName),
+      entryKind: readNullableString(rawOperatorOrigin.entry_kind ?? rawOperatorOrigin.entryKind),
+      stack: readNullableString(rawOperatorOrigin.stack),
+      businessPath: readNullableString(rawOperatorOrigin.business_path ?? rawOperatorOrigin.businessPath),
+      source: readNullableString(rawOperatorOrigin.source),
+      planSummary: readNullableString(rawOperatorOrigin.plan_summary ?? rawOperatorOrigin.planSummary),
+      previewUrl: readNullableString(rawOperatorOrigin.preview_url ?? rawOperatorOrigin.previewUrl),
+      productionUrl: readNullableString(rawOperatorOrigin.production_url ?? rawOperatorOrigin.productionUrl),
+      repoUrl: readNullableString(rawOperatorOrigin.repo_url ?? rawOperatorOrigin.repoUrl),
+      bundleUrl: readNullableString(rawOperatorOrigin.bundle_url ?? rawOperatorOrigin.bundleUrl),
+      manifestUrl: readNullableString(rawOperatorOrigin.manifest_url ?? rawOperatorOrigin.manifestUrl),
+    }
+    : null;
 
   return {
     id: toStringId(value.id),
@@ -770,7 +1393,7 @@ function normalizeServiceSummary(raw: unknown): ServiceSummary {
     currency: normalizeCurrency(value.currency),
     formattedPrice: readString(value.formatted_price ?? value.formattedPrice),
     expiresAt: readNullableString(value.expires_at ?? value.expiresAt),
-    product: value.product ? normalizeProductSummary(value.product) : null,
+    product,
     plan: (() => {
       const plan = asRecord(value.plan);
       if (Object.keys(plan).length === 0) {
@@ -787,6 +1410,31 @@ function normalizeServiceSummary(raw: unknown): ServiceSummary {
     })(),
     cancellable: readBoolean(value.cancellable),
     upgradable: readBoolean(value.upgradable),
+    cancellation: (() => {
+      const cancellation = asRecord(value.cancellation);
+      if (Object.keys(cancellation).length === 0) {
+        return null;
+      }
+
+      return {
+        id: toStringId(cancellation.id),
+        type: readString(cancellation.type),
+        reason: readString(cancellation.reason),
+        createdAt: readNullableString(cancellation.created_at ?? cancellation.createdAt),
+      };
+    })(),
+    countryCode: metadata.countryCode,
+    regionCode: metadata.regionCode,
+    selectedOs: readNullableString(value.selected_os ?? value.selectedOs) ?? readPropertyString(propertyMap, ['selected_os', 'os', 'template', 'image']),
+    primaryAppSlug: readNullableString(value.primary_app_slug ?? value.primaryAppSlug) ?? readPropertyString(propertyMap, ['primary_app_slug']),
+    addonAppSlugs: [
+      ...new Set([
+        ...readListValue(value.addon_app_slugs ?? value.addonAppSlugs),
+        ...readListValue(propertyMap.addon_app_slugs),
+      ]),
+    ],
+    runtimeKind,
+    operatorOrigin,
     provisioning: normalizeProvisioningStatus(value.provisioning),
   };
 }
@@ -819,6 +1467,7 @@ function isServiceLikeRecord(raw: unknown) {
 function normalizeServiceDetail(raw: unknown): ServiceDetail {
   const value = asRecord(raw);
   const base = normalizeServiceSummary(value);
+  const propertyMap = buildPropertyMap(value.properties);
 
   return {
     ...base,
@@ -885,6 +1534,90 @@ function normalizeServiceDetail(raw: unknown): ServiceDetail {
         createdAt: readNullableString(cancellation.created_at ?? cancellation.createdAt),
       };
     })(),
+    countryCode: base.countryCode ?? normalizeCountryCode(propertyMap.country_code ?? propertyMap.country),
+    regionCode: base.regionCode ?? normalizeRegionCode(propertyMap.region_code ?? propertyMap.region),
+    selectedOs: base.selectedOs ?? readPropertyString(propertyMap, ['selected_os', 'os', 'template', 'image']),
+    primaryAppSlug: base.primaryAppSlug ?? readPropertyString(propertyMap, ['primary_app_slug']),
+    addonAppSlugs: (base.addonAppSlugs ?? []).length > 0 ? (base.addonAppSlugs ?? []) : readListValue(propertyMap.addon_app_slugs),
+    runtimeKind: base.runtimeKind ?? normalizeRuntimeKind(propertyMap.runtime_kind, value.label, base.product?.slug),
+  };
+}
+
+function normalizeServiceAppInstall(raw: unknown): ServiceAppInstall {
+  const value = asRecord(raw);
+  const appValue = asRecord(value.app);
+  const recipeValue = asRecord(value.recipe);
+  const requestedBy = asRecord(value.requested_by ?? value.requestedBy);
+
+  return {
+    id: toStringId(value.id),
+    source: readString(value.source),
+    status: readString(value.status),
+    isPrimary: readBoolean(value.is_primary ?? value.isPrimary),
+    installStrategy: readNullableString(value.install_strategy ?? value.installStrategy),
+    requestedOs: readNullableString(value.requested_os ?? value.requestedOs),
+    attemptCount: readNumber(value.attempt_count ?? value.attemptCount) ?? 0,
+    lastError: readNullableString(value.last_error ?? value.lastError),
+    logs: readStringArray(value.logs),
+    app: Object.keys(appValue).length > 0
+      ? {
+        id: toStringId(appValue.id),
+        slug: readString(appValue.slug),
+        name: readString(appValue.name),
+        description: stripHtml(readString(appValue.description)),
+        icon: readNullableString(appValue.icon),
+        type: readString(appValue.type),
+        tagline: readNullableString(appValue.tagline),
+        category: (() => {
+          const category = asRecord(appValue.category);
+          if (Object.keys(category).length === 0) {
+            return null;
+          }
+
+          return {
+            id: toStringId(category.id),
+            slug: readString(category.slug),
+            name: readString(category.name),
+            icon: readNullableString(category.icon),
+          };
+        })(),
+      }
+      : null,
+    recipe: Object.keys(recipeValue).length > 0
+      ? {
+        id: toStringId(recipeValue.id),
+        osVersion: readNullableString(recipeValue.os_version ?? recipeValue.osVersion),
+        installStrategy: readNullableString(recipeValue.install_strategy ?? recipeValue.installStrategy),
+        templateRef: readNullableString(recipeValue.template_ref ?? recipeValue.templateRef),
+        panelPort: readNumber(recipeValue.panel_port ?? recipeValue.panelPort),
+        panelPath: readNullableString(recipeValue.panel_path ?? recipeValue.panelPath),
+        panelScheme: readNullableString(recipeValue.panel_scheme ?? recipeValue.panelScheme),
+        panelLabel: readNullableString(recipeValue.panel_label ?? recipeValue.panelLabel),
+        dependencies: readStringArray(recipeValue.dependencies),
+        conflicts: readStringArray(recipeValue.conflicts),
+      }
+      : null,
+    requestedBy: Object.keys(requestedBy).length > 0
+      ? {
+        id: toStringId(requestedBy.id),
+        name: readString(requestedBy.name),
+        email: readString(requestedBy.email),
+      }
+      : null,
+    responsePayload: (() => {
+      const payload = asRecord(value.response_payload ?? value.responsePayload);
+      return Object.keys(payload).length > 0 ? payload : null;
+    })(),
+    requestPayload: (() => {
+      const payload = asRecord(value.request_payload ?? value.requestPayload);
+      return Object.keys(payload).length > 0 ? payload : null;
+    })(),
+    startedAt: readNullableString(value.started_at ?? value.startedAt),
+    lastAttemptAt: readNullableString(value.last_attempt_at ?? value.lastAttemptAt),
+    completedAt: readNullableString(value.completed_at ?? value.completedAt),
+    installedAt: readNullableString(value.installed_at ?? value.installedAt),
+    createdAt: readNullableString(value.created_at ?? value.createdAt),
+    updatedAt: readNullableString(value.updated_at ?? value.updatedAt),
   };
 }
 
@@ -965,19 +1698,25 @@ function extractNumericInvoiceId(value: string) {
   return match ? match[1] : null;
 }
 
+function normalizeInvoiceReference(value: string) {
+  const normalized = value.trim();
+  const extracted = extractNumericInvoiceId(normalized);
+
+  if (extracted) {
+    return `INV-${extracted}`;
+  }
+
+  return normalized;
+}
+
 async function resolveInvoicePathId(config: GatewayConfig, token: string, invoiceRef: string) {
-  const normalized = invoiceRef.trim();
+  const normalized = normalizeInvoiceReference(invoiceRef);
   if (normalized === '') {
     throw notFound('Invoice id is required.');
   }
 
   if (isNumericInvoiceId(normalized)) {
     return normalized;
-  }
-
-  const extracted = extractNumericInvoiceId(normalized);
-  if (extracted) {
-    return extracted;
   }
 
   try {
@@ -1017,36 +1756,46 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
-    async categories(): Promise<CatalogCategoriesResponse> {
+    async categories(options?: CatalogReadOptions): Promise<CatalogCategoriesResponse> {
+      const visibility = normalizeCatalogVisibility(options);
       if (isMock) {
+        const mockCategories = filterCatalogCategories([
+          {
+            id: '1',
+            slug: 'global-vps',
+            fullSlug: 'global-vps',
+            name: 'Global VPS',
+            description: 'Mock category for local development mode.',
+            image: null,
+            parentId: null,
+            sort: 1,
+            productCount: 1,
+          },
+        ], visibility);
+
         return {
-          data: [
-            {
-              id: '1',
-              slug: 'global-vps',
-              fullSlug: 'global-vps',
-              name: 'Global VPS',
-              description: 'Mock category for local development mode.',
-              image: null,
-              parentId: null,
-              sort: 1,
-              productCount: 1,
-            },
-          ],
+          data: mockCategories,
           meta: baseMeta(config.mode),
         };
       }
 
-      // Force full category list to avoid upstream defaults that only return non-empty categories.
-      const response = await requestPaymenter<{ data: unknown[] }>(config, '/catalog/categories?only_with_products=0');
+      const query = new URLSearchParams();
+      query.set('only_with_products', '0');
+      query.set('visibility', visibility);
+      const response = await requestPaymenter<{ data: unknown[] }>(config, `/catalog/categories?${query.toString()}`);
+      const categories = filterCatalogCategories(
+        readArray<unknown>(response.data).map(normalizeCategory),
+        visibility,
+      );
 
       return {
-        data: readArray<unknown>(response.data).map(normalizeCategory),
+        data: categories,
         meta: baseMeta(config.mode),
       };
     },
 
-    async products(categorySlug?: string, perPage = 24): Promise<CatalogProductsResponse> {
+    async products(categorySlug?: string, perPage = 24, options?: CatalogReadOptions): Promise<CatalogProductsResponse> {
+      const visibility = normalizeCatalogVisibility(options);
       if (isMock) {
         const category = {
           id: '1',
@@ -1082,7 +1831,10 @@ export function createGateway(config: GatewayConfig) {
           },
         };
 
-        const filtered = categorySlug && categorySlug !== category.slug ? [] : [item];
+        const filtered = filterCatalogProducts(
+          categorySlug && categorySlug !== category.slug ? [] : [item],
+          visibility,
+        );
 
         return {
           data: filtered,
@@ -1096,8 +1848,22 @@ export function createGateway(config: GatewayConfig) {
         };
       }
 
+      if (visibility === 'public' && isInternalCatalogCategorySlug(categorySlug ?? null)) {
+        return {
+          data: [],
+          pagination: {
+            currentPage: 1,
+            perPage,
+            total: 0,
+            lastPage: 1,
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
       const query = new URLSearchParams();
       query.set('per_page', String(perPage));
+      query.set('visibility', visibility);
 
       if (categorySlug) {
         query.set('category', categorySlug);
@@ -1107,18 +1873,27 @@ export function createGateway(config: GatewayConfig) {
         config,
         `/catalog/products?${query.toString()}`,
       );
+      const products = filterCatalogProducts(
+        readArray<unknown>(response.data).map(normalizeProductSummary),
+        visibility,
+      );
 
       return {
-        data: readArray<unknown>(response.data).map(normalizeProductSummary),
+        data: products,
         pagination: normalizePagination(response.meta),
         meta: baseMeta(config.mode),
       };
     },
 
-    async category(categorySlug: string): Promise<CatalogCategoryResponse> {
+    async category(categorySlug: string, options?: CatalogReadOptions): Promise<CatalogCategoryResponse> {
+      const visibility = normalizeCatalogVisibility(options);
+      if (visibility === 'public' && isInternalCatalogCategorySlug(categorySlug)) {
+        throw notFound(`Category ${categorySlug} was not found.`);
+      }
+
       const [categoriesResponse, productsResponse] = await Promise.all([
-        this.categories(),
-        this.products(categorySlug),
+        this.categories({ visibility }),
+        this.products(categorySlug, 24, { visibility }),
       ]);
 
       const category = categoriesResponse.data.find((entry) => entry.slug === categorySlug);
@@ -1137,7 +1912,8 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
-    async product(productSlug: string): Promise<ProductDetailResponse> {
+    async product(productSlug: string, options?: CatalogReadOptions): Promise<ProductDetailResponse> {
+      const visibility = normalizeCatalogVisibility(options);
       if (isMock) {
         if (productSlug !== 'starter-2c4g') {
           throw notFound(`Product ${productSlug} was not found.`);
@@ -1192,12 +1968,19 @@ export function createGateway(config: GatewayConfig) {
             configOptions: [],
             operatingSystemOptions: [],
             checkoutFields: [],
+            vpsAppMarketplace: null,
           },
           meta: baseMeta(config.mode),
         };
       }
 
-      const response = await requestPaymenter<{ data?: { product?: unknown } }>(config, `/catalog/products/${productSlug}`);
+      const query = new URLSearchParams();
+      query.set('visibility', visibility);
+      const suffix = query.toString();
+      const response = await requestPaymenter<{ data?: { product?: unknown } }>(
+        config,
+        `/catalog/products/${productSlug}${suffix ? `?${suffix}` : ''}`,
+      );
       const record = asRecord(response.data);
       const product = record.product;
 
@@ -1211,10 +1994,113 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
-    async home(): Promise<HomeResponse> {
+    async productVpsAppMarket(
+      productSlug: string,
+      selectedOs?: string | null,
+      options?: CatalogReadOptions,
+    ): Promise<VpsAppMarketplaceResponse> {
+      const visibility = normalizeCatalogVisibility(options);
+      if (isMock) {
+        return {
+          data: {
+            enabled: true,
+            selectedOs: selectedOs ?? 'Ubuntu 24.04',
+            supportedOs: [
+              {
+                value: 'Ubuntu 24.04',
+                label: 'Ubuntu 24.04',
+                templateRef: null,
+                templateUuid: null,
+              },
+            ],
+            categories: [],
+            primaryApps: [],
+            addonApps: [],
+            rules: {
+              primaryRequired: false,
+              maxPrimary: 1,
+              allowAddons: true,
+            },
+            currentSelection: {
+              primaryAppSlug: null,
+              addonAppSlugs: [],
+            },
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
+      const query = new URLSearchParams();
+      query.set('visibility', visibility);
+      if (selectedOs && selectedOs.trim() !== '') {
+        query.set('os', selectedOs.trim());
+      }
+
+      const suffix = query.toString();
+      const requestPath = `/catalog/products/${productSlug}/vps-app-market${suffix ? `?${suffix}` : ''}`;
+      const response = await requestPaymenter<{ data?: unknown }>(config, requestPath);
+      const requestedOs = selectedOs?.trim() || null;
+      const normalized = normalizeVpsAppMarketplace(response.data);
+      const hasApps = normalized.primaryApps.length > 0 || normalized.addonApps.length > 0;
+
+      if (requestedOs && !hasApps) {
+        const preferredFallback = normalized.supportedOs.find((option) => (
+          /ubuntu\s*24\.04|ubuntu\s*22\.04|debian\s*12/i.test(`${option.value} ${option.label}`)
+        ))?.value
+          ?? normalized.supportedOs[0]?.value
+          ?? null;
+
+        if (preferredFallback && preferredFallback.toLowerCase() !== requestedOs.toLowerCase()) {
+          const fallbackQuery = new URLSearchParams();
+          fallbackQuery.set('visibility', visibility);
+          fallbackQuery.set('os', preferredFallback);
+          const fallbackPath = `/catalog/products/${productSlug}/vps-app-market?${fallbackQuery.toString()}`;
+
+          try {
+            const fallbackResponse = await requestPaymenter<{ data?: unknown }>(config, fallbackPath);
+            const fallbackData = normalizeVpsAppMarketplace(fallbackResponse.data);
+            const fallbackHasApps = fallbackData.primaryApps.length > 0 || fallbackData.addonApps.length > 0;
+
+            if (fallbackHasApps) {
+              return {
+                data: {
+                  ...fallbackData,
+                  selectedOs: requestedOs,
+                  compatibility: {
+                    mode: 'fallback',
+                    requestedOs,
+                    fallbackOs: preferredFallback,
+                    note: `App catalog for ${requestedOs} is not ready yet. Showing ${preferredFallback} recipes in compatibility mode.`,
+                  },
+                },
+                meta: baseMeta(config.mode),
+              };
+            }
+          } catch {
+            // Keep the original empty result when fallback lookup is unavailable.
+          }
+        }
+      }
+
+      return {
+        data: {
+          ...normalized,
+          compatibility: normalized.compatibility ?? {
+            mode: 'native',
+            requestedOs: requestedOs ?? normalized.selectedOs ?? null,
+            fallbackOs: null,
+            note: null,
+          },
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async home(options?: CatalogReadOptions): Promise<HomeResponse> {
+      const visibility = normalizeCatalogVisibility(options);
       const [categoriesResponse, productsResponse] = await Promise.all([
-        this.categories(),
-        this.products(undefined, 6),
+        this.categories({ visibility }),
+        this.products(undefined, 6, { visibility }),
       ]);
 
       return {
@@ -1316,6 +2202,7 @@ export function createGateway(config: GatewayConfig) {
           password: input.password,
           password_confirmation: input.passwordConfirmation,
           device_name: input.deviceName ?? 'Sloth Cloud Web',
+          ...(input.referralCode ? { referral_code: input.referralCode } : {}),
         },
       });
 
@@ -1471,10 +2358,23 @@ export function createGateway(config: GatewayConfig) {
         token: ensureToken(token),
         body: {
           tos: input.tos ?? true,
+          ...(input.referralCode ? { referral_code: input.referralCode } : {}),
         },
       });
       const data = asRecord(response.data);
       const order = asRecord(data.order);
+      const services = readArray<unknown>(order.services).map(normalizeServiceSummary);
+      const upstreamRedirect = asRecord(data.redirect);
+      const upstreamRedirectPath = readString(upstreamRedirect.path, '/services');
+      const singleServiceRedirectPath = services.length === 1 && services[0]?.id
+        ? `/services/${encodeURIComponent(services[0].id)}`
+        : null;
+      const redirectPath = singleServiceRedirectPath && (upstreamRedirectPath === '' || upstreamRedirectPath === '/services')
+        ? singleServiceRedirectPath
+        : upstreamRedirectPath;
+      const redirectType = singleServiceRedirectPath && redirectPath === singleServiceRedirectPath
+        ? 'service'
+        : readString(upstreamRedirect.type, 'services');
 
       return {
         message: readString(response.message, 'Order created successfully.'),
@@ -1484,13 +2384,145 @@ export function createGateway(config: GatewayConfig) {
             currencyCode: readString(order.currency_code ?? order.currencyCode, 'USD'),
             total: readNumber(order.total) ?? 0,
             formattedTotal: readString(order.formatted_total ?? order.formattedTotal),
-            services: readArray<unknown>(order.services).map(normalizeServiceSummary),
+            services,
           },
           invoice: data.invoice ? normalizeInvoiceDetail(data.invoice) : null,
           redirect: {
-            type: readString(asRecord(data.redirect).type, 'services'),
-            path: readString(asRecord(data.redirect).path, '/services'),
+            type: redirectType,
+            path: redirectPath,
           },
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async trackAffiliate(code: string) {
+      if (isMock) {
+        return {
+          data: {
+            valid: code.trim().length >= 5,
+            affiliate: code.trim().length >= 5
+              ? {
+                id: 'mock-affiliate',
+                code: code.trim(),
+                reward: 10,
+              }
+              : null,
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
+      const response = await requestPaymenter<{ data?: unknown }>(config, '/affiliate/track', {
+        method: 'POST',
+        body: {
+          code,
+        },
+      });
+      const data = asRecord(response.data);
+      const affiliate = asRecord(data.affiliate);
+
+      return {
+        data: {
+          valid: readBoolean(data.valid),
+          affiliate: Object.keys(affiliate).length > 0
+            ? {
+              id: toStringId(affiliate.id),
+              code: readString(affiliate.code),
+              reward: readNumber(affiliate.reward),
+            }
+            : null,
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async affiliateMe(token: string | undefined): Promise<{ data: AffiliateProfile; meta: ApiMeta }> {
+      if (isMock) {
+        return {
+          data: {
+            program: {
+              defaultReward: 10,
+              codeType: 'random',
+            },
+            affiliate: null,
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
+      const response = await requestPaymenter<{ data?: unknown }>(config, '/affiliate/me', {
+        token: ensureToken(token),
+      });
+
+      return {
+        data: normalizeAffiliateProfile(response.data),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async affiliateEnroll(token: string | undefined, code?: string): Promise<{ message: string; data: AffiliateProfile; meta: ApiMeta }> {
+      if (isMock) {
+        return {
+          message: 'Affiliate enrollment successful (mock).',
+          data: {
+            program: {
+              defaultReward: 10,
+              codeType: code ? 'custom' : 'random',
+            },
+            affiliate: {
+              id: 'mock-affiliate',
+              code: code ?? 'MOCKAFF001',
+              enabled: true,
+              visitors: 0,
+              signups: 0,
+              validOrders: 0,
+              reward: 10,
+              customReward: null,
+              discount: null,
+              earnings: {},
+              credits: [],
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, '/affiliate/enroll', {
+        method: 'POST',
+        token: ensureToken(token),
+        body: {
+          ...(code ? { code } : {}),
+        },
+      });
+
+      return {
+        message: readString(response.message, 'Affiliate enrollment successful.'),
+        data: normalizeAffiliateProfile(response.data),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async affiliateOrders(token: string | undefined, limit = 20): Promise<{ data: { items: AffiliateOrderSummary[] }; meta: ApiMeta }> {
+      if (isMock) {
+        return {
+          data: {
+            items: [],
+          },
+          meta: baseMeta(config.mode),
+        };
+      }
+
+      const response = await requestPaymenter<{ data?: unknown }>(config, `/affiliate/orders?limit=${encodeURIComponent(String(limit))}`, {
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        data: {
+          items: readArray<unknown>(data.items).map(normalizeAffiliateOrderSummary),
         },
         meta: baseMeta(config.mode),
       };
@@ -1539,6 +2571,161 @@ export function createGateway(config: GatewayConfig) {
       };
     },
 
+    async serviceApps(token: string | undefined, serviceId: string): Promise<ServiceAppsResponse> {
+      const response = await requestPaymenter<{ data?: unknown }>(config, `/services/${serviceId}/apps`, {
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        data: {
+          serviceId: toStringId(data.service_id ?? data.serviceId),
+          selectedOs: readNullableString(data.selected_os ?? data.selectedOs),
+          primaryAppSlug: readNullableString(data.primary_app_slug ?? data.primaryAppSlug),
+          addonAppSlugs: readStringArray(data.addon_app_slugs ?? data.addonAppSlugs),
+          panelUrl: readNullableString(data.panel_url ?? data.panelUrl),
+          panelLabel: readNullableString(data.panel_label ?? data.panelLabel),
+          panelHost: readNullableString(data.panel_host ?? data.panelHost),
+          panelPort: readNumber(data.panel_port ?? data.panelPort),
+          panelPath: readNullableString(data.panel_path ?? data.panelPath),
+          panelUsername: readNullableString(data.panel_username ?? data.panelUsername),
+          panelPassword: readNullableString(data.panel_password ?? data.panelPassword),
+          installs: readArray<unknown>(data.installs).map(normalizeServiceAppInstall),
+          catalog: data.catalog ? normalizeVpsAppMarketplace(data.catalog) : null,
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async prepareReinstallServiceApps(
+      token: string | undefined,
+      serviceId: string,
+      input: ReinstallServiceAppsInput,
+    ): Promise<{ message: string; data: Record<string, unknown>; meta: ApiMeta }> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/apps/reinstall-plan`, {
+        method: 'POST',
+        token: ensureToken(token),
+        body: {
+          selected_os: input.selectedOs,
+          primary_app_slug: input.primaryAppSlug ?? null,
+          addon_app_slugs: input.addonAppSlugs ?? [],
+          preview_only: input.previewOnly ?? false,
+        },
+      });
+
+      return {
+        message: readString(response.message, input.previewOnly ? 'Reinstall app plan validated.' : 'Reinstall app plan prepared.'),
+        data: asRecord(response.data),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async installServiceApps(
+      token: string | undefined,
+      serviceId: string,
+      addonAppSlugs: string[],
+    ): Promise<ServiceAppsInstallResponse> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/apps/install`, {
+        method: 'POST',
+        token: ensureToken(token),
+        body: {
+          addon_app_slugs: addonAppSlugs,
+        },
+      });
+      const data = asRecord(response.data);
+
+      return {
+        message: readString(response.message, 'Addon app installation queued.'),
+        data: {
+          serviceId: data.service_id === undefined && data.serviceId === undefined ? null : toStringId(data.service_id ?? data.serviceId),
+          queued: readArray<unknown>(data.queued).map(normalizeServiceAppInstall),
+          install: null,
+          apps: (() => {
+            const apps = asRecord(data.apps);
+            return {
+              serviceId: toStringId(apps.service_id ?? apps.serviceId),
+              selectedOs: readNullableString(apps.selected_os ?? apps.selectedOs),
+              primaryAppSlug: readNullableString(apps.primary_app_slug ?? apps.primaryAppSlug),
+              addonAppSlugs: readStringArray(apps.addon_app_slugs ?? apps.addonAppSlugs),
+              panelUrl: readNullableString(apps.panel_url ?? apps.panelUrl),
+              panelLabel: readNullableString(apps.panel_label ?? apps.panelLabel),
+              panelHost: readNullableString(apps.panel_host ?? apps.panelHost),
+              panelPort: readNumber(apps.panel_port ?? apps.panelPort),
+              panelPath: readNullableString(apps.panel_path ?? apps.panelPath),
+              panelUsername: readNullableString(apps.panel_username ?? apps.panelUsername),
+              panelPassword: readNullableString(apps.panel_password ?? apps.panelPassword),
+              installs: readArray<unknown>(apps.installs).map(normalizeServiceAppInstall),
+              catalog: apps.catalog ? normalizeVpsAppMarketplace(apps.catalog) : null,
+            };
+          })(),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async retryServiceAppInstall(
+      token: string | undefined,
+      serviceId: string,
+      installId: string,
+    ): Promise<ServiceAppsInstallResponse> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/apps/${installId}/retry`, {
+        method: 'POST',
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        message: readString(response.message, 'App installation retry queued.'),
+        data: {
+          serviceId: toStringId(serviceId),
+          queued: [],
+          install: (() => {
+            const install = asRecord(data.install);
+            return Object.keys(install).length > 0 ? normalizeServiceAppInstall(install) : null;
+          })(),
+          apps: (() => {
+            const apps = asRecord(data.apps);
+            return {
+              serviceId: toStringId(apps.service_id ?? apps.serviceId),
+              selectedOs: readNullableString(apps.selected_os ?? apps.selectedOs),
+              primaryAppSlug: readNullableString(apps.primary_app_slug ?? apps.primaryAppSlug),
+              addonAppSlugs: readStringArray(apps.addon_app_slugs ?? apps.addonAppSlugs),
+              panelUrl: readNullableString(apps.panel_url ?? apps.panelUrl),
+              panelLabel: readNullableString(apps.panel_label ?? apps.panelLabel),
+              panelHost: readNullableString(apps.panel_host ?? apps.panelHost),
+              panelPort: readNumber(apps.panel_port ?? apps.panelPort),
+              panelPath: readNullableString(apps.panel_path ?? apps.panelPath),
+              panelUsername: readNullableString(apps.panel_username ?? apps.panelUsername),
+              panelPassword: readNullableString(apps.panel_password ?? apps.panelPassword),
+              installs: readArray<unknown>(apps.installs).map(normalizeServiceAppInstall),
+              catalog: apps.catalog ? normalizeVpsAppMarketplace(apps.catalog) : null,
+            };
+          })(),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async serviceAppInstallLogs(
+      token: string | undefined,
+      serviceId: string,
+      installId: string,
+    ): Promise<ServiceAppInstallLogsResponse> {
+      const response = await requestPaymenter<{ data?: unknown }>(config, `/services/${serviceId}/apps/${installId}/logs`, {
+        token: ensureToken(token),
+      });
+      const data = asRecord(response.data);
+
+      return {
+        data: {
+          serviceId: toStringId(data.service_id ?? data.serviceId),
+          installId: toStringId(data.install_id ?? data.installId),
+          logs: readStringArray(data.logs),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
     async serviceProvisioning(token: string | undefined, serviceId: string): Promise<ServiceProvisioningResponse> {
       const response = await requestPaymenter<{ data?: unknown }>(config, `/services/${serviceId}/provisioning`, {
         token: ensureToken(token),
@@ -1560,13 +2747,14 @@ export function createGateway(config: GatewayConfig) {
     async retryServiceProvisioning(
       token: string | undefined,
       serviceId: string,
-      options: { force?: boolean } = {},
+      options: { force?: boolean; accountPassword?: string } = {},
     ): Promise<ServiceProvisioningRetryResponse> {
       const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/provisioning/retry`, {
         method: 'POST',
         token: ensureToken(token),
         body: {
           force: Boolean(options.force),
+          ...(options.accountPassword ? { account_password: options.accountPassword } : {}),
         },
       });
       const data = asRecord(response.data);
@@ -1607,6 +2795,7 @@ export function createGateway(config: GatewayConfig) {
         body: {
           type: input.type,
           reason: input.reason,
+          current_password: input.currentPassword,
         },
       });
 
@@ -1642,6 +2831,94 @@ export function createGateway(config: GatewayConfig) {
         message: readString(response.message, 'Renewal invoice created.'),
         data: response.data,
         actionResult: normalizeActionResult(response.action_result),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async serviceUpgradeOptions(token: string | undefined, serviceId: string): Promise<{ data: Record<string, unknown>; meta: ApiMeta }> {
+      const response = await requestPaymenter<{ data?: unknown }>(config, `/services/${serviceId}/upgrade-options`, {
+        token: ensureToken(token),
+      });
+
+      return {
+        data: asRecord(response.data),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async upgradeService(
+      token: string | undefined,
+      serviceId: string,
+      input: UpgradeServiceInput,
+    ): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown; action_result?: unknown }>(config, `/services/${serviceId}/upgrade`, {
+        method: 'POST',
+        token: ensureToken(token),
+        body: {
+          ...(input.productId !== undefined && input.productId !== null && String(input.productId).trim() !== ''
+            ? { product_id: Number(input.productId) }
+            : {}),
+          config_options: input.configOptions ?? {},
+        },
+      });
+
+      return {
+        message: readString(response.message, 'Upgrade request submitted.'),
+        data: response.data,
+        actionResult: normalizeActionResult(response.action_result),
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async storeServicePassword(
+      token: string | undefined,
+      serviceId: string,
+      input: StoreServicePasswordInput,
+    ) {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/credentials/password`, {
+        method: 'PUT',
+        token: ensureToken(token),
+        body: {
+          password: input.password,
+          source: input.source,
+          username: input.username,
+          apply_mode: input.applyMode,
+          restart_required: input.restartRequired,
+          applied_live: input.appliedLive,
+          note: input.note,
+        },
+      });
+      const data = asRecord(response.data);
+
+      return {
+        message: readString(response.message, 'Service password has been stored.'),
+        data: {
+          service: normalizeServiceDetail(asRecord(data.service)),
+        },
+        meta: baseMeta(config.mode),
+      };
+    },
+
+    async clearServiceRuntimeMapping(
+      token: string | undefined,
+      serviceId: string,
+      input: ClearRuntimeMappingInput = {},
+    ): Promise<ActionResponse<unknown>> {
+      const response = await requestPaymenter<{ message?: unknown; data?: unknown }>(config, `/services/${serviceId}/runtime-mapping/clear`, {
+        method: 'POST',
+        token: ensureToken(token),
+        body: {
+          provider: input.provider ?? 'convoy',
+          reason: input.reason ?? null,
+          current_refs: input.currentRefs ?? [],
+          force: input.force ?? false,
+        },
+      });
+
+      return {
+        message: readString(response.message, 'Runtime mapping cleared.'),
+        data: response.data,
+        actionResult: null,
         meta: baseMeta(config.mode),
       };
     },
@@ -1808,6 +3085,7 @@ export function createGateway(config: GatewayConfig) {
             gateway_id: input.gatewayId,
             billing_agreement_ulid: input.billingAgreementUlid,
             set_as_default: input.setAsDefault,
+            frontend_return_url: input.frontendReturnUrl,
           },
         },
       );

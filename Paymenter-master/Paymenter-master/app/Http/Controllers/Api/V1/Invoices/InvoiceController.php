@@ -100,6 +100,7 @@ class InvoiceController extends Controller
             'gateway_id' => ['nullable', 'integer'],
             'billing_agreement_ulid' => ['nullable', 'string', 'max:255'],
             'set_as_default' => ['sometimes', 'boolean'],
+            'frontend_return_url' => ['nullable', 'string', 'max:2048'],
         ]);
 
         if ($invoice->status !== Invoice::STATUS_PENDING) {

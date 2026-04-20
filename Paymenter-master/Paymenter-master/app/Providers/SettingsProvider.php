@@ -70,12 +70,9 @@ class SettingsProvider extends ServiceProvider
             if (!app()->runningInConsole()) {
                 $requestRootUrl = self::detectRequestRootUrl();
                 if (is_string($requestRootUrl) && $requestRootUrl !== '') {
-                    $requestHost = (string) parse_url($requestRootUrl, PHP_URL_HOST);
-                    $appHost = (string) parse_url($appUrl, PHP_URL_HOST);
-
-                    if (!self::isLocalHost($requestHost) || self::isLocalHost($appHost)) {
-                        $effectiveRootUrl = $requestRootUrl;
-                    }
+                    // During HTTP requests, always prefer the actual host the client used.
+                    // This keeps localhost and LAN access working at the same time.
+                    $effectiveRootUrl = $requestRootUrl;
                 }
             }
 
@@ -105,24 +102,10 @@ class SettingsProvider extends ServiceProvider
             $configured = 'http://' . ltrim($configured, '/');
         }
 
-        // If an explicit public URL is provided, trust it and do not override it with
-        // request-derived localhost hostnames that may drop ports (for example localhost:18080).
-        if ($explicitPublicUrl !== '') {
-            return $configured;
-        }
-
         $requestRootUrl = self::detectRequestRootUrl();
 
         if ($requestRootUrl !== null) {
-            $configuredHost = (string) parse_url($configured, PHP_URL_HOST);
-            $requestHost = (string) parse_url($requestRootUrl, PHP_URL_HOST);
-
-            $isConfiguredLocal = self::isLocalHost($configuredHost);
-            $isRequestLocal = self::isLocalHost($requestHost);
-
-            if (!$isRequestLocal || $isConfiguredLocal) {
-                return $requestRootUrl;
-            }
+            return $requestRootUrl;
         }
 
         return $configured;

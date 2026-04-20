@@ -11,6 +11,7 @@ use App\Admin\Resources\ServiceResource\Pages\ListService;
 use App\Admin\Resources\ServiceResource\RelationManagers\ConfigOptionsRelationManager;
 use App\Admin\Resources\ServiceResource\RelationManagers\InvoicesRelationManager;
 use App\Admin\Resources\ServiceResource\RelationManagers\ServiceOperationLogsRelationManager;
+use App\Admin\Resources\ServiceResource\RelationManagers\VpsAppInstallsRelationManager;
 use App\Helpers\ExtensionHelper;
 use App\Models\Currency;
 use App\Models\Product;
@@ -309,6 +310,7 @@ class ServiceResource extends Resource
             PropertiesRelationManager::class,
             ConfigOptionsRelationManager::class,
             ServiceOperationLogsRelationManager::class,
+            VpsAppInstallsRelationManager::class,
         ];
     }
 

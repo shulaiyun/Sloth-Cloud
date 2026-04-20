@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { posix as pathPosix } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 import type { ServiceDetail, ServiceRuntimeSnapshot } from '../types.js';
 
@@ -16,6 +19,8 @@ type ManagedAppManagerConfig = {
   namespacePrefix: string;
   buildNamespace?: string;
   buildkitImage: string;
+  buildkitSnapshotter?: string;
+  buildkitRootPath?: string;
   gitCloneImage: string;
   imageRegistry?: string;
   imageRepositoryPrefix: string;
@@ -43,6 +48,7 @@ type ManagedAppSpec = {
   serviceLabel: string;
   productSlug: string;
   runtimeRef: string;
+  runtimeLabel: string;
   clusterRef: string;
   namespace: string;
   workloadName: string;
@@ -62,6 +68,8 @@ type ManagedAppSpec = {
   gitBranch: string;
   gitContextDir: string;
   dockerfilePath: string;
+  composeFilePath: string | null;
+  composeServiceName: string | null;
   domain: string | null;
   ingressEnabled: boolean;
   tlsEnabled: boolean;
@@ -70,6 +78,8 @@ type ManagedAppSpec = {
   buildTimestamp: string;
   runtimeCpuLimit: string | null;
   runtimeMemoryLimit: string | null;
+  runtimeCpuRequest: string | null;
+  runtimeMemoryRequest: string | null;
   buildCpuLimit: string | null;
   buildMemoryLimit: string | null;
   previousImageRef: string | null;
@@ -92,6 +102,15 @@ type ManagedAppSnapshot = {
     envJson: string | null;
   };
   properties: Record<string, string>;
+};
+
+type ComposeLiteServiceResolution = {
+  composeFilePath: string;
+  composeServiceName: string;
+  gitContextDir: string;
+  dockerfilePath: string;
+  runtimePort: number | null;
+  envVars: Record<string, string>;
 };
 
 class ManagedAppRuntimeError extends Error {
@@ -138,6 +157,165 @@ function slugify(input: string, fallback: string) {
     .slice(0, 32);
 
   return normalized || fallback;
+}
+
+function parseGitHubRepo(input: string) {
+  const value = getStringValue(input).replace(/\/+$/, '');
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    owner: match[1],
+    repo: match[2],
+  };
+}
+
+function parseSourceUrl(input: string) {
+  const value = getStringValue(input);
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function isArchiveSourceUrl(input: string) {
+  const parsed = parseSourceUrl(input);
+  if (!parsed) {
+    return false;
+  }
+
+  return parsed.pathname.endsWith('.tar.gz')
+    || parsed.pathname.endsWith('.tgz')
+    || parsed.pathname.endsWith('.tar');
+}
+
+function encodeGitHubPath(path: string) {
+  return path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+function normalizeRepoRelativePath(input: string, fallback = '.') {
+  const normalizedInput = getStringValue(input).replace(/\\/g, '/');
+  if (!normalizedInput) {
+    return fallback;
+  }
+
+  if (normalizedInput.startsWith('/')) {
+    throw new ManagedAppRuntimeError('Compose path must be relative to the repository root.', 422, 'MANAGED_APP_COMPOSE_PATH_ABSOLUTE');
+  }
+
+  const normalized = pathPosix.normalize(normalizedInput).replace(/^\.\/+/, '');
+  if (!normalized || normalized === '.') {
+    return fallback;
+  }
+
+  if (normalized.startsWith('..')) {
+    throw new ManagedAppRuntimeError('Compose path must stay inside the repository.', 422, 'MANAGED_APP_COMPOSE_PATH_TRAVERSAL');
+  }
+
+  return normalized;
+}
+
+function parseComposeEnvironment(rawValue: unknown) {
+  const map: Record<string, string> = {};
+  if (Array.isArray(rawValue)) {
+    for (const entry of rawValue) {
+      const value = getStringValue(entry);
+      if (!value) {
+        continue;
+      }
+
+      const separatorIndex = value.indexOf('=');
+      if (separatorIndex === -1) {
+        map[value] = '';
+        continue;
+      }
+
+      const key = value.slice(0, separatorIndex).trim();
+      if (!key) {
+        continue;
+      }
+
+      map[key] = value.slice(separatorIndex + 1);
+    }
+    return map;
+  }
+
+  if (typeof rawValue === 'object' && rawValue !== null) {
+    for (const [key, value] of Object.entries(rawValue as Record<string, unknown>)) {
+      const normalizedKey = getStringValue(key);
+      if (!normalizedKey) {
+        continue;
+      }
+      map[normalizedKey] = getStringValue(value);
+    }
+  }
+
+  return map;
+}
+
+function parseComposePortEntry(rawValue: unknown) {
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0) {
+    return Math.round(rawValue);
+  }
+
+  if (typeof rawValue === 'object' && rawValue !== null) {
+    const target = getNumberValue((rawValue as Record<string, unknown>).target, NaN);
+    if (Number.isFinite(target) && target > 0) {
+      return Math.round(target);
+    }
+    return null;
+  }
+
+  const value = getStringValue(rawValue);
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.split('/')[0] ?? '';
+  const segments = normalized
+    .split(':')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const containerPortRaw = segments[segments.length - 1] ?? '';
+  const containerPort = Number(containerPortRaw);
+  if (!Number.isFinite(containerPort) || containerPort <= 0) {
+    return null;
+  }
+
+  return Math.round(containerPort);
+}
+
+function pickComposeRuntimePort(ports: unknown): number | null {
+  if (!Array.isArray(ports)) {
+    return null;
+  }
+
+  for (const entry of ports) {
+    const port = parseComposePortEntry(entry);
+    if (port && port > 0) {
+      return port;
+    }
+  }
+
+  return null;
 }
 
 function shQuote(value: string) {
@@ -193,7 +371,18 @@ function buildPropertyMap(service: ServiceInput, propertyMap?: Map<string, strin
     for (const [key, value] of Object.entries(serviceProperties)) {
       const normalizedKey = getStringValue(key).toLowerCase();
       const normalizedValue = getStringValue(value);
-      if (normalizedKey && normalizedValue) map.set(normalizedKey, normalizedValue);
+      if (!normalizedKey) {
+        continue;
+      }
+
+      // Allow explicit empty-string overrides to clear stale properties that are
+      // persisted on the service (for example app_image_ref during reprovision).
+      if (normalizedValue === '') {
+        map.delete(normalizedKey);
+        continue;
+      }
+
+      map.set(normalizedKey, normalizedValue);
     }
   }
 
@@ -213,9 +402,46 @@ function isoTimestamp() {
   return new Date().toISOString();
 }
 
+function validateKubeconfig(config: ManagedAppManagerConfig) {
+  if (config.driver !== 'kubeconfig') {
+    return;
+  }
+
+  const kubeconfigPath = getStringValue(config.kubeconfigPath);
+  if (!kubeconfigPath) {
+    throw new ManagedAppRuntimeError(
+      'Managed App kubeconfig path is not configured.',
+      503,
+      'MANAGED_APP_KUBECONFIG_PATH_MISSING',
+    );
+  }
+
+  if (!existsSync(kubeconfigPath)) {
+    throw new ManagedAppRuntimeError(
+      `Managed App kubeconfig is missing at ${kubeconfigPath}. Mount the cluster kubeconfig to this path and restart sloth-cloud-api.`,
+      503,
+      'MANAGED_APP_KUBECONFIG_MISSING',
+      { path: kubeconfigPath },
+    );
+  }
+
+  const kubeconfig = readFileSync(kubeconfigPath, 'utf8');
+  const server = kubeconfig.match(/^\s*server:\s*(\S+)/m)?.[1] ?? null;
+  if (server && /https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(server)) {
+    throw new ManagedAppRuntimeError(
+      `Managed App kubeconfig points to ${server}. Replace it with a cluster-reachable API endpoint such as https://192.168.16.220:6443.`,
+      503,
+      'MANAGED_APP_KUBECONFIG_LOOPBACK',
+      { path: kubeconfigPath, server },
+    );
+  }
+}
+
 type PlanBaseline = {
   runtimeCpuLimit: string;
   runtimeMemoryLimit: string;
+  buildCpuLimit: string;
+  buildMemoryLimit: string;
   storageSize: string;
   replicaLimit: number;
   domainLimit: number;
@@ -229,6 +455,8 @@ function buildPlanBaseline(productSlug: string): PlanBaseline {
       return {
         runtimeCpuLimit: '4',
         runtimeMemoryLimit: '4Gi',
+        buildCpuLimit: '2',
+        buildMemoryLimit: '4Gi',
         storageSize: '40Gi',
         replicaLimit: 4,
         domainLimit: 10,
@@ -239,6 +467,8 @@ function buildPlanBaseline(productSlug: string): PlanBaseline {
       return {
         runtimeCpuLimit: '2',
         runtimeMemoryLimit: '2Gi',
+        buildCpuLimit: '1500m',
+        buildMemoryLimit: '3Gi',
         storageSize: '20Gi',
         replicaLimit: 2,
         domainLimit: 5,
@@ -249,6 +479,8 @@ function buildPlanBaseline(productSlug: string): PlanBaseline {
       return {
         runtimeCpuLimit: '1',
         runtimeMemoryLimit: '1Gi',
+        buildCpuLimit: '1',
+        buildMemoryLimit: '2Gi',
         storageSize: '10Gi',
         replicaLimit: 1,
         domainLimit: 2,
@@ -260,6 +492,8 @@ function buildPlanBaseline(productSlug: string): PlanBaseline {
       return {
         runtimeCpuLimit: '500m',
         runtimeMemoryLimit: '512Mi',
+        buildCpuLimit: '750m',
+        buildMemoryLimit: '1Gi',
         storageSize: '5Gi',
         replicaLimit: 1,
         domainLimit: 1,
@@ -280,6 +514,85 @@ function sanitizeTagSegment(input: string, fallback: string) {
   return normalized || fallback;
 }
 
+function buildManagedAppAutoDomain(serviceId: string, suffix: string | undefined) {
+  const normalizedSuffix = getStringValue(suffix).replace(/^\.+|\.+$/g, '');
+  if (!normalizedSuffix) {
+    return null;
+  }
+
+  return `app-${serviceId}.${normalizedSuffix}`;
+}
+
+function normalizeBuildkitRootPath(input: string | undefined) {
+  const normalized = getStringValue(input);
+  if (!normalized.startsWith('/')) {
+    return '/var/lib/buildkit';
+  }
+
+  return normalized.replace(/\/+$/g, '') || '/var/lib/buildkit';
+}
+
+function sanitizeKubernetesLabelValue(input: string, fallback: string) {
+  const normalized = input
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63);
+
+  const trimmed = normalized.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+  return trimmed || fallback;
+}
+
+function deriveCpuRequest(limit: string | null) {
+  const normalized = getStringValue(limit).toLowerCase();
+  if (!normalized) {
+    return '100m';
+  }
+
+  if (normalized.endsWith('m')) {
+    const milli = Number(normalized.slice(0, -1));
+    if (Number.isFinite(milli) && milli > 0) {
+      return `${Math.max(100, Math.round(milli * 0.25))}m`;
+    }
+  }
+
+  const cores = Number(normalized);
+  if (Number.isFinite(cores) && cores > 0) {
+    return `${Math.max(100, Math.round(cores * 1000 * 0.25))}m`;
+  }
+
+  return '100m';
+}
+
+function deriveMemoryRequest(limit: string | null) {
+  const normalized = getStringValue(limit);
+  if (!normalized) {
+    return '128Mi';
+  }
+
+  const match = normalized.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti)?$/i);
+  if (!match) {
+    return '128Mi';
+  }
+
+  const value = Number(match[1]);
+  const unit = (match[2] || 'Mi').toLowerCase();
+  if (!Number.isFinite(value) || value <= 0) {
+    return '128Mi';
+  }
+
+  const unitMultiplier: Record<string, number> = {
+    ki: 1 / 1024,
+    mi: 1,
+    gi: 1024,
+    ti: 1024 * 1024,
+  };
+  const limitMi = value * (unitMultiplier[unit] ?? 1);
+  const requestMi = Math.max(128, Math.round(limitMi * 0.25));
+
+  return `${requestMi}Mi`;
+}
+
 function buildImageRef(config: ManagedAppManagerConfig, serviceId: string, branch: string, buildTimestamp: string) {
   const repository = `${config.imageRepositoryPrefix.replace(/^\/+|\/+$/g, '')}/service-${serviceId}`;
   const tag = `${sanitizeTagSegment(branch, 'main')}-${buildTimestamp}`;
@@ -289,6 +602,22 @@ function buildImageRef(config: ManagedAppManagerConfig, serviceId: string, branc
     imageRef: `${registryPrefix}${repository}:${tag}`,
     imageTag: tag,
   };
+}
+
+function extractImageTag(imageRef: string | null) {
+  const normalized = getStringValue(imageRef);
+  if (!normalized) {
+    return null;
+  }
+
+  const lastColon = normalized.lastIndexOf(':');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastColon <= lastSlash) {
+    return null;
+  }
+
+  const tag = normalized.slice(lastColon + 1).trim();
+  return tag || null;
 }
 
 function clampEnvVars(envVars: Record<string, string>, limit: number) {
@@ -327,6 +656,149 @@ function buildNetworkPolicyEgressRules() {
       ],
     },
   ];
+}
+
+function parseProxyHost(value: string) {
+  const normalized = getStringValue(value);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized.includes('://') ? normalized : `http://${normalized}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRegistryHost(value: string | undefined) {
+  const normalized = getStringValue(value);
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+    .split('/')[0] ?? '';
+}
+
+function isLocalProxyHost(hostname: string | null) {
+  if (!hostname) {
+    return false;
+  }
+
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === 'host.docker.internal';
+}
+
+function readKubeApiHostFromConfig(path: string | undefined) {
+  const kubeconfigPath = getStringValue(path);
+  if (!kubeconfigPath || !existsSync(kubeconfigPath)) {
+    return null;
+  }
+
+  try {
+    const content = readFileSync(kubeconfigPath, 'utf8');
+    const server = content.match(/^\s*server:\s*(\S+)/m)?.[1] ?? '';
+    const host = parseProxyHost(server);
+    return host;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNoProxyValue(value: string) {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function buildForwardProxyEnv() {
+  const env: Array<{ name: string; value: string }> = [];
+  const noProxySet = new Set<string>();
+  const explicitHttpProxy = getStringValue(process.env.MANAGED_APP_BUILD_HTTP_PROXY);
+  const explicitHttpsProxy = getStringValue(process.env.MANAGED_APP_BUILD_HTTPS_PROXY);
+  const explicitNoProxy = getStringValue(process.env.MANAGED_APP_BUILD_NO_PROXY);
+  const hasExplicitProxy = Boolean(explicitHttpProxy || explicitHttpsProxy || explicitNoProxy);
+  const forwardProxy = hasExplicitProxy || getBooleanValue(process.env.MANAGED_APP_BUILD_FORWARD_PROXY, false);
+  if (!forwardProxy) {
+    return [];
+  }
+
+  const proxyKeys = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'] as const;
+
+  const registryHost = parseProxyHost(getStringValue(process.env.MANAGED_APP_IMAGE_REGISTRY));
+  if (registryHost) {
+    noProxySet.add(registryHost);
+  }
+
+  const kubeApiHost = readKubeApiHostFromConfig(process.env.MANAGED_APP_KUBECONFIG_PATH);
+  if (kubeApiHost) {
+    noProxySet.add(kubeApiHost);
+  }
+
+  for (const host of ['localhost', '127.0.0.1', '::1', 'kubernetes.default.svc', 'kubernetes.default.svc.cluster.local']) {
+    noProxySet.add(host);
+  }
+
+  if (hasExplicitProxy) {
+    const pairs: Array<{ key: string; value: string }> = [
+      { key: 'HTTP_PROXY', value: explicitHttpProxy },
+      { key: 'http_proxy', value: explicitHttpProxy },
+      { key: 'HTTPS_PROXY', value: explicitHttpsProxy || explicitHttpProxy },
+      { key: 'https_proxy', value: explicitHttpsProxy || explicitHttpProxy },
+    ];
+
+    for (const pair of pairs) {
+      if (!pair.value) {
+        continue;
+      }
+      if (isLocalProxyHost(parseProxyHost(pair.value))) {
+        continue;
+      }
+      env.push({ name: pair.key, value: pair.value });
+    }
+
+    for (const item of normalizeNoProxyValue(explicitNoProxy)) {
+      noProxySet.add(item);
+    }
+  }
+
+  for (const key of proxyKeys) {
+    if (hasExplicitProxy) {
+      continue;
+    }
+
+    const value = getStringValue(process.env[key]);
+    if (!value) {
+      continue;
+    }
+
+    if (key.toLowerCase().includes('proxy') && !key.toLowerCase().includes('no_proxy')) {
+      if (isLocalProxyHost(parseProxyHost(value))) {
+        continue;
+      }
+      env.push({ name: key, value });
+      continue;
+    }
+
+    for (const item of normalizeNoProxyValue(value)) {
+      noProxySet.add(item);
+    }
+  }
+
+  const mergedNoProxy = Array.from(noProxySet).join(',');
+  if (mergedNoProxy) {
+    env.push({ name: 'NO_PROXY', value: mergedNoProxy });
+    env.push({ name: 'no_proxy', value: mergedNoProxy });
+  }
+
+  return env;
 }
 
 function findLatestConditionReason(conditions: unknown) {
@@ -395,6 +867,219 @@ function readBuildPhase(buildPods: Array<Record<string, unknown>>, previousStatu
   return previousStatus === 'failed' ? 'retrying' : 'queued';
 }
 
+async function resolveComposeLiteServiceFromGithub(spec: ManagedAppSpec): Promise<ComposeLiteServiceResolution | null> {
+  const parsedRepo = parseGitHubRepo(spec.gitRepoUrl);
+  const explicitComposePath = getStringValue(spec.composeFilePath);
+  if (!explicitComposePath) {
+    return null;
+  }
+
+  if (!parsedRepo) {
+    throw new ManagedAppRuntimeError(
+      'Compose mode currently supports public GitHub repositories only. Disable compose mode or switch to a GitHub repository URL.',
+      422,
+      'MANAGED_APP_COMPOSE_GITHUB_ONLY',
+    );
+  }
+
+  const candidates = [normalizeRepoRelativePath(explicitComposePath)];
+  const seen = new Set<string>();
+  const orderedCandidates = candidates.filter((entry) => {
+    const key = entry.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+
+  let composePath: string | null = null;
+  let composeContent: string | null = null;
+  let lastHttpStatus: number | null = null;
+
+  try {
+    for (const candidate of orderedCandidates) {
+      const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(parsedRepo.owner)}/${encodeURIComponent(parsedRepo.repo)}/${encodeURIComponent(spec.gitBranch)}/${encodeGitHubPath(candidate)}`;
+      const response = await fetch(rawUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          Accept: 'text/plain',
+          'User-Agent': 'SlothCloud-ManagedApp/compose-lite',
+        },
+      });
+
+      lastHttpStatus = response.status;
+      if (response.status === 404) {
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new ManagedAppRuntimeError(
+          `Failed to read compose file from GitHub (HTTP ${response.status}).`,
+          502,
+          'MANAGED_APP_COMPOSE_FETCH_FAILED',
+          { composePath: candidate, status: response.status },
+        );
+      }
+
+      composePath = candidate;
+      composeContent = await response.text();
+      break;
+    }
+  } catch (error) {
+    if (error instanceof ManagedAppRuntimeError) {
+      throw error;
+    }
+
+    throw new ManagedAppRuntimeError(
+      `Failed to fetch compose file from GitHub: ${error instanceof Error ? error.message : String(error)}`,
+      502,
+      'MANAGED_APP_COMPOSE_FETCH_FAILED',
+      { composePath: explicitComposePath || null },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!composePath || !composeContent) {
+    throw new ManagedAppRuntimeError(
+      `Compose file not found at "${explicitComposePath}" on branch "${spec.gitBranch}".`,
+      422,
+      'MANAGED_APP_COMPOSE_FILE_NOT_FOUND',
+      { composePath: explicitComposePath, status: lastHttpStatus },
+    );
+  }
+
+  let parsedCompose: unknown;
+  try {
+    parsedCompose = parseYaml(composeContent);
+  } catch (error) {
+    throw new ManagedAppRuntimeError(
+      `Compose file "${composePath}" is not valid YAML.`,
+      422,
+      'MANAGED_APP_COMPOSE_INVALID_YAML',
+      { composePath, error: error instanceof Error ? error.message : String(error) },
+    );
+  }
+
+  if (typeof parsedCompose !== 'object' || parsedCompose === null || Array.isArray(parsedCompose)) {
+    throw new ManagedAppRuntimeError(
+      `Compose file "${composePath}" must define an object root with "services".`,
+      422,
+      'MANAGED_APP_COMPOSE_INVALID_FORMAT',
+      { composePath },
+    );
+  }
+
+  const servicesRaw = (parsedCompose as Record<string, unknown>).services;
+  if (typeof servicesRaw !== 'object' || servicesRaw === null || Array.isArray(servicesRaw)) {
+    throw new ManagedAppRuntimeError(
+      `Compose file "${composePath}" does not define any services.`,
+      422,
+      'MANAGED_APP_COMPOSE_SERVICES_MISSING',
+      { composePath },
+    );
+  }
+
+  const services = Object.entries(servicesRaw as Record<string, unknown>)
+    .filter(([, definition]) => typeof definition === 'object' && definition !== null && !Array.isArray(definition))
+    .map(([name, definition]) => [name, definition as Record<string, unknown>] as const);
+  if (services.length === 0) {
+    throw new ManagedAppRuntimeError(
+      `Compose file "${composePath}" does not contain usable service definitions.`,
+      422,
+      'MANAGED_APP_COMPOSE_SERVICES_EMPTY',
+      { composePath },
+    );
+  }
+
+  const requestedService = getStringValue(spec.composeServiceName);
+  const selectedService = requestedService
+    ? services.find(([name]) => name === requestedService) ?? null
+    : services.find(([, definition]) => definition.build !== undefined) ?? services[0];
+  if (!selectedService) {
+    throw new ManagedAppRuntimeError(
+      `Compose service "${requestedService}" was not found in "${composePath}".`,
+      422,
+      'MANAGED_APP_COMPOSE_SERVICE_NOT_FOUND',
+      { composePath, composeServiceName: requestedService },
+    );
+  }
+
+  const [composeServiceName, serviceDefinition] = selectedService;
+  const buildDefinition = serviceDefinition.build;
+  let buildContext = '.';
+  let dockerfilePath = 'Dockerfile';
+
+  if (typeof buildDefinition === 'string') {
+    buildContext = getStringValue(buildDefinition) || '.';
+  } else if (typeof buildDefinition === 'object' && buildDefinition !== null && !Array.isArray(buildDefinition)) {
+    buildContext = getStringValue((buildDefinition as Record<string, unknown>).context) || '.';
+    dockerfilePath = getStringValue((buildDefinition as Record<string, unknown>).dockerfile) || 'Dockerfile';
+  } else {
+    throw new ManagedAppRuntimeError(
+      `Compose service "${composeServiceName}" must define "build" for managed app deployment.`,
+      422,
+      'MANAGED_APP_COMPOSE_BUILD_REQUIRED',
+      { composePath, composeServiceName },
+    );
+  }
+
+  const composeDir = pathPosix.dirname(composePath);
+  const resolvedContextDir = normalizeRepoRelativePath(pathPosix.join(composeDir, buildContext), '.');
+  if (dockerfilePath.startsWith('/')) {
+    throw new ManagedAppRuntimeError(
+      `Compose service "${composeServiceName}" uses an absolute dockerfile path, which is not supported.`,
+      422,
+      'MANAGED_APP_COMPOSE_DOCKERFILE_ABSOLUTE',
+      { composePath, composeServiceName, dockerfilePath },
+    );
+  }
+  const resolvedDockerfilePath = normalizeRepoRelativePath(pathPosix.join(resolvedContextDir, dockerfilePath), 'Dockerfile');
+
+  return {
+    composeFilePath: composePath,
+    composeServiceName,
+    gitContextDir: resolvedContextDir,
+    dockerfilePath: resolvedDockerfilePath,
+    runtimePort: pickComposeRuntimePort(serviceDefinition.ports),
+    envVars: parseComposeEnvironment(serviceDefinition.environment),
+  };
+}
+
+async function resolveProvisioningSpecWithCompose(spec: ManagedAppSpec) {
+  const resolved = await resolveComposeLiteServiceFromGithub(spec);
+  if (!resolved) {
+    return spec;
+  }
+
+  const runtimePort = resolved.runtimePort && resolved.runtimePort > 0
+    ? resolved.runtimePort
+    : spec.runtimePort;
+  const mergedEnv = clampEnvVars(
+    {
+      ...resolved.envVars,
+      ...spec.envVars,
+      PORT: String(runtimePort),
+    },
+    spec.envVarLimit,
+  );
+
+  return {
+    ...spec,
+    composeFilePath: resolved.composeFilePath,
+    composeServiceName: resolved.composeServiceName,
+    gitContextDir: resolved.gitContextDir,
+    dockerfilePath: resolved.dockerfilePath,
+    runtimePort,
+    envVars: mergedEnv,
+  } satisfies ManagedAppSpec;
+}
+
 function buildSpec(
   config: ManagedAppManagerConfig,
   service: ServiceInput,
@@ -426,26 +1111,49 @@ function buildSpec(
   const replicaLimit = Math.max(1, getNumberValue(readProperty(propertyMap, 'replica_limit') || productSettings.replica_limit, planBaseline.replicaLimit));
   const desiredReplicas = Math.min(replicaLimit, Math.max(1, options.overrideReplicas ?? getNumberValue(readProperty(propertyMap, 'app_replicas'), 1)));
   const buildTimestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const { imageRef: defaultImageRef, imageTag } = buildImageRef(
+  const { imageRef: defaultImageRef, imageTag: defaultImageTag } = buildImageRef(
     config,
     serviceId,
     getStringValue(readProperty(propertyMap, 'git_branch')) || 'main',
     buildTimestamp,
   );
+  const persistedImageRef = readProperty(propertyMap, 'app_image_ref');
+  const imageRef = persistedImageRef || defaultImageRef;
+  const imageTag = extractImageTag(persistedImageRef) || defaultImageTag;
+  const generatedBuildJobName = `${baseSlug}-build-${buildTimestamp.slice(-8)}`;
   const domainLimit = Math.max(1, getNumberValue(readProperty(propertyMap, 'domain_limit') || productSettings.domain_limit, planBaseline.domainLimit));
   const envVarLimit = Math.max(1, getNumberValue(readProperty(propertyMap, 'env_var_limit') || productSettings.env_var_limit, planBaseline.envVarLimit));
   const logRetentionLines = Math.max(100, getNumberValue(readProperty(propertyMap, 'log_retention_lines') || productSettings.log_retention_lines, planBaseline.logRetentionLines));
+  const runtimeCpuLimit = getStringValue(productSettings.runtime_cpu_limit) || planBaseline.runtimeCpuLimit;
+  const runtimeMemoryLimit = getStringValue(productSettings.runtime_memory_limit) || planBaseline.runtimeMemoryLimit;
+  const runtimeCpuRequest = getStringValue(readProperty(propertyMap, 'runtime_cpu_request') || productSettings.runtime_cpu_request) || deriveCpuRequest(runtimeCpuLimit);
+  const runtimeMemoryRequest = getStringValue(readProperty(propertyMap, 'runtime_memory_request') || productSettings.runtime_memory_request) || deriveMemoryRequest(runtimeMemoryLimit);
   const envVars = clampEnvVars({
     PORT: String(runtimePort),
     ...parseEnvVars(readProperty(propertyMap, 'env_vars')),
     ...(options.overrideEnv ?? {}),
   }, envVarLimit);
+  const composeFilePath = getStringValue(readProperty(propertyMap, 'compose_file_path'));
+  const composeServiceName = getStringValue(readProperty(propertyMap, 'compose_service_name'));
+  const persistedRuntimeRef = readProperty(propertyMap, 'runtime_ref');
+  const runtimeRef = persistedRuntimeRef || `${namespace}/${workloadName}`;
+  const autoAssignedDomain = buildManagedAppAutoDomain(serviceId, config.defaultDomainSuffix);
+  const persistedDomain = readProperty(propertyMap, 'app_domain');
+  const hasProvisionedRuntime = Boolean(
+    persistedRuntimeRef
+    || readProperty(propertyMap, 'k8s_namespace')
+    || readProperty(propertyMap, 'k8s_workload'),
+  );
+  const resolvedInitialDomain = hasProvisionedRuntime
+    ? (persistedDomain ?? autoAssignedDomain)
+    : (autoAssignedDomain ?? persistedDomain);
 
   return {
     serviceId,
     serviceLabel: baseLabel,
     productSlug,
-    runtimeRef: readProperty(propertyMap, 'runtime_ref') || `${namespace}/${workloadName}`,
+    runtimeRef,
+    runtimeLabel: sanitizeKubernetesLabelValue(runtimeRef, workloadName),
     clusterRef: readProperty(propertyMap, 'k8s_cluster_ref') || config.defaultClusterRef,
     namespace,
     workloadName,
@@ -454,9 +1162,9 @@ function buildSpec(
     ingressName: `${baseSlug}-ing`,
     envSecretName: `${baseSlug}-env`,
     pvcName: `${baseSlug}-data`,
-    buildJobName: `${baseSlug}-build-${buildTimestamp.slice(-8)}`,
+    buildJobName: readProperty(propertyMap, 'app_build_job_name') || generatedBuildJobName,
     imagePullSecretName: 'managed-app-registry',
-    imageRef: readProperty(propertyMap, 'app_image_ref') || defaultImageRef,
+    imageRef,
     desiredReplicas,
     replicaLimit,
     runtimePort,
@@ -465,16 +1173,20 @@ function buildSpec(
     gitBranch: getStringValue(readProperty(propertyMap, 'git_branch')) || 'main',
     gitContextDir: getStringValue(readProperty(propertyMap, 'git_context_dir')) || '.',
     dockerfilePath: getStringValue(readProperty(propertyMap, 'dockerfile_path')) || 'Dockerfile',
-    domain: options.overrideDomain ?? readProperty(propertyMap, 'app_domain', 'initial_domain') ?? (config.defaultDomainSuffix ? `${baseSlug}-${serviceId}.${config.defaultDomainSuffix}` : null),
+    composeFilePath: composeFilePath || null,
+    composeServiceName: composeServiceName || null,
+    domain: options.overrideDomain ?? resolvedInitialDomain,
     ingressEnabled: getBooleanValue(readProperty(propertyMap, 'ingress_enabled') || productSettings.ingress_enabled, true),
     tlsEnabled: getBooleanValue(readProperty(propertyMap, 'tls_enabled') || productSettings.tls_enabled, true),
     envVars,
     buildNamespace: getStringValue(readProperty(propertyMap, 'managed_app_build_namespace')) || config.buildNamespace || namespace,
     buildTimestamp,
-    runtimeCpuLimit: getStringValue(productSettings.runtime_cpu_limit) || planBaseline.runtimeCpuLimit,
-    runtimeMemoryLimit: getStringValue(productSettings.runtime_memory_limit) || planBaseline.runtimeMemoryLimit,
-    buildCpuLimit: getStringValue(productSettings.build_cpu_limit) || null,
-    buildMemoryLimit: getStringValue(productSettings.build_memory_limit) || null,
+    runtimeCpuLimit,
+    runtimeMemoryLimit,
+    runtimeCpuRequest,
+    runtimeMemoryRequest,
+    buildCpuLimit: getStringValue(readProperty(propertyMap, 'build_cpu_limit') || productSettings.build_cpu_limit) || planBaseline.buildCpuLimit,
+    buildMemoryLimit: getStringValue(readProperty(propertyMap, 'build_memory_limit') || productSettings.build_memory_limit) || planBaseline.buildMemoryLimit,
     previousImageRef: readProperty(propertyMap, 'app_previous_image_ref'),
     domainLimit,
     envVarLimit,
@@ -489,6 +1201,9 @@ function buildSpec(
 }
 
 function buildRuntimeProperties(spec: ManagedAppSpec, snapshot: ManagedAppSnapshot) {
+  const normalizedImageTag = extractImageTag(spec.imageRef) || spec.imageTag;
+  const deployedImageRef = getStringValue((snapshot.properties as Record<string, unknown> | undefined)?.app_deployed_image_ref);
+
   return {
     runtime_kind: 'managed-app',
     runtime_ref: spec.runtimeRef,
@@ -505,8 +1220,15 @@ function buildRuntimeProperties(spec: ManagedAppSpec, snapshot: ManagedAppSnapsh
     app_replicas: snapshot.runtime.replicas !== null ? String(snapshot.runtime.replicas) : '',
     app_env_vars: snapshot.runtime.envJson ?? '',
     app_image_ref: spec.imageRef,
+    app_deployed_image_ref: deployedImageRef,
     app_previous_image_ref: spec.previousImageRef ?? '',
-    app_image_tag: spec.imageTag,
+    app_image_tag: normalizedImageTag,
+    runtime_port: String(spec.runtimePort),
+    git_context_dir: spec.gitContextDir,
+    dockerfile_path: spec.dockerfilePath,
+    compose_file_path: spec.composeFilePath ?? '',
+    compose_service_name: spec.composeServiceName ?? '',
+    env_vars: JSON.stringify(spec.envVars),
     app_domain_limit: String(spec.domainLimit),
     app_env_var_limit: String(spec.envVarLimit),
     app_log_retention_lines: String(spec.logRetentionLines),
@@ -518,6 +1240,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
   async function runKubectl(args: string[], stdin?: string) {
     if (!config.enabled) throw new ManagedAppRuntimeError('Managed App runtime is disabled.', 503, 'MANAGED_APP_DISABLED');
     if (config.driver === 'contract') throw new ManagedAppRuntimeError('Managed App runtime driver is contract-only.', 501, 'MANAGED_APP_CONTRACT_ONLY');
+    validateKubeconfig(config);
 
     const env = {
       ...process.env,
@@ -591,7 +1314,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
     const labels = {
       'sloth.cloud/service-id': spec.serviceId,
       'sloth.cloud/runtime-kind': 'managed-app',
-      'app.kubernetes.io/instance': spec.runtimeRef,
+      'app.kubernetes.io/instance': spec.runtimeLabel,
     };
     const podQuota = String(Math.max(spec.replicaLimit + 1, 2));
 
@@ -613,8 +1336,10 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
             'count/ingresses.networking.k8s.io': String(spec.domainLimit),
             'count/persistentvolumeclaims': spec.storageSize ? '1' : '0',
             ...(spec.storageSize ? { 'requests.storage': spec.storageSize } : {}),
-            ...(spec.runtimeCpuLimit ? { 'limits.cpu': spec.runtimeCpuLimit, 'requests.cpu': spec.runtimeCpuLimit } : {}),
-            ...(spec.runtimeMemoryLimit ? { 'limits.memory': spec.runtimeMemoryLimit, 'requests.memory': spec.runtimeMemoryLimit } : {}),
+            ...(spec.runtimeCpuLimit ? { 'limits.cpu': spec.runtimeCpuLimit } : {}),
+            ...(spec.runtimeCpuRequest ? { 'requests.cpu': spec.runtimeCpuRequest } : {}),
+            ...(spec.runtimeMemoryLimit ? { 'limits.memory': spec.runtimeMemoryLimit } : {}),
+            ...(spec.runtimeMemoryRequest ? { 'requests.memory': spec.runtimeMemoryRequest } : {}),
           },
         },
       },
@@ -635,8 +1360,8 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
                 ...(spec.runtimeMemoryLimit ? { memory: spec.runtimeMemoryLimit } : {}),
               },
               defaultRequest: {
-                ...(spec.runtimeCpuLimit ? { cpu: spec.runtimeCpuLimit } : {}),
-                ...(spec.runtimeMemoryLimit ? { memory: spec.runtimeMemoryLimit } : {}),
+                ...(spec.runtimeCpuRequest ? { cpu: spec.runtimeCpuRequest } : {}),
+                ...(spec.runtimeMemoryRequest ? { memory: spec.runtimeMemoryRequest } : {}),
               },
               min: {
                 cpu: '50m',
@@ -714,6 +1439,8 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
           git_branch: spec.gitBranch,
           git_context_dir: spec.gitContextDir,
           dockerfile_path: spec.dockerfilePath,
+          compose_file_path: spec.composeFilePath ?? '',
+          compose_service_name: spec.composeServiceName ?? '',
         },
       },
     ] as Record<string, unknown>[];
@@ -723,8 +1450,113 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
     const dockerfileDir = spec.dockerfilePath.includes('/') ? spec.dockerfilePath.slice(0, spec.dockerfilePath.lastIndexOf('/')) : '.';
     const dockerfileName = spec.dockerfilePath.includes('/') ? spec.dockerfilePath.slice(spec.dockerfilePath.lastIndexOf('/') + 1) : spec.dockerfilePath;
     const contextDir = spec.gitContextDir === '/' ? '.' : spec.gitContextDir;
-    const cloneScript = `set -eu\nrm -rf /workspace/source\ngit clone --depth 1 --branch ${shQuote(spec.gitBranch)} ${shQuote(spec.gitRepoUrl)} /workspace/source`;
-    const buildScript = `set -eu\nCONTEXT_PATH=/workspace/source\nif [ ${shQuote(contextDir)} != '.' ] && [ ${shQuote(contextDir)} != '' ]; then CONTEXT_PATH="/workspace/source/${contextDir}"; fi\nDOCKERFILE_DIR=/workspace/source/${dockerfileDir === '.' ? '' : dockerfileDir}\nbuildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT_PATH" --local dockerfile="$DOCKERFILE_DIR" --opt filename=${shQuote(dockerfileName)} --output ${shQuote(`type=image,name=${spec.imageRef},push=true`)}`;
+    const fallbackDockerfileName = '.sloth.generated.Dockerfile';
+    // Keep fallback base image on a public mirror by default so build does not
+    // hard-fail when the local registry only stores output images.
+    const defaultFallbackNodeImage = 'docker.m.daocloud.io/library/node:22-alpine';
+    const fallbackNodeImage = getStringValue(process.env.MANAGED_APP_FALLBACK_NODE_IMAGE) || defaultFallbackNodeImage;
+    const fallbackNodeImageForSed = fallbackNodeImage.replace(/&/g, '\\&');
+    const fallbackNpmRegistry = getStringValue(process.env.MANAGED_APP_FALLBACK_NPM_REGISTRY);
+    const fallbackNpmRegistryLine = fallbackNpmRegistry ? `RUN npm config set registry ${fallbackNpmRegistry}` : '';
+    const rewriteNodeBaseImage = getBooleanValue(process.env.MANAGED_APP_REWRITE_NODE_BASE_IMAGE, true);
+    const rewriteNodeBaseImageFlag = rewriteNodeBaseImage ? '1' : '0';
+    const preferGeneratedNodeDockerfile = getBooleanValue(process.env.MANAGED_APP_PREFER_GENERATED_NODE_DOCKERFILE, false);
+    const preferGeneratedNodeDockerfileFlag = preferGeneratedNodeDockerfile ? '1' : '0';
+    const insecureRegistryHost = normalizeRegistryHost(config.imageRegistry);
+    const insecureRegistryEnabled = getBooleanValue(process.env.MANAGED_APP_IMAGE_REGISTRY_INSECURE, false);
+    const githubRepo = parseGitHubRepo(spec.gitRepoUrl);
+    const archiveSource = isArchiveSourceUrl(spec.gitRepoUrl);
+    const githubFallbackScript = githubRepo
+      ? `\necho \"git clone failed, trying GitHub archive fallback\"\nrm -rf /workspace/source/*\nwget -O /tmp/source.tgz ${shQuote(`https://codeload.github.com/${githubRepo.owner}/${githubRepo.repo}/tar.gz/refs/heads/${spec.gitBranch}`)}\ntar -xzf /tmp/source.tgz -C /workspace/source --strip-components=1\nrm -f /tmp/source.tgz`
+      : '\nexit 1';
+    const archiveCloneScript = `set -eu\nrm -rf /workspace/source\nmkdir -p /workspace/source\nwget -O /tmp/source.tgz ${shQuote(spec.gitRepoUrl)}\ntar -xzf /tmp/source.tgz -C /workspace/source\nrm -f /tmp/source.tgz`;
+    const cloneScript = archiveSource
+      ? archiveCloneScript
+      : `set -eu\nrm -rf /workspace/source\nmkdir -p /workspace/source\nif ! git clone --depth 1 --branch ${shQuote(spec.gitBranch)} ${shQuote(spec.gitRepoUrl)} /workspace/source; then${githubFallbackScript}\nfi`;
+    const buildkitRegistryConfigScript = insecureRegistryEnabled && insecureRegistryHost
+      ? `cat > /tmp/buildkitd.toml <<'SLTH_BUILDKIT'
+[registry."${insecureRegistryHost}"]
+  http = true
+  insecure = true
+SLTH_BUILDKIT
+if [ -n "\${BUILDKITD_FLAGS:-}" ]; then
+  export BUILDKITD_FLAGS="\${BUILDKITD_FLAGS} --config /tmp/buildkitd.toml"
+else
+  export BUILDKITD_FLAGS="--config /tmp/buildkitd.toml"
+fi`
+      : '';
+    const buildScript = `set -eu
+CONTEXT_PATH=/workspace/source
+if [ ${shQuote(contextDir)} != '.' ] && [ ${shQuote(contextDir)} != '' ]; then
+  CONTEXT_PATH="/workspace/source/${contextDir}"
+fi
+
+DOCKERFILE_DIR=/workspace/source/${dockerfileDir === '.' ? '' : dockerfileDir}
+DOCKERFILE_NAME=${shQuote(dockerfileName)}
+
+generate_node_fallback_dockerfile() {
+  DOCKERFILE_DIR="$CONTEXT_PATH"
+  DOCKERFILE_NAME=${shQuote(fallbackDockerfileName)}
+  cat > "$DOCKERFILE_DIR/$DOCKERFILE_NAME" <<'SLTH_DOCKERFILE'
+FROM ${fallbackNodeImage}
+WORKDIR /app
+COPY package*.json ./
+${fallbackNpmRegistryLine}
+RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+COPY . .
+RUN if npm run | grep -q ' build'; then npm run build; fi \
+  && (npm prune --omit=dev --no-audit --no-fund || true) \
+  && if [ -f .next/standalone/server.js ]; then cp -R .next/standalone/. ./; fi
+ENV NODE_ENV=production
+ENV PORT=${spec.runtimePort}
+EXPOSE ${spec.runtimePort}
+CMD ["sh", "-lc", "BIND_HOST=\${SLOTH_BIND_HOST:-0.0.0.0}; PORT=\${PORT:-${spec.runtimePort}}; export HOSTNAME=\$BIND_HOST PORT; if [ -f server.js ]; then node server.js; elif [ -f .next/standalone/server.js ]; then node .next/standalone/server.js; elif npm run | grep -q ' start'; then npm run start -- --hostname \$BIND_HOST --port \$PORT; else npm run dev -- --hostname \$BIND_HOST --port \$PORT; fi"]
+SLTH_DOCKERFILE
+}
+
+if [ -f "$CONTEXT_PATH/package.json" ] && [ ${shQuote(preferGeneratedNodeDockerfileFlag)} = '1' ]; then
+  echo "Node.js repo detected, forcing generated Dockerfile for resilient build"
+  generate_node_fallback_dockerfile
+elif [ ! -f "$DOCKERFILE_DIR/$DOCKERFILE_NAME" ]; then
+  if [ -f "$CONTEXT_PATH/package.json" ]; then
+    echo "Dockerfile not found, generating Node.js fallback Dockerfile"
+    generate_node_fallback_dockerfile
+  else
+    echo "Dockerfile not found at $DOCKERFILE_DIR/$DOCKERFILE_NAME and package.json fallback is unavailable" >&2
+    exit 1
+  fi
+fi
+
+if [ "$DOCKERFILE_NAME" != ${shQuote(fallbackDockerfileName)} ] \
+  && [ ${shQuote(rewriteNodeBaseImageFlag)} = '1' ] \
+  && grep -Eq '^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+((docker\\.io/)?(library/)?)?node(:[^[:space:]]+)?([[:space:]]+[Aa][Ss][[:space:]]+[[:alnum:]_.-]+)?[[:space:]]*$' "$DOCKERFILE_DIR/$DOCKERFILE_NAME"; then
+  echo "Dockerfile uses public node base image, rewriting to ${fallbackNodeImage} for resilient build"
+  cp "$DOCKERFILE_DIR/$DOCKERFILE_NAME" "$DOCKERFILE_DIR/$DOCKERFILE_NAME.sloth.bak"
+  sed -E "s|^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+((docker\\.io/)?(library/)?)?node(:[^[:space:]]+)?([[:space:]]+[Aa][Ss][[:space:]]+[[:alnum:]_.-]+)?[[:space:]]*$|FROM ${fallbackNodeImageForSed}\\\\5|g" "$DOCKERFILE_DIR/$DOCKERFILE_NAME.sloth.bak" > "$DOCKERFILE_DIR/$DOCKERFILE_NAME"
+fi
+
+${buildkitRegistryConfigScript}
+
+buildctl-daemonless.sh build --frontend dockerfile.v0 --local context="$CONTEXT_PATH" --local dockerfile="$DOCKERFILE_DIR" --opt filename="$DOCKERFILE_NAME" --output ${shQuote(`type=image,name=${spec.imageRef},push=true`)}`;
+    const proxyEnv = buildForwardProxyEnv();
+    const buildkitPrivileged = getBooleanValue(process.env.MANAGED_APP_BUILDKIT_PRIVILEGED, true);
+    const buildkitSnapshotter = getStringValue(config.buildkitSnapshotter) || 'native';
+    const buildkitRootPath = normalizeBuildkitRootPath(config.buildkitRootPath);
+    const buildkitFlags = [
+      `--oci-worker-snapshotter=${buildkitSnapshotter}`,
+      `--root=${buildkitRootPath}`,
+      ...(buildkitPrivileged ? [] : ['--oci-worker-no-process-sandbox']),
+    ].join(' ');
+    const buildCpuRequest = getStringValue(process.env.MANAGED_APP_BUILD_CPU_REQUEST) || deriveCpuRequest(spec.buildCpuLimit);
+    const buildMemoryRequest = getStringValue(process.env.MANAGED_APP_BUILD_MEMORY_REQUEST) || deriveMemoryRequest(spec.buildMemoryLimit);
+    const buildEphemeralRequest = getStringValue(process.env.MANAGED_APP_BUILD_EPHEMERAL_REQUEST) || '1Gi';
+    const buildEphemeralLimit = getStringValue(process.env.MANAGED_APP_BUILD_EPHEMERAL_LIMIT);
+    const workspaceSizeLimit = getStringValue(process.env.MANAGED_APP_BUILD_WORKSPACE_SIZE_LIMIT);
+    const buildkitRootSizeLimit = getStringValue(process.env.MANAGED_APP_BUILDKIT_ROOT_SIZE_LIMIT);
+    const buildkitEnv = [
+      { name: 'BUILDKITD_FLAGS', value: buildkitFlags },
+      ...proxyEnv,
+    ];
 
     return {
       apiVersion: 'batch/v1',
@@ -761,6 +1593,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
               name: 'git-clone',
               image: config.gitCloneImage,
               command: ['sh', '-lc', cloneScript],
+              ...(proxyEnv.length > 0 ? { env: proxyEnv } : {}),
               volumeMounts: [{ name: 'workspace', mountPath: '/workspace' }],
               securityContext: {
                 allowPrivilegeEscalation: false,
@@ -771,19 +1604,43 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
               name: 'buildkit',
               image: config.buildkitImage,
               command: ['sh', '-lc', buildScript],
-              env: [{ name: 'BUILDKITD_FLAGS', value: '--oci-worker-no-process-sandbox' }],
+              env: buildkitEnv,
               volumeMounts: [
                 { name: 'workspace', mountPath: '/workspace' },
+                { name: 'buildkit-root', mountPath: buildkitRootPath },
                 ...(config.registryAuthJson ? [{ name: 'docker-config', mountPath: '/home/user/.docker/config.json', subPath: '.dockerconfigjson' }] : []),
               ],
-              resources: { limits: { ...(spec.buildCpuLimit ? { cpu: spec.buildCpuLimit } : {}), ...(spec.buildMemoryLimit ? { memory: spec.buildMemoryLimit } : {}) } },
+              resources: {
+                limits: {
+                  ...(spec.buildCpuLimit ? { cpu: spec.buildCpuLimit } : {}),
+                  ...(spec.buildMemoryLimit ? { memory: spec.buildMemoryLimit } : {}),
+                  ...(buildEphemeralLimit ? { 'ephemeral-storage': buildEphemeralLimit } : {}),
+                },
+                requests: {
+                  ...(buildCpuRequest ? { cpu: buildCpuRequest } : {}),
+                  ...(buildMemoryRequest ? { memory: buildMemoryRequest } : {}),
+                  ...(buildEphemeralRequest ? { 'ephemeral-storage': buildEphemeralRequest } : {}),
+                },
+              },
               securityContext: {
-                allowPrivilegeEscalation: false,
+                allowPrivilegeEscalation: buildkitPrivileged,
                 readOnlyRootFilesystem: false,
+                ...(buildkitPrivileged ? { privileged: true, runAsUser: 0, runAsGroup: 0 } : {}),
               },
             }],
             volumes: [
-              { name: 'workspace', emptyDir: {} },
+              {
+                name: 'workspace',
+                emptyDir: {
+                  ...(workspaceSizeLimit ? { sizeLimit: workspaceSizeLimit } : {}),
+                },
+              },
+              {
+                name: 'buildkit-root',
+                emptyDir: {
+                  ...(buildkitRootSizeLimit ? { sizeLimit: buildkitRootSizeLimit } : {}),
+                },
+              },
               ...(config.registryAuthJson ? [{ name: 'docker-config', secret: { secretName: spec.imagePullSecretName } }] : []),
             ],
           },
@@ -793,7 +1650,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
   }
 
   function buildRuntimeResources(spec: ManagedAppSpec) {
-    const labels = { 'sloth.cloud/service-id': spec.serviceId, 'sloth.cloud/runtime-kind': 'managed-app', 'app.kubernetes.io/name': spec.workloadName, 'app.kubernetes.io/instance': spec.runtimeRef };
+    const labels = { 'sloth.cloud/service-id': spec.serviceId, 'sloth.cloud/runtime-kind': 'managed-app', 'app.kubernetes.io/name': spec.workloadName, 'app.kubernetes.io/instance': spec.runtimeLabel };
     const deploymentVolumes = spec.workloadKind === 'Deployment' && spec.storageSize ? [{ name: 'data', persistentVolumeClaim: { claimName: spec.pvcName } }] : [];
     const deploymentVolumeMounts = spec.workloadKind === 'Deployment' && spec.storageSize ? [{ name: 'data', mountPath: '/data' }] : [];
     const workloadBase = {
@@ -828,7 +1685,34 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
               image: spec.imageRef,
               ports: [{ name: 'http', containerPort: spec.runtimePort }],
               envFrom: [{ secretRef: { name: spec.envSecretName } }],
-              resources: { limits: { ...(spec.runtimeCpuLimit ? { cpu: spec.runtimeCpuLimit } : {}), ...(spec.runtimeMemoryLimit ? { memory: spec.runtimeMemoryLimit } : {}) } },
+              startupProbe: {
+                tcpSocket: { port: spec.runtimePort },
+                periodSeconds: 5,
+                timeoutSeconds: 2,
+                failureThreshold: 120,
+              },
+              readinessProbe: {
+                tcpSocket: { port: spec.runtimePort },
+                periodSeconds: 5,
+                timeoutSeconds: 2,
+                failureThreshold: 6,
+              },
+              livenessProbe: {
+                tcpSocket: { port: spec.runtimePort },
+                periodSeconds: 15,
+                timeoutSeconds: 2,
+                failureThreshold: 6,
+              },
+              resources: {
+                limits: {
+                  ...(spec.runtimeCpuLimit ? { cpu: spec.runtimeCpuLimit } : {}),
+                  ...(spec.runtimeMemoryLimit ? { memory: spec.runtimeMemoryLimit } : {}),
+                },
+                requests: {
+                  ...(spec.runtimeCpuRequest ? { cpu: spec.runtimeCpuRequest } : {}),
+                  ...(spec.runtimeMemoryRequest ? { memory: spec.runtimeMemoryRequest } : {}),
+                },
+              },
               volumeMounts: spec.workloadKind === 'StatefulSet' && spec.storageSize ? [{ name: 'data', mountPath: '/data' }] : deploymentVolumeMounts,
               securityContext: {
                 allowPrivilegeEscalation: false,
@@ -847,7 +1731,22 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
       { apiVersion: 'v1', kind: 'Service', metadata: { name: spec.serviceName, namespace: spec.namespace, labels }, spec: { selector: labels, ports: [{ name: 'http', port: spec.runtimePort, targetPort: spec.runtimePort }] } },
       spec.workloadKind === 'StatefulSet'
         ? { apiVersion: 'apps/v1', kind: 'StatefulSet', ...workloadBase, spec: { ...workloadBase.spec, ...(spec.storageSize ? { volumeClaimTemplates: [{ metadata: { name: 'data' }, spec: { accessModes: ['ReadWriteOnce'], ...(config.storageClass ? { storageClassName: config.storageClass } : {}), resources: { requests: { storage: spec.storageSize } } } }] } : {}) } }
-        : { apiVersion: 'apps/v1', kind: 'Deployment', ...workloadBase },
+        : {
+          apiVersion: 'apps/v1',
+          kind: 'Deployment',
+          ...workloadBase,
+          spec: {
+            ...workloadBase.spec,
+            // Keep one-pod-at-a-time rollout so strict plan quotas do not block updates.
+            strategy: {
+              type: 'RollingUpdate',
+              rollingUpdate: {
+                maxSurge: 0,
+                maxUnavailable: 1,
+              },
+            },
+          },
+        },
       ...(spec.ingressEnabled && spec.domain ? [{
         apiVersion: 'networking.k8s.io/v1',
         kind: 'Ingress',
@@ -855,7 +1754,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
         spec: {
           ...(config.ingressClass ? { ingressClassName: config.ingressClass } : {}),
           rules: [{ host: spec.domain, http: { paths: [{ path: '/', pathType: 'Prefix', backend: { service: { name: spec.serviceName, port: { number: spec.runtimePort } } } }] } }],
-          ...(spec.tlsEnabled ? { tls: [{ hosts: [spec.domain], secretName: `${spec.workloadName}-tls` }] } : {}),
+          ...(spec.tlsEnabled && config.certIssuer ? { tls: [{ hosts: [spec.domain], secretName: `${spec.workloadName}-tls` }] } : {}),
         },
       }] : []),
     ] as Record<string, unknown>[];
@@ -872,6 +1771,13 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
   }
 
   function detectPodError(pods: Array<Record<string, unknown>>) {
+    const nonTerminalWaitingReasons = new Set([
+      'containercreating',
+      'podinitializing',
+      'creatingcontainer',
+      'initializing',
+    ]);
+
     for (const pod of pods) {
       const status = typeof pod.status === 'object' && pod.status !== null ? pod.status as Record<string, unknown> : {};
       const containers = Array.isArray(status.containerStatuses) ? status.containerStatuses as Array<Record<string, unknown>> : [];
@@ -879,10 +1785,71 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
         const state = typeof container.state === 'object' && container.state !== null ? container.state as Record<string, unknown> : {};
         const waiting = typeof state.waiting === 'object' && state.waiting !== null ? state.waiting as Record<string, unknown> : {};
         const reason = getStringValue(waiting.reason);
-        if (reason) return reason.toLowerCase();
+        if (!reason) {
+          continue;
+        }
+
+        const normalizedReason = reason.toLowerCase();
+        if (nonTerminalWaitingReasons.has(normalizedReason)) {
+          continue;
+        }
+
+        return normalizedReason;
       }
     }
     return null;
+  }
+
+  function detectBuildPodError(buildPods: Array<Record<string, unknown>>) {
+    const sorted = [...buildPods].sort((left, right) => {
+      const leftTime = Date.parse(getStringValue((left.metadata as Record<string, unknown> | undefined)?.creationTimestamp) || '1970-01-01T00:00:00Z');
+      const rightTime = Date.parse(getStringValue((right.metadata as Record<string, unknown> | undefined)?.creationTimestamp) || '1970-01-01T00:00:00Z');
+      return rightTime - leftTime;
+    });
+
+    for (const pod of sorted) {
+      const status = typeof pod.status === 'object' && pod.status !== null ? pod.status as Record<string, unknown> : {};
+      const initStatuses = Array.isArray(status.initContainerStatuses) ? status.initContainerStatuses as Array<Record<string, unknown>> : [];
+      const containerStatuses = Array.isArray(status.containerStatuses) ? status.containerStatuses as Array<Record<string, unknown>> : [];
+
+      for (const container of [...containerStatuses, ...initStatuses]) {
+        const state = typeof container.state === 'object' && container.state !== null ? container.state as Record<string, unknown> : {};
+        const waiting = typeof state.waiting === 'object' && state.waiting !== null ? state.waiting as Record<string, unknown> : {};
+        const terminated = typeof state.terminated === 'object' && state.terminated !== null ? state.terminated as Record<string, unknown> : {};
+        const waitingReason = getStringValue(waiting.reason);
+        const terminatedReason = getStringValue(terminated.reason);
+        if (waitingReason) return waitingReason.toLowerCase();
+        if (terminatedReason && terminatedReason.toLowerCase() !== 'completed') return terminatedReason.toLowerCase();
+      }
+    }
+
+    return null;
+  }
+
+  async function readBuildFailureLogLine(spec: ManagedAppSpec, buildPods: Array<Record<string, unknown>>) {
+    const latestBuildPod = [...buildPods]
+      .sort((left, right) => {
+        const leftTime = Date.parse(getStringValue((left.metadata as Record<string, unknown> | undefined)?.creationTimestamp) || '1970-01-01T00:00:00Z');
+        const rightTime = Date.parse(getStringValue((right.metadata as Record<string, unknown> | undefined)?.creationTimestamp) || '1970-01-01T00:00:00Z');
+        return rightTime - leftTime;
+      })[0];
+
+    const podName = getStringValue((latestBuildPod?.metadata as Record<string, unknown> | undefined)?.name);
+    if (!podName) {
+      return null;
+    }
+
+    try {
+      const logs = await runKubectl(['logs', podName, '-n', spec.buildNamespace, '-c', 'buildkit', '--tail=60']);
+      const line = logs
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '')
+        .slice(-1)[0];
+      return line || null;
+    } catch {
+      return null;
+    }
   }
 
   async function rollbackWorkload(spec: ManagedAppSpec, targetImage?: string | null) {
@@ -899,11 +1866,13 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
     const namespaceJson = await kubectlOptionalJson(['get', 'namespace', spec.namespace]);
     if (!namespaceJson) {
       const previousStatus = getStringValue(options.serviceProperties?.app_status);
+      const resettableStates = new Set(['queued', 'building', 'pushing', 'deploying', 'retrying', 'deleting']);
+      const normalizedStatus = resettableStates.has(previousStatus) ? 'pending' : (previousStatus || 'pending');
       const runtime: ManagedAppSnapshot['runtime'] = {
         kind: 'managed-app',
         contractVersion: '2026-04-pr4',
         runtimeRef: spec.runtimeRef,
-        status: previousStatus || 'pending',
+        status: normalizedStatus,
         endpoint: null,
         lastDeployAt: null,
         managedApp: { clusterRef: spec.clusterRef, namespace: spec.namespace, workload: spec.workloadName, service: spec.serviceName, ingressUrl: null },
@@ -934,29 +1903,47 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
     const desiredReplicas = workloadJson && typeof workloadJson.spec === 'object' && workloadJson.spec !== null ? getNumberValue((workloadJson.spec as Record<string, unknown>).replicas, spec.desiredReplicas) : spec.desiredReplicas;
     const ingressHost = Array.isArray((ingressJson?.spec as Record<string, unknown> | undefined)?.rules) ? getStringValue((((ingressJson?.spec as Record<string, unknown>).rules as Array<Record<string, unknown>>)[0] ?? {}).host) : '';
     const tlsEntries = Array.isArray((ingressJson?.spec as Record<string, unknown> | undefined)?.tls) ? ((ingressJson?.spec as Record<string, unknown>).tls as Array<Record<string, unknown>>) : [];
+    const workloadContainers = Array.isArray((((((workloadJson?.spec as Record<string, unknown> | undefined)?.template as Record<string, unknown> | undefined)?.spec as Record<string, unknown> | undefined)?.containers))) ? (((((workloadJson?.spec as Record<string, unknown> | undefined)?.template as Record<string, unknown> | undefined)?.spec as Record<string, unknown> | undefined)?.containers) as Array<Record<string, unknown>>) : [];
+    const deployedImageRef = getStringValue((workloadContainers[0] ?? {}).image);
+    const tlsSecretNames = tlsEntries
+      .map((entry) => getStringValue(entry.secretName))
+      .filter((entry) => entry !== '');
+    let tlsSecretReady = false;
+    if (tlsSecretNames.length > 0) {
+      const tlsSecrets = await Promise.all(tlsSecretNames.map((secretName) => kubectlOptionalJson(['get', 'secret', secretName, '-n', spec.namespace])));
+      tlsSecretReady = tlsSecrets.every((entry) => Boolean(entry));
+    }
     const envJson = envSecret && typeof envSecret.data === 'object' && envSecret.data !== null ? JSON.stringify(Object.fromEntries(Object.entries(envSecret.data as Record<string, unknown>).map(([key, value]) => [key, Buffer.from(String(value ?? ''), 'base64').toString('utf8')]))) : JSON.stringify(spec.envVars);
     const podError = detectPodError(pods);
+    const buildPodError = detectBuildPodError(buildPods);
     const previousStatus = getStringValue(options.serviceProperties?.app_status) || null;
     const lastWorkloadReason = findLatestConditionReason((workloadJson?.status as Record<string, unknown> | undefined)?.conditions);
+    const buildFailed = failedBuilds > 0;
+    const buildActive = activeBuilds > 0;
+    const buildCompleted = succeededBuilds > 0;
+    const buildFailureLogLine = buildFailed ? await readBuildFailureLogLine(spec, buildPods) : null;
+    const buildFailureReason = (buildFailureLogLine || buildPodError || '').trim();
 
     let status = 'pending';
     if (String((namespaceJson.metadata as Record<string, unknown> | undefined)?.deletionTimestamp ?? '') !== '') {
       status = 'deleting';
-    } else if (failedBuilds > 0 || podError) {
+    } else if (buildFailed) {
       status = 'failed';
-    } else if (activeBuilds > 0) {
+    } else if (buildActive) {
       status = readBuildPhase(buildPods, previousStatus);
-    } else if (succeededBuilds > 0 && !workloadJson) {
+    } else if (buildCompleted && !workloadJson) {
       status = 'pushing';
     } else if (workloadJson && desiredReplicas > 0 && readyReplicas < desiredReplicas) {
-      status = 'deploying';
+      status = podError ? 'failed' : 'deploying';
     } else if (desiredReplicas > 0 && readyReplicas >= desiredReplicas && readyReplicas > 0) {
       status = 'ready';
+    } else if (podError) {
+      status = 'failed';
     } else if (latestJob) {
-      status = succeededBuilds > 0 ? 'deploying' : 'queued';
+      status = buildCompleted ? 'deploying' : 'queued';
     }
 
-    const endpoint = ingressHost ? `${tlsEntries.length > 0 ? 'https' : 'http'}://${ingressHost}` : getStringValue((serviceJson?.spec as Record<string, unknown> | undefined)?.clusterIP) || null;
+    const endpoint = ingressHost ? `${tlsSecretReady ? 'https' : 'http'}://${ingressHost}` : getStringValue((serviceJson?.spec as Record<string, unknown> | undefined)?.clusterIP) || null;
     const runtime: ManagedAppSnapshot['runtime'] = {
       kind: 'managed-app',
       contractVersion: '2026-04-pr4',
@@ -967,7 +1954,7 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
       managedApp: { clusterRef: spec.clusterRef, namespace: spec.namespace, workload: spec.workloadName, service: spec.serviceName, ingressUrl: ingressHost ? endpoint : null },
       vps: null,
       domain: ingressHost || spec.domain,
-      tlsStatus: tlsEntries.length > 0 ? 'enabled' : (spec.tlsEnabled ? 'pending' : 'disabled'),
+      tlsStatus: tlsSecretReady ? 'enabled' : (spec.tlsEnabled && !!config.certIssuer ? 'pending' : 'disabled'),
       replicas: desiredReplicas,
       envJson,
     };
@@ -975,8 +1962,9 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
     return {
       runtime,
       properties: {
-        ...buildRuntimeProperties(spec, { runtime, properties: {} }),
-        ...(podError ? { app_status_reason: podError } : {}),
+        ...buildRuntimeProperties(spec, { runtime, properties: { app_deployed_image_ref: deployedImageRef } }),
+        ...((buildFailed && buildFailureReason !== '') ? { app_status_reason: buildFailureReason } : {}),
+        ...((!buildFailed && podError) ? { app_status_reason: podError } : {}),
         ...(lastWorkloadReason ? { app_rollout_reason: lastWorkloadReason } : {}),
       },
     };
@@ -984,18 +1972,29 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
 
   async function provision(service: ServiceInput, options: { propertyMap?: Map<string, string>; productSettings?: Record<string, unknown>; serviceProperties?: Record<string, unknown>; forceReprovision?: boolean } = {}) {
     const previousImageRef = getStringValue(options.serviceProperties?.app_image_ref) || null;
-    const spec = buildSpec(config, service, {
+    const requestedSpec = buildSpec(config, service, {
       ...options,
       serviceProperties: {
         ...(options.serviceProperties ?? {}),
         ...(options.forceReprovision ? { app_previous_image_ref: previousImageRef ?? '' } : {}),
         app_image_ref: '',
+        app_build_job_name: '',
       },
     });
-    if (!spec.gitRepoUrl.startsWith('https://')) throw new ManagedAppRuntimeError('Only public HTTPS Git repositories are supported in v1.', 422, 'MANAGED_APP_GIT_REPO_INVALID');
+    const spec = await resolveProvisioningSpecWithCompose(requestedSpec);
+    const sourceUrl = parseSourceUrl(spec.gitRepoUrl);
+    const archiveSource = isArchiveSourceUrl(spec.gitRepoUrl);
+    const sourceProtocol = sourceUrl?.protocol ?? '';
+    if (archiveSource) {
+      if (!['http:', 'https:'].includes(sourceProtocol)) {
+        throw new ManagedAppRuntimeError('Only HTTP or HTTPS source archives are supported for generated projects.', 422, 'MANAGED_APP_SOURCE_ARCHIVE_INVALID');
+      }
+    } else if (!spec.gitRepoUrl.startsWith('https://')) {
+      throw new ManagedAppRuntimeError('Only public HTTPS Git repositories are supported in v1.', 422, 'MANAGED_APP_GIT_REPO_INVALID');
+    }
     await ensureNamespace(spec.namespace, {
       'sloth.cloud/service-id': spec.serviceId,
-      'sloth.cloud/runtime-ref': spec.runtimeRef,
+      'sloth.cloud/runtime-ref': spec.runtimeLabel,
     });
     await ensureRegistrySecret(spec.namespace, spec.imagePullSecretName);
     if (spec.buildNamespace !== spec.namespace) {
@@ -1004,8 +2003,24 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
       });
       await ensureRegistrySecret(spec.buildNamespace, spec.imagePullSecretName);
     }
-    await applyManifest([...buildNamespaceSecurityResources(spec), ...buildRuntimeResources(spec)]);
-    await applyManifest([buildBuildJob(spec)]);
+    await applyManifest(buildNamespaceSecurityResources(spec));
+    const existingJobsJson = await kubectlOptionalJson(['get', 'jobs', '-n', spec.buildNamespace, '-l', `sloth.cloud/service-id=${spec.serviceId},sloth.cloud/component=build`]);
+    const existingJobItems = Array.isArray(existingJobsJson?.items) ? existingJobsJson.items as Array<Record<string, unknown>> : [];
+    const activeBuildJob = [...existingJobItems]
+      .sort((left, right) => Date.parse(String((right.metadata as Record<string, unknown> | undefined)?.creationTimestamp ?? '0')) - Date.parse(String((left.metadata as Record<string, unknown> | undefined)?.creationTimestamp ?? '0')))
+      .find((job) => {
+        const status = typeof job.status === 'object' && job.status !== null ? job.status as Record<string, unknown> : {};
+        return getNumberValue(status.active, 0) > 0;
+      });
+
+    if (activeBuildJob) {
+      const existingName = getStringValue((activeBuildJob.metadata as Record<string, unknown> | undefined)?.name);
+      if (existingName) {
+        spec.buildJobName = existingName;
+      }
+    } else {
+      await applyManifest([buildBuildJob(spec)]);
+    }
     const current = await snapshot(service, {
       ...options,
       serviceProperties: {
@@ -1019,6 +2034,12 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
         app_image_ref: spec.imageRef,
         app_previous_image_ref: previousImageRef ?? '',
         app_status: previousImageRef ? 'retrying' : 'queued',
+        runtime_port: String(spec.runtimePort),
+        git_context_dir: spec.gitContextDir,
+        dockerfile_path: spec.dockerfilePath,
+        compose_file_path: spec.composeFilePath ?? '',
+        compose_service_name: spec.composeServiceName ?? '',
+        env_vars: JSON.stringify(spec.envVars),
       },
     });
     return {
@@ -1029,12 +2050,68 @@ export function createManagedAppRuntimeManager(config: ManagedAppManagerConfig) 
         app_domain: spec.domain ?? '',
         app_image_ref: spec.imageRef,
         app_previous_image_ref: previousImageRef ?? '',
+        runtime_port: String(spec.runtimePort),
+        git_context_dir: spec.gitContextDir,
+        dockerfile_path: spec.dockerfilePath,
+        compose_file_path: spec.composeFilePath ?? '',
+        compose_service_name: spec.composeServiceName ?? '',
+        env_vars: JSON.stringify(spec.envVars),
       },
     };
   }
 
   async function reconcile(service: ServiceInput, options: { propertyMap?: Map<string, string>; productSettings?: Record<string, unknown>; serviceProperties?: Record<string, unknown> } = {}) {
-    const current = await snapshot(service, options);
+    const spec = buildSpec(config, service, options);
+    const existingNamespace = await kubectlOptionalJson(['get', 'namespace', spec.namespace]);
+    const previousStatus = getStringValue(options.serviceProperties?.app_status).toLowerCase();
+    if (!existingNamespace && previousStatus !== 'deleting') {
+      return provision(service, {
+        ...options,
+        serviceProperties: {
+          ...(options.serviceProperties ?? {}),
+          app_status: 'pending',
+        },
+      });
+    }
+
+    let current = await snapshot(service, options);
+
+    const desiredEndpoint = spec.domain ? `${(spec.tlsEnabled && !!config.certIssuer) ? 'https' : 'http'}://${spec.domain}` : null;
+    const runtimeDomain = getStringValue(current.runtime.domain);
+    const runtimeEndpoint = getStringValue(current.runtime.endpoint);
+    const desiredImageRef = getStringValue(spec.imageRef);
+    const deployedImageRef = getStringValue(current.properties?.app_deployed_image_ref);
+    const imageNeedsSync = desiredImageRef !== ''
+      && desiredImageRef !== deployedImageRef
+      && current.runtime.status !== 'building'
+      && current.runtime.status !== 'queued';
+    const runtimeNeedsSync = current.runtime.status === 'pushing'
+      || (spec.domain !== null && runtimeDomain !== spec.domain)
+      || (desiredEndpoint !== null && runtimeEndpoint !== desiredEndpoint)
+      || imageNeedsSync;
+
+    if (runtimeNeedsSync) {
+      await ensureNamespace(spec.namespace, {
+        'sloth.cloud/service-id': spec.serviceId,
+        'sloth.cloud/runtime-ref': spec.runtimeLabel,
+      });
+      await ensureRegistrySecret(spec.namespace, spec.imagePullSecretName);
+      await applyManifest(buildNamespaceSecurityResources(spec));
+      await applyManifest(buildRuntimeResources(spec));
+      current = await snapshot(service, {
+        ...options,
+        serviceProperties: {
+          ...(options.serviceProperties ?? {}),
+          app_domain: spec.domain ?? '',
+          app_status: 'deploying',
+        },
+      });
+      const message = current.runtime.status === 'pushing'
+        ? 'Managed App image build succeeded. Workload deployment started.'
+        : 'Managed App runtime resources reconciled with desired domain and endpoint.';
+      return { message, runtime: current.runtime, properties: current.properties };
+    }
+
     return { message: 'Managed App runtime state reconciled.', runtime: current.runtime, properties: current.properties };
   }
 

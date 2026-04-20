@@ -3,6 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Models\Extension;
+use App\Models\Gateway;
+use App\Models\Setting;
 use Illuminate\Console\Command;
 
 class ConfigureEpayGateway extends Command
@@ -20,12 +22,11 @@ class ConfigureEpayGateway extends Command
         $dryRun = (bool) $this->option('dry-run');
         $allowPrivate = (bool) $this->option('allow-private');
 
-        $extension = Extension::query()
-            ->where('type', 'gateway')
+        $gateway = Gateway::query()
             ->whereRaw('LOWER(extension) = ?', ['epay'])
             ->first();
 
-        if (!$extension) {
+        if (!$gateway) {
             $this->error('Epay gateway extension is not installed.');
 
             return self::FAILURE;
@@ -67,27 +68,14 @@ class ConfigureEpayGateway extends Command
             return self::SUCCESS;
         }
 
-        $extension->settings()->updateOrCreate(
-            ['key' => 'callback_base_url'],
-            [
-                'value' => $callbackBaseUrl,
-                'type' => 'string',
-                'encrypted' => false,
-            ]
-        );
-
-        $extension->settings()->updateOrCreate(
-            ['key' => 'frontend_return_url'],
-            [
-                'value' => $frontendReturnUrl,
-                'type' => 'string',
-                'encrypted' => false,
-            ]
-        );
+        $this->syncSetting($gateway, 'callback_base_url', $callbackBaseUrl, 'string');
+        $this->syncSetting($gateway, 'frontend_return_url', $frontendReturnUrl, 'string');
+        $this->syncSetting($gateway, 'allow_private_return_urls', $allowPrivate ? '1' : '0', 'boolean');
 
         $this->info('Epay gateway URLs updated.');
         $this->line(sprintf('callback_base_url: %s', $callbackBaseUrl));
         $this->line(sprintf('frontend_return_url: %s', $frontendReturnUrl));
+        $this->line(sprintf('allow_private_return_urls: %s', $allowPrivate ? 'true' : 'false'));
 
         return self::SUCCESS;
     }
@@ -154,7 +142,12 @@ class ConfigureEpayGateway extends Command
             || $host === '127.0.0.1'
             || $host === '::1'
             || str_ends_with($host, '.localhost')
+            || str_ends_with($host, '.local')
         ) {
+            return false;
+        }
+
+        if (!str_contains($host, '.') && filter_var($host, FILTER_VALIDATE_IP) === false) {
             return false;
         }
 
@@ -171,5 +164,23 @@ class ConfigureEpayGateway extends Command
         }
 
         return true;
+    }
+
+    protected function syncSetting(Gateway $gateway, string $key, string $value, string $type): void
+    {
+        foreach ([$gateway->getMorphClass(), Extension::class] as $morphType) {
+            Setting::query()->updateOrCreate(
+                [
+                    'settingable_type' => $morphType,
+                    'settingable_id' => $gateway->getKey(),
+                    'key' => $key,
+                ],
+                [
+                    'value' => $value,
+                    'type' => $type,
+                    'encrypted' => false,
+                ]
+            );
+        }
     }
 }

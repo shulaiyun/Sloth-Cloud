@@ -1,11 +1,12 @@
 ﻿import { FlagIcon } from './FlagIcon';
-import { localeMeta, type Locale } from '../lib/content';
+import { localeMeta, supportedFrontendLocales, type Locale } from '../lib/content';
 import { useSite } from '../lib/site-context';
+import { getUiText } from '../lib/ui-text';
 
 export function LanguageToggle() {
   const { locale, setLocale } = useSite();
-  const entries = Object.entries(localeMeta) as Array<[Locale, (typeof localeMeta)[Locale]]>;
-  const zh = locale.startsWith('zh');
+  const ui = getUiText(locale);
+  const entries = supportedFrontendLocales.map((code) => [code, localeMeta[code]] as [Locale, (typeof localeMeta)[Locale]]);
 
   return (
     <details className="locale-menu">
@@ -13,7 +14,7 @@ export function LanguageToggle() {
         <span className="locale-trigger-meta">
           <FlagIcon locale={locale} />
           <span className="locale-trigger-copy">
-            <span className="locale-code">{localeMeta[locale].code}</span>
+            <span className="locale-code" translate="no">{localeMeta[locale].code}</span>
             <span>{localeMeta[locale].label}</span>
           </span>
         </span>
@@ -21,8 +22,8 @@ export function LanguageToggle() {
       </summary>
       <div className="locale-menu-list">
         <div className="locale-menu-head">
-          <span>{zh ? '界面语言' : 'Interface language'}</span>
-          <small>{zh ? '选择前台显示语言' : 'Select storefront language'}</small>
+          <span>{ui.common.interfaceLanguage}</span>
+          <small>{ui.common.selectLanguage}</small>
         </div>
         {entries.map(([code, meta]) => (
           <button

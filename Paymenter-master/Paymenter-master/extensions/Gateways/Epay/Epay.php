@@ -91,6 +91,14 @@ class Epay extends Gateway
                 'validation' => ['nullable', 'string', 'max:255'],
             ],
             [
+                'name' => 'allow_private_return_urls',
+                'label' => 'Allow Private Return URLs',
+                'type' => 'checkbox',
+                'description' => 'Allow localhost/private callback and return URLs for local development only.',
+                'required' => false,
+                'default' => false,
+            ],
+            [
                 'name' => 'allowed_currencies',
                 'label' => 'Allowed Currencies',
                 'type' => 'tags',
@@ -113,7 +121,7 @@ class Epay extends Gateway
         return in_array(strtoupper((string) $currency), $allowedCurrencies, true);
     }
 
-    public function pay(Invoice $invoice, $total): string
+    public function pay(Invoice $invoice, $total)
     {
         $currency = strtoupper((string) $invoice->currency_code);
 
@@ -123,9 +131,13 @@ class Epay extends Gateway
             );
         }
 
-        $notifyUrl = $this->resolveNotifyUrl();
-        // For headless flow, send users back to frontend invoice page directly.
-        $returnUrl = $this->resolveFrontendReturnUrl($invoice);
+        $requestedFrontendTemplate = $this->resolveRequestedFrontendReturnTemplate(
+            request()->input('frontend_return_url')
+        );
+        $notifyUrl = $this->resolveNotifyUrl($requestedFrontendTemplate);
+        // Always return to gateway callback route first so we can sync invoice status
+        // even when asynchronous notify is delayed or blocked.
+        $returnUrl = $this->resolveGatewayReturnUrl($invoice, $requestedFrontendTemplate);
         $merchantOrderNo = $this->buildMerchantOrderNo($invoice);
 
         $params = [
@@ -134,7 +146,7 @@ class Epay extends Gateway
             'notify_url' => $notifyUrl,
             'return_url' => $returnUrl,
             'out_trade_no' => $merchantOrderNo,
-            'name' => 'Invoice #' . ($invoice->number ?: $invoice->id),
+            'name' => $this->buildPaymentSubject($invoice),
             'money' => number_format((float) $total, 2, '.', ''),
             'param' => (string) ($invoice->number ?: $invoice->id),
             'sign_type' => 'MD5',
@@ -142,7 +154,7 @@ class Epay extends Gateway
 
         $params['sign'] = Signer::build($params, (string) $this->config('app_key'));
 
-        $redirect = rtrim((string) $this->config('api_url'), '/') . '/submit.php?' . http_build_query($params);
+        $submitUrl = rtrim((string) $this->config('api_url'), '/') . '/submit.php';
 
         $this->logInfo('Epay pay request built', [
             'invoice_id' => $invoice->id,
@@ -152,10 +164,14 @@ class Epay extends Gateway
             'return_url' => $returnUrl,
             'merchant_order_no' => $merchantOrderNo,
             'api_url' => (string) $this->config('api_url'),
-            'redirect_url' => $redirect,
+            'submit_url' => $submitUrl,
+            'signature' => $params['sign'],
         ]);
 
-        return $redirect;
+        return view()->file(__DIR__ . '/views/redirect.blade.php', [
+            'actionUrl' => $submitUrl,
+            'params' => $params,
+        ]);
     }
 
     public function notify(Request $request)
@@ -271,7 +287,9 @@ class Epay extends Gateway
             'payment' => $paymentState,
             'trade_no' => (string) ($payload['trade_no'] ?? ''),
             'out_trade_no' => (string) ($payload['out_trade_no'] ?? $invoice->id),
-        ]);
+        ], $this->resolveRequestedFrontendReturnTemplate(
+            $this->decodeClientReturnTemplate($payload['client_return'] ?? null)
+        ));
 
         $this->logInfo('Epay return redirect', [
             'invoice_id' => $invoice->id,
@@ -287,13 +305,12 @@ class Epay extends Gateway
         return redirect()->away($target);
     }
 
-    private function resolveFrontendReturnUrl(Invoice $invoice, array $query = []): string
+    private function resolveFrontendReturnUrl(Invoice $invoice, array $query = [], ?string $templateOverride = null): string
     {
-        $baseUrl = $this->resolveFrontendUrlTemplate();
-        $baseUrl = str_replace(
-            ['{invoice}', '{number}'],
-            [(string) $invoice->id, (string) ($invoice->number ?: $invoice->id)],
-            $baseUrl
+        $baseUrl = $this->applyInvoicePlaceholders(
+            $this->resolveFrontendUrlTemplate($templateOverride),
+            (string) $invoice->id,
+            (string) ($invoice->number ?: $invoice->id),
         );
 
         $query = array_filter($query, fn ($value) => $value !== null && $value !== '');
@@ -306,10 +323,10 @@ class Epay extends Gateway
         return $baseUrl . $separator . http_build_query($query);
     }
 
-    private function resolveNotifyUrl(): string
+    private function resolveNotifyUrl(?string $frontendTemplateOverride = null): string
     {
-        $base = trim((string) $this->config('callback_base_url'));
-        if ($base !== '') {
+        $base = $this->resolveConfiguredCallbackBaseUrl($frontendTemplateOverride);
+        if ($base !== null) {
             $base = rtrim($base, '/');
 
             $routePath = route('extensions.gateways.epay.notify', [], false);
@@ -321,9 +338,52 @@ class Epay extends Gateway
         return route('extensions.gateways.epay.notify');
     }
 
+    private function resolveGatewayReturnUrl(Invoice $invoice, ?string $frontendTemplateOverride = null): string
+    {
+        $base = $this->resolveConfiguredCallbackBaseUrl($frontendTemplateOverride);
+        $query = [];
+        if ($frontendTemplateOverride !== null) {
+            $query['client_return'] = $this->encodeClientReturnTemplate($frontendTemplateOverride);
+        }
+
+        if ($base !== null) {
+            $base = rtrim($base, '/');
+
+            $routePath = route('extensions.gateways.epay.return', ['invoice' => $invoice->id], false);
+            $routePath = '/' . ltrim((string) parse_url($routePath, PHP_URL_PATH), '/');
+            $url = $base . $routePath;
+
+            if ($query === []) {
+                return $url;
+            }
+
+            return $url . '?' . http_build_query($query);
+        }
+
+        $url = route('extensions.gateways.epay.return', ['invoice' => $invoice->id]);
+        if ($query === []) {
+            return $url;
+        }
+
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url . $separator . http_build_query($query);
+    }
+
     private function buildMerchantOrderNo(Invoice $invoice): string
     {
         return sprintf('%d-%s', (int) $invoice->id, Str::lower(Str::random(12)));
+    }
+
+    private function buildPaymentSubject(Invoice $invoice): string
+    {
+        $invoiceNumber = preg_replace('/[^A-Za-z0-9_-]+/', '', (string) ($invoice->number ?: $invoice->id));
+        $invoiceNumber = trim((string) $invoiceNumber);
+        if ($invoiceNumber === '') {
+            $invoiceNumber = (string) $invoice->id;
+        }
+
+        return 'Invoice-' . $invoiceNumber;
     }
 
     private function recordPaymentIfApplicable(Invoice $invoice, array $payload, string $source): bool
@@ -412,12 +472,20 @@ class Epay extends Gateway
         }
 
         try {
-            $response = Http::timeout(12)->acceptJson()->get($apiUrl . '/api.php', [
+            $response = Http::timeout(12)
+                ->acceptJson()
+                ->withOptions([
+                    'curl' => array_filter([
+                        \defined('CURLOPT_PROXY') ? CURLOPT_PROXY : null => '',
+                        \defined('CURLOPT_NOPROXY') ? CURLOPT_NOPROXY : null => '*',
+                    ], static fn ($value, $key) => $key !== null, ARRAY_FILTER_USE_BOTH),
+                ])
+                ->get($apiUrl . '/api.php', [
                 'act' => 'order',
                 'pid' => $appId,
                 'key' => $appKey,
                 'out_trade_no' => $orderNo,
-            ]);
+                ]);
         } catch (\Throwable $exception) {
             $this->logWarning('Epay order query failed: request exception', [
                 'invoice_id' => $invoice->id,
@@ -649,13 +717,14 @@ class Epay extends Gateway
         );
         $invoiceId = (string) $this->extractInvoiceId($invoiceReference);
 
-        $baseUrl = str_replace(
-            ['{invoice}', '{number}'],
-            [
-                $invoiceId,
-                $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
-            ],
-            $this->resolveFrontendUrlTemplate()
+        $baseUrl = $this->applyInvoicePlaceholders(
+            $this->resolveFrontendUrlTemplate(
+                $this->resolveRequestedFrontendReturnTemplate(
+                    $this->decodeClientReturnTemplate($payload['client_return'] ?? null)
+                )
+            ),
+            $invoiceId,
+            $this->firstNonEmpty($payload, ['param', 'out_trade_no', 'invoice_id', 'invoice', 'order_id', 'payId', 'pay_id'], ''),
         );
 
         $separator = str_contains($baseUrl, '?') ? '&' : '?';
@@ -667,52 +736,163 @@ class Epay extends Gateway
     }
 
 
-    private function resolveFrontendUrlTemplate(): string
+    private function resolveFrontendUrlTemplate(?string $override = null): string
     {
+        if ($override !== null) {
+            return $override;
+        }
+
         $configured = trim((string) $this->config('frontend_return_url'));
         if ($configured !== '') {
-            if ($this->isPublicFrontendUrl($configured)) {
+            if ($this->isAllowedFrontendUrl($configured)) {
                 return $configured;
             }
 
-            $this->logWarning('Epay frontend_return_url rejected (localhost/private host). Falling back.', [
+            $this->logWarning('Epay frontend_return_url rejected (invalid/private host). Falling back.', [
                 'frontend_return_url' => $configured,
+                'allow_private' => $this->allowPrivateFrontendUrls(),
             ]);
         }
 
         $frontendBase = trim((string) env('SLOTH_FRONTEND_URL', ''));
         if ($frontendBase !== '') {
             $candidate = rtrim($frontendBase, '/') . '/invoices/{number}';
-            if ($this->isPublicFrontendUrl($candidate)) {
+            if ($this->isAllowedFrontendUrl($candidate)) {
                 return $candidate;
             }
 
-            $this->logWarning('Epay SLOTH_FRONTEND_URL rejected (localhost/private host). Falling back.', [
+            $this->logWarning('Epay SLOTH_FRONTEND_URL rejected (invalid/private host). Falling back.', [
                 'SLOTH_FRONTEND_URL' => $frontendBase,
+                'allow_private' => $this->allowPrivateFrontendUrls(),
             ]);
         }
 
         $appUrl = trim((string) config('app.url', ''));
         if ($appUrl !== '') {
             $candidate = rtrim($appUrl, '/') . '/invoices/{number}';
-            if ($this->isPublicFrontendUrl($candidate)) {
+            if ($this->isAllowedFrontendUrl($candidate)) {
                 return $candidate;
             }
 
-            $this->logWarning('Epay APP_URL rejected (localhost/private host). Falling back.', [
+            $this->logWarning('Epay APP_URL rejected (invalid/private host). Falling back.', [
                 'APP_URL' => $appUrl,
+                'allow_private' => $this->allowPrivateFrontendUrls(),
             ]);
         }
 
         $callbackBase = trim((string) $this->config('callback_base_url'));
         if ($callbackBase !== '') {
             $candidate = rtrim($callbackBase, '/') . '/invoices/{number}';
-            if ($this->isPublicFrontendUrl($candidate)) {
+            if ($this->isAllowedFrontendUrl($candidate)) {
                 return $candidate;
             }
         }
 
         return 'https://billing.sloth-cloud.example/invoices/{number}';
+    }
+
+    private function resolveRequestedFrontendReturnTemplate(mixed $candidate): ?string
+    {
+        $value = trim((string) ($candidate ?? ''));
+        if ($value === '') {
+            return null;
+        }
+
+        if ($this->isAllowedFrontendUrl($value)) {
+            return $value;
+        }
+
+        $this->logWarning('Epay requested frontend_return_url rejected. Falling back.', [
+            'frontend_return_url' => $value,
+            'allow_private' => $this->allowPrivateFrontendUrls(),
+        ]);
+
+        return null;
+    }
+
+    private function encodeClientReturnTemplate(string $value): string
+    {
+        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+    }
+
+    private function decodeClientReturnTemplate(mixed $value): ?string
+    {
+        $encoded = trim((string) ($value ?? ''));
+        if ($encoded === '') {
+            return null;
+        }
+
+        $padding = strlen($encoded) % 4;
+        if ($padding > 0) {
+            $encoded .= str_repeat('=', 4 - $padding);
+        }
+
+        $decoded = base64_decode(strtr($encoded, '-_', '+/'), true);
+        if ($decoded === false) {
+            return null;
+        }
+
+        return $decoded;
+    }
+
+    private function isAllowedFrontendUrl(string $url): bool
+    {
+        if ($this->isPublicFrontendUrl($url)) {
+            return true;
+        }
+
+        return $this->allowPrivateFrontendUrls() && $this->isPrivateLoopbackFrontendUrl($url);
+    }
+
+    private function allowPrivateFrontendUrls(): bool
+    {
+        if (filter_var((string) ($this->config('allow_private_return_urls') ?? false), FILTER_VALIDATE_BOOL)) {
+            return true;
+        }
+
+        if (filter_var((string) env('EPAY_ALLOW_PRIVATE_RETURN_URLS', false), FILTER_VALIDATE_BOOL)) {
+            return true;
+        }
+
+        $appEnv = strtolower(trim((string) config('app.env', env('APP_ENV', 'production'))));
+
+        return $appEnv !== '' && $appEnv !== 'production';
+    }
+
+    private function isPrivateLoopbackFrontendUrl(string $url): bool
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return false;
+        }
+
+        $parts = parse_url($url);
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return false;
+        }
+
+        if (
+            $host === 'localhost'
+            || $host === '127.0.0.1'
+            || $host === '::1'
+            || str_ends_with($host, '.localhost')
+            || str_ends_with($host, '.local')
+        ) {
+            return true;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return filter_var(
+                $host,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+            ) === false;
+        }
+
+        return false;
     }
 
     private function isPublicFrontendUrl(string $url): bool
@@ -735,7 +915,14 @@ class Epay extends Gateway
             || $host === '127.0.0.1'
             || $host === '::1'
             || str_ends_with($host, '.localhost')
+            || str_ends_with($host, '.local')
         ) {
+            return false;
+        }
+
+        // Docker/network internal aliases such as "sloth-cloud-paymenter"
+        // are not publicly reachable from third-party gateways.
+        if (!str_contains($host, '.') && filter_var($host, FILTER_VALIDATE_IP) === false) {
             return false;
         }
 
@@ -752,6 +939,116 @@ class Epay extends Gateway
         }
 
         return true;
+    }
+
+    private function resolveConfiguredCallbackBaseUrl(?string $frontendTemplateOverride = null): ?string
+    {
+        $candidates = [
+            'callback_base_url' => trim((string) $this->config('callback_base_url')),
+            'SLOTH_PAYMENTER_PUBLIC_URL' => trim((string) env('SLOTH_PAYMENTER_PUBLIC_URL', '')),
+            'settings.app_url' => trim((string) config('settings.app_url', '')),
+            'APP_URL' => trim((string) env('APP_URL', '')),
+            'config.app.url' => trim((string) config('app.url', '')),
+        ];
+
+        foreach ($candidates as $source => $candidate) {
+            if ($candidate === '') {
+                continue;
+            }
+
+            $normalized = $this->normalizeBaseUrlOrigin($candidate);
+            if ($normalized !== null) {
+                $normalized = $this->rebindPrivateCallbackOrigin($normalized, $frontendTemplateOverride);
+            }
+            if ($normalized !== null && $this->isAllowedFrontendUrl($normalized)) {
+                return $normalized;
+            }
+
+            $this->logWarning('Epay callback_base_url candidate rejected. Falling back.', [
+                'source' => $source,
+                'callback_base_url' => $candidate,
+                'allow_private' => $this->allowPrivateFrontendUrls(),
+            ]);
+        }
+
+        return null;
+    }
+
+    private function rebindPrivateCallbackOrigin(string $callbackOrigin, ?string $frontendTemplateOverride = null): string
+    {
+        if (!$this->allowPrivateFrontendUrls()) {
+            return $callbackOrigin;
+        }
+
+        $frontendTemplate = trim((string) ($frontendTemplateOverride ?? ''));
+        if ($frontendTemplate === '') {
+            return $callbackOrigin;
+        }
+
+        $frontendOrigin = $this->normalizeBaseUrlOrigin($frontendTemplate);
+        if ($frontendOrigin === null) {
+            return $callbackOrigin;
+        }
+
+        if (
+            !$this->isPrivateLoopbackFrontendUrl($callbackOrigin)
+            || !$this->isPrivateLoopbackFrontendUrl($frontendOrigin)
+        ) {
+            return $callbackOrigin;
+        }
+
+        $callbackParts = parse_url($callbackOrigin);
+        $frontendParts = parse_url($frontendOrigin);
+        if (!is_array($callbackParts) || !is_array($frontendParts)) {
+            return $callbackOrigin;
+        }
+
+        $callbackHost = strtolower((string) ($callbackParts['host'] ?? ''));
+        $frontendHost = strtolower((string) ($frontendParts['host'] ?? ''));
+        if ($callbackHost === '' || $frontendHost === '' || $callbackHost === $frontendHost) {
+            return $callbackOrigin;
+        }
+
+        $scheme = (string) ($frontendParts['scheme'] ?? ($callbackParts['scheme'] ?? 'http'));
+        $host = (string) ($frontendParts['host'] ?? '');
+        $port = isset($callbackParts['port']) ? ':' . (int) $callbackParts['port'] : '';
+        if ($host === '') {
+            return $callbackOrigin;
+        }
+
+        return strtolower($scheme) . '://' . $host . $port;
+    }
+
+    private function applyInvoicePlaceholders(string $template, string $invoiceId, string $invoiceNumber): string
+    {
+        return str_ireplace(
+            ['{invoice}', '{number}', '%7Binvoice%7D', '%7Bnumber%7D'],
+            [$invoiceId, $invoiceNumber, $invoiceId, $invoiceNumber],
+            $template
+        );
+    }
+
+    private function normalizeBaseUrlOrigin(string $url): ?string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = trim((string) ($parts['host'] ?? ''));
+        $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        return $scheme . '://' . $host . $port;
     }
     private function extractInvoiceId(string $reference): int
     {

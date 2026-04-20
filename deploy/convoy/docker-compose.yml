@@ -151,7 +151,7 @@ services:
 networks:
   sloth-convoy-net:
     name: sloth-convoy-net
-    driver: bridge
+    external: true
 
 volumes:
   sloth_convoy_db_data:

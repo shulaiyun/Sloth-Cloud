@@ -28,6 +28,7 @@ class RegisterRequest extends FormRequest
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'device_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'referral_code' => ['sometimes', 'nullable', 'string', 'alpha_num:ascii', 'min:5', 'max:25', 'exists:ext_affiliates,code'],
             'properties' => ['sometimes', 'array'],
         ];
 
@@ -43,4 +44,3 @@ class RegisterRequest extends FormRequest
         return $rules;
     }
 }
-

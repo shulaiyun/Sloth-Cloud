@@ -10,6 +10,7 @@ export interface ConvoyConfig {
 }
 
 type PowerState = 'start' | 'kill' | 'restart' | 'shutdown';
+type ConsoleType = 'novnc' | 'xtermjs';
 
 function normalizeBaseUrl(baseUrl: string, applicationPrefix: string) {
   const trimmedBase = baseUrl.replace(/\/+$/, '');
@@ -118,6 +119,12 @@ export function createConvoyClient(config: ConvoyConfig) {
     getServer(serverRef: string) {
       return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}`);
     },
+    getServerState(serverRef: string) {
+      return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}/state`);
+    },
+    getServerMetrics(serverRef: string) {
+      return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}/metrics`);
+    },
     getNodeTemplateGroups(nodeRef: string | number) {
       return requestConvoy<{ data: Array<Record<string, unknown>> }>(
         config,
@@ -169,6 +176,18 @@ export function createConvoyClient(config: ConvoyConfig) {
           method: 'POST',
           body: {
             state,
+          },
+        },
+      );
+    },
+    createConsoleSession(serverRef: string, type: ConsoleType = 'novnc') {
+      return requestConvoy<{ data?: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/console`,
+        {
+          method: 'POST',
+          body: {
+            type,
           },
         },
       );

@@ -3,9 +3,9 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "corepack pnpm -r --parallel --filter @sloth-cloud/* dev",
-    "build": "corepack pnpm -r --filter @sloth-cloud/* build",
-    "typecheck": "corepack pnpm -r --filter @sloth-cloud/* typecheck"
+    "dev": "pnpm -r --parallel --filter @sloth-cloud/* dev",
+    "build": "pnpm -r --filter @sloth-cloud/* build",
+    "typecheck": "pnpm -r --filter @sloth-cloud/* typecheck"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

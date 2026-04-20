@@ -2,6 +2,9 @@
 
 namespace Convoy\Http\Controllers\Admin;
 
+use Carbon\Carbon;
+use Convoy\Enums\Server\ConsoleType;
+use Convoy\Enums\Server\MetricTimeframe;
 use Convoy\Enums\Server\Status;
 use Convoy\Enums\Server\PowerAction;
 use Convoy\Enums\Server\SuspensionAction;
@@ -19,19 +22,24 @@ use Convoy\Models\Filters\FiltersServerByAddressPoolId;
 use Convoy\Models\Filters\FiltersServerWildcard;
 use Convoy\Models\Server;
 use Convoy\Services\Servers\CloudinitService;
+use Convoy\Services\Coterm\CotermJWTService;
 use Convoy\Services\Servers\NetworkService;
 use Convoy\Services\Servers\ServerAuthService;
 use Convoy\Services\Servers\ServerCreationService;
 use Convoy\Services\Servers\ServerDeletionService;
 use Convoy\Services\Servers\ServerBuildDispatchService;
+use Convoy\Services\Servers\ServerConsoleService;
 use Convoy\Services\Servers\ServerSuspensionService;
 use Convoy\Services\Servers\SyncBuildService;
+use Convoy\Repositories\Proxmox\Server\ProxmoxMetricsRepository;
 use Convoy\Repositories\Proxmox\Server\ProxmoxPowerRepository;
+use Convoy\Repositories\Proxmox\Server\ProxmoxServerRepository;
 use Convoy\Transformers\Admin\ServerBuildTransformer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\Enum;
 use Spatie\QueryBuilder\AllowedFilter;
 use Spatie\QueryBuilder\QueryBuilder;
 use Symfony\Component\HttpKernel\Exception\ServiceUnavailableHttpException;
@@ -49,6 +57,10 @@ class ServerController extends ApiController
         private ServerAuthService       $authService,
         private CloudinitService        $cloudinitService,
         private SyncBuildService        $buildModificationService,
+        private CotermJWTService        $cotermJWTService,
+        private ServerConsoleService    $consoleService,
+        private ProxmoxServerRepository $serverRepository,
+        private ProxmoxMetricsRepository $metricsRepository,
     )
     {
     }
@@ -171,6 +183,101 @@ class ServerController extends ApiController
         return $this->returnNoContent();
     }
 
+    public function state(Server $server): JsonResponse
+    {
+        try {
+            $state = $this->serverRepository->setServer($server)->getState();
+        } catch (ProxmoxConnectionException) {
+            return new JsonResponse([
+                'message' => "Server {$server->uuid} runtime state is unavailable.",
+                'error_code' => 'PROXMOX_RUNTIME_UNAVAILABLE',
+            ], 503);
+        }
+
+        return new JsonResponse([
+            'data' => [
+                'power_state' => $state->state->value,
+                'cpu_used' => $state->cpu_used,
+                'memory_used' => $state->memory_used,
+                'memory_total' => $state->memory_total,
+                'uptime' => $state->uptime,
+            ],
+        ]);
+    }
+
+    public function metrics(Server $server): JsonResponse
+    {
+        try {
+            $state = $this->serverRepository->setServer($server)->getState();
+            $metrics = $this->metricsRepository->setServer($server)->getMetrics(MetricTimeframe::HOUR);
+        } catch (ProxmoxConnectionException) {
+            return new JsonResponse([
+                'message' => "Server {$server->uuid} runtime metrics are unavailable.",
+                'error_code' => 'PROXMOX_RUNTIME_UNAVAILABLE',
+            ], 503);
+        }
+
+        $latestMetric = collect($metrics)->last();
+        $sampledAt = isset($latestMetric['time'])
+            ? Carbon::createFromTimestamp((int) $latestMetric['time'])->toIso8601String()
+            : now()->toIso8601String();
+
+        return new JsonResponse([
+            'data' => [
+                'disk_used' => $state->disk_used,
+                'disk_total' => $state->disk_total,
+                'rx_bytes' => $state->rx_bytes,
+                'tx_bytes' => $state->tx_bytes,
+                'bandwidth_usage' => intval($server->bandwidth_usage ?? 0),
+                'bandwidth_limit' => isset($server->bandwidth_limit) ? intval($server->bandwidth_limit) : null,
+                'sampled_at' => $sampledAt,
+            ],
+        ]);
+    }
+
+    public function createConsoleSession(Request $request, Server $server): JsonResponse
+    {
+        $validated = $request->validate([
+            'type' => ['nullable', new Enum(ConsoleType::class)],
+        ]);
+
+        $consoleType = ConsoleType::tryFrom((string) ($validated['type'] ?? ConsoleType::NOVNC->value))
+            ?? ConsoleType::NOVNC;
+
+        $server->node->loadMissing('coterm');
+
+        if ($coterm = $server->node->coterm) {
+            return new JsonResponse([
+                'data' => [
+                    'type' => $consoleType->value,
+                    'is_tls_enabled' => $coterm->is_tls_enabled,
+                    'fqdn' => $coterm->fqdn,
+                    'port' => $coterm->port,
+                    'token' => $this->cotermJWTService->handle(
+                        $server,
+                        $request->user(),
+                        $consoleType,
+                    )->toString(),
+                ],
+            ]);
+        }
+
+        // Proxmox's bundled terminal wrapper expects a regular PVEAuthCookie here,
+        // not the short-lived PVEVNC/PVETERM console ticket returned by vncproxy/termproxy.
+        $credentials = $this->consoleService->createConsoleUserCredentials($server);
+
+        return new JsonResponse([
+            'data' => [
+                'type' => $consoleType->value,
+                'ticket' => $credentials->ticket,
+                'node' => $server->node->cluster,
+                'vmid' => $server->vmid,
+                'fqdn' => $server->node->fqdn,
+                'port' => $server->node->port,
+            ],
+        ]);
+    }
+
     public function reinstall(ReinstallServerRequest $request, Server $server)
     {
         $this->connection->transaction(function () use ($request, $server) {
@@ -197,11 +304,11 @@ class ServerController extends ApiController
             $password = $this->createPassword();
         }
 
-        $this->authService->updatePassword($server, $password);
+        $result = $this->authService->updatePassword($server, $password);
 
         return new JsonResponse([
             'data' => [
-                'password' => $password,
+                ...$result,
             ],
         ]);
     }

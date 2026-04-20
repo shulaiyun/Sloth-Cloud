@@ -2,7 +2,7 @@
 
 namespace Convoy\Services\Servers;
 
-use Convoy\Data\Server\Deployments\CloudinitAddressConfigData;
+use Convoy\Data\Server\Eloquent\AddressData;
 use Convoy\Data\Server\Eloquent\ServerAddressesData;
 use Convoy\Data\Server\MacAddressData;
 use Convoy\Enums\Network\AddressType;
@@ -14,7 +14,13 @@ use Convoy\Repositories\Proxmox\Server\ProxmoxConfigRepository;
 use Convoy\Repositories\Proxmox\Server\ProxmoxFirewallRepository;
 use Illuminate\Support\Arr;
 use function collect;
+use function count;
+use function implode;
 use function is_null;
+use function preg_match;
+use function sprintf;
+use function strtolower;
+use function trim;
 
 class NetworkService
 {
@@ -106,17 +112,31 @@ class NetworkService
     {
         $macAddresses = $this->getMacAddresses($server, true, true);
         $addresses = $this->getAddresses($server);
+        $interfaceConfigs = $this->buildInterfaceConfigs($server, $addresses, $macAddresses);
+        $desiredNetworkKeys = [];
+        $networkPayload = [];
 
         $this->clearIpsets($server);
-        $this->cloudinitService->updateIpConfig($server, CloudinitAddressConfigData::from([
-            'ipv4' => $addresses->ipv4->first()?->toArray(),
-            'ipv6' => $addresses->ipv6->first()?->toArray(),
-        ]));
-        $this->lockIps(
-            $server,
-            array_unique(Arr::flatten($server->addresses()->get(['address'])->toArray())),
-            'ipfilter-net0',
-        );
+
+        foreach ($interfaceConfigs as $config) {
+            $index = (int) $config['index'];
+            $netKey = "net{$index}";
+            $ipConfigKey = "ipconfig{$index}";
+
+            $desiredNetworkKeys[] = $netKey;
+            $desiredNetworkKeys[] = $ipConfigKey;
+            $networkPayload[$netKey] = (string) $config['net'];
+            $networkPayload[$ipConfigKey] = (string) $config['ipconfig'];
+
+            if (!empty($config['locked'])) {
+                $this->lockIps(
+                    $server,
+                    $config['locked'],
+                    "ipfilter-net{$index}",
+                );
+            }
+        }
+
         $this->firewallRepository->setServer($server)->updateOptions([
             'enable' => true,
             'ipfilter' => true,
@@ -124,11 +144,114 @@ class NetworkService
             'policy_out' => 'ACCEPT',
         ]);
 
-        $macAddress = $macAddresses->eloquent ?? $macAddresses->proxmox;
+        $rawConfig = $this->allocationRepository->setServer($server)->getConfig();
+        $existingNetworkKeys = collect($rawConfig)
+            ->pluck('key')
+            ->filter(fn ($key) => preg_match('/^(net|ipconfig)\d+$/', (string) $key))
+            ->values()
+            ->all();
+        $keysToDelete = array_values(array_diff($existingNetworkKeys, $desiredNetworkKeys));
 
-        $this->allocationRepository->setServer($server)->update(
-            ['net0' => "virtio={$macAddress},bridge={$server->node->network},firewall=1"],
-        );
+        if (!empty($keysToDelete)) {
+            $networkPayload['delete'] = implode(',', $keysToDelete);
+        }
+
+        $this->allocationRepository->setServer($server)->update($networkPayload);
+    }
+
+    private function buildInterfaceConfigs(Server $server, ServerAddressesData $addresses, MacAddressData $macAddresses): array
+    {
+        /** @var array<int, AddressData> $ipv4List */
+        $ipv4List = array_values($addresses->ipv4->all());
+        /** @var array<int, AddressData> $ipv6List */
+        $ipv6List = array_values($addresses->ipv6->all());
+
+        $count = max(count($ipv4List), count($ipv6List), 1);
+        $fallbackPrimaryMac = $this->normalizeMac($macAddresses->eloquent ?? $macAddresses->proxmox);
+        $configs = [];
+
+        for ($index = 0; $index < $count; $index++) {
+            $ipv4 = $ipv4List[$index] ?? null;
+            $ipv6 = $ipv6List[$index] ?? null;
+            $mac = $this->resolveInterfaceMac($server, $index, $ipv4, $ipv6, $fallbackPrimaryMac);
+            $ipConfigParts = [];
+            $locked = [];
+
+            if ($ipv4) {
+                $ipConfigParts[] = "ip={$ipv4->address}/{$ipv4->cidr}";
+                if ($index === 0 && trim($ipv4->gateway) !== '') {
+                    $ipConfigParts[] = "gw={$ipv4->gateway}";
+                }
+                $locked[] = $ipv4->address;
+            }
+
+            if ($ipv6) {
+                $ipConfigParts[] = "ip6={$ipv6->address}/{$ipv6->cidr}";
+                if ($index === 0 && trim($ipv6->gateway) !== '') {
+                    $ipConfigParts[] = "gw6={$ipv6->gateway}";
+                }
+                $locked[] = $ipv6->address;
+            }
+
+            if (empty($ipConfigParts) && $index === 0) {
+                $ipConfigParts[] = 'ip=dhcp';
+            }
+
+            $configs[] = [
+                'index' => $index,
+                'net' => "virtio={$mac},bridge={$server->node->network},firewall=1",
+                'ipconfig' => implode(',', $ipConfigParts),
+                'locked' => $locked,
+            ];
+        }
+
+        return $configs;
+    }
+
+    private function resolveInterfaceMac(
+        Server $server,
+        int $index,
+        ?AddressData $ipv4,
+        ?AddressData $ipv6,
+        ?string $fallbackPrimaryMac,
+    ): string {
+        $candidate = $this->normalizeMac($ipv4?->mac_address ?? $ipv6?->mac_address);
+        if ($candidate) {
+            return $candidate;
+        }
+
+        if ($index === 0 && $fallbackPrimaryMac) {
+            return $fallbackPrimaryMac;
+        }
+
+        return $this->deterministicMac($server, $index);
+    }
+
+    private function normalizeMac(?string $mac): ?string
+    {
+        $candidate = strtolower(trim((string) $mac));
+        if ($candidate === '') {
+            return null;
+        }
+
+        return preg_match('/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/', $candidate) === 1
+            ? $candidate
+            : null;
+    }
+
+    private function deterministicMac(Server $server, int $index): string
+    {
+        $seed = md5($server->uuid.'-'.$index);
+        $octets = [];
+
+        for ($i = 0; $i < 6; $i++) {
+            $octets[$i] = hexdec(substr($seed, $i * 2, 2));
+        }
+
+        // Force locally administered unicast MAC.
+        $octets[0] = ($octets[0] & 0b11111110) | 0b00000010;
+
+        return implode(':', array_map(fn ($octet) => sprintf('%02x', $octet), $octets));
     }
 
     public function updateRateLimit(Server $server, ?int $mebibytes = null): void

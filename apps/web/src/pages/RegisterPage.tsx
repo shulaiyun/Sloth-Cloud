@@ -5,9 +5,11 @@ import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { toFriendlyError } from '../lib/friendly-error';
 import { useSite } from '../lib/site-context';
+import { getUiText } from '../lib/ui-text';
 
 export function RegisterPage() {
   const { text, locale } = useSite();
+  const ui = getUiText(locale);
   const { register } = useAuth();
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
@@ -36,12 +38,12 @@ export function RegisterPage() {
   }
 
   return (
-    <section className="auth-shell">
+    <section className="auth-shell auth-shell--split">
       <article className="auth-card">
         <div className="stack-12">
           <span className="eyebrow">{text.nav.register}</span>
           <h1>{text.auth.registerTitle}</h1>
-          <p className="muted">{text.auth.registerSubtitle}</p>
+          <p className="muted">{ui.auth.registerHint}</p>
         </div>
 
         <form className="stack-16" onSubmit={handleSubmit}>

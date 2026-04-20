@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000').replace(/\/+$/, '');
+export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000').replace(/\/+$/, '');
 
 export class ApiError extends Error {
   statusCode: number;
@@ -18,6 +18,8 @@ export interface ApiRequestOptions {
   body?: unknown;
   headers?: HeadersInit;
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  preserveData?: boolean;
+  preserveDataOnError?: boolean;
 }
 
 export interface RemoteState<T> {
@@ -85,6 +87,9 @@ function errorMessageFromPayload(payload: unknown, statusCode: number) {
 export async function requestJson<T>(path: string, options: ApiRequestOptions = {}) {
   const headers = new Headers(options.headers);
   headers.set('Accept', 'application/json');
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    headers.set('X-Sloth-Origin', window.location.origin);
+  }
 
   if (options.body !== undefined) {
     headers.set('Content-Type', 'application/json');
@@ -128,11 +133,11 @@ export function useApiData<T>(path: string | null, options: ApiRequestOptions = 
       return;
     }
 
-    setState({
-      data: null,
+    setState((current) => ({
+      data: options.preserveData ? current.data : null,
       error: null,
-      loading: true,
-    });
+      loading: options.preserveData ? current.data === null : true,
+    }));
 
     requestJson<T>(path, options)
       .then((data) => {
@@ -151,17 +156,17 @@ export function useApiData<T>(path: string | null, options: ApiRequestOptions = 
           return;
         }
 
-        setState({
-          data: null,
+        setState((current) => ({
+          data: options.preserveData && options.preserveDataOnError !== false ? current.data : null,
           error: error.message,
           loading: false,
-        });
+        }));
       });
 
     return () => {
       isCurrent = false;
     };
-  }, [path, options.method]);
+  }, [path, options.method, options.preserveData, options.preserveDataOnError]);
 
   return state;
 }

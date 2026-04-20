@@ -49,8 +49,8 @@ class BootstrapManagedAppCatalog extends Command
                 'workload_mode' => 'deployment',
                 'ingress_enabled' => true,
                 'tls_enabled' => true,
-                'build_cpu_limit' => '1000m',
-                'build_memory_limit' => '1Gi',
+                'build_cpu_limit' => '500m',
+                'build_memory_limit' => '512Mi',
                 'runtime_cpu_limit' => '500m',
                 'runtime_memory_limit' => '512Mi',
                 'bandwidth_label' => 'Shared',
@@ -81,8 +81,8 @@ class BootstrapManagedAppCatalog extends Command
                 'workload_mode' => 'deployment',
                 'ingress_enabled' => true,
                 'tls_enabled' => true,
-                'build_cpu_limit' => '1500m',
-                'build_memory_limit' => '2Gi',
+                'build_cpu_limit' => '500m',
+                'build_memory_limit' => '512Mi',
                 'runtime_cpu_limit' => '1000m',
                 'runtime_memory_limit' => '1Gi',
                 'bandwidth_label' => '2TB Included',
@@ -113,8 +113,8 @@ class BootstrapManagedAppCatalog extends Command
                 'workload_mode' => 'deployment',
                 'ingress_enabled' => true,
                 'tls_enabled' => true,
-                'build_cpu_limit' => '2000m',
-                'build_memory_limit' => '3Gi',
+                'build_cpu_limit' => '500m',
+                'build_memory_limit' => '512Mi',
                 'runtime_cpu_limit' => '1500m',
                 'runtime_memory_limit' => '2Gi',
                 'bandwidth_label' => '5TB Included',
@@ -145,8 +145,8 @@ class BootstrapManagedAppCatalog extends Command
                 'workload_mode' => 'statefulset',
                 'ingress_enabled' => true,
                 'tls_enabled' => true,
-                'build_cpu_limit' => '3000m',
-                'build_memory_limit' => '4Gi',
+                'build_cpu_limit' => '1000m',
+                'build_memory_limit' => '1Gi',
                 'runtime_cpu_limit' => '2000m',
                 'runtime_memory_limit' => '4Gi',
                 'bandwidth_label' => '10TB Included',
@@ -250,7 +250,27 @@ class BootstrapManagedAppCatalog extends Command
             ]
         );
 
+        if (!is_string($product->email_template) || trim($product->email_template) === '') {
+            $product->email_template = $this->defaultEmailTemplateSnippet();
+            $product->save();
+        }
+
         return $product;
+    }
+
+    protected function defaultEmailTemplateSnippet(): string
+    {
+        return implode(PHP_EOL, [
+            "Service panel: {{ \$service_panel_url ?? 'Open Sloth Cloud frontend service page' }}",
+            "Runtime: {{ \$runtime_kind ?? 'managed-app' }}",
+            '@if(!empty($endpoint))',
+            'Endpoint: {{ $endpoint }}',
+            '@endif',
+            '@if(!empty($operation_id))',
+            'Operation ID: {{ $operation_id }}',
+            '@endif',
+            'Open Sloth Cloud service page to review build logs, environment variables, domain binding, and HTTPS status.',
+        ]);
     }
 
     protected function ensureMonthlyPlan(Product $product): Plan
@@ -343,6 +363,8 @@ class BootstrapManagedAppCatalog extends Command
                     'runtime_kind' => 'managed-app',
                 ],
                 'checkout_defaults' => [
+                    'compose_file_path' => '',
+                    'compose_service_name' => '',
                     'runtime_port' => $settings['runtime_port'] ?? 3000,
                     'persistent_storage_size' => $settings['persistent_storage_size'] ?? '5Gi',
                     'replica_limit' => $settings['replica_limit'] ?? 1,

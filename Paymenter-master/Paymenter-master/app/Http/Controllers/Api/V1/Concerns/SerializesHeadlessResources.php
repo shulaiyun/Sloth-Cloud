@@ -323,6 +323,26 @@ trait SerializesHeadlessResources
             'config_options' => $configOptions,
             'operating_system_options' => $operatingSystemOptions,
             'checkout_fields' => $checkoutFields,
+            'vps_app_marketplace' => $this->serializeVpsAppMarketplaceCapability($product),
+        ];
+    }
+
+    protected function serializeVpsAppMarketplaceCapability(Product $product): ?array
+    {
+        $catalogService = app(\App\Services\VpsApps\VpsAppCatalogService::class);
+        if (!$catalogService->isVpsProduct($product)) {
+            return null;
+        }
+
+        $templates = $catalogService->rawTemplateOptions($product);
+
+        return [
+            'enabled' => true,
+            'os_field_name' => 'os',
+            'hostname_field_name' => 'hostname',
+            'primary_app_field_name' => 'primary_app_slug',
+            'addon_app_field_name' => 'addon_app_slugs',
+            'supported_os' => $catalogService->supportedOsOptionsFromTemplates($templates),
         ];
     }
 
@@ -429,6 +449,43 @@ trait SerializesHeadlessResources
         ];
     }
 
+    protected function serializeOperatorOrigin(Service $service): ?array
+    {
+        if (!$service->relationLoaded('properties')) {
+            return null;
+        }
+
+        $propertyMap = [];
+        foreach ($service->properties as $property) {
+            if (!$property->key) {
+                continue;
+            }
+
+            $propertyMap[$property->key] = $property->value;
+        }
+
+        $capsuleId = $propertyMap['operator_capsule_id'] ?? null;
+        $capsuleName = $propertyMap['operator_capsule_name'] ?? null;
+        if (!$capsuleId && !$capsuleName) {
+            return null;
+        }
+
+        return [
+            'capsule_id' => $capsuleId,
+            'capsule_name' => $capsuleName,
+            'entry_kind' => $propertyMap['operator_entry_kind'] ?? null,
+            'stack' => $propertyMap['operator_stack'] ?? null,
+            'business_path' => $propertyMap['operator_business_path'] ?? null,
+            'source' => $propertyMap['operator_source'] ?? null,
+            'plan_summary' => $propertyMap['operator_plan_summary'] ?? null,
+            'preview_url' => $propertyMap['operator_preview_url'] ?? null,
+            'production_url' => $propertyMap['operator_production_url'] ?? null,
+            'repo_url' => $propertyMap['git_repo_url'] ?? null,
+            'bundle_url' => $propertyMap['operator_project_bundle_url'] ?? null,
+            'manifest_url' => $propertyMap['operator_project_manifest_url'] ?? null,
+        ];
+    }
+
     protected function serializeService(Service $service, bool $includeRelations = false): array
     {
         $payload = [
@@ -452,6 +509,12 @@ trait SerializesHeadlessResources
             ] : null,
             'cancellable' => (bool) $service->cancellable,
             'upgradable' => (bool) $service->upgradable,
+            'cancellation' => $service->relationLoaded('cancellation') && $service->cancellation ? [
+                'id' => $service->cancellation->id,
+                'type' => $service->cancellation->type,
+                'reason' => $service->cancellation->reason,
+                'created_at' => optional($service->cancellation->created_at)?->toISOString(),
+            ] : null,
             'provisioning' => $service->latestProvisioningJob ? [
                 'status' => $service->latestProvisioningJob->status,
                 'provider' => $service->latestProvisioningJob->provider,
@@ -460,6 +523,7 @@ trait SerializesHeadlessResources
                 'last_attempt_at' => optional($service->latestProvisioningJob->last_attempt_at)?->toISOString(),
                 'completed_at' => optional($service->latestProvisioningJob->completed_at)?->toISOString(),
             ] : null,
+            'operator_origin' => $this->serializeOperatorOrigin($service),
         ];
 
         if (!$includeRelations) {

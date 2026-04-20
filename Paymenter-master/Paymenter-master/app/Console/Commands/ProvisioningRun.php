@@ -13,7 +13,8 @@ class ProvisioningRun extends Command
         {--limit=10 : Maximum jobs to process in one run}
         {--provider=convoy : Provisioning provider name}
         {--service-id= : Enqueue a specific service ID}
-        {--job-id= : Process a specific provisioning job ID}';
+        {--job-id= : Process a specific provisioning job ID}
+        {--force-reprovision : Clear existing runtime mapping and force a full reprovision when used with --service-id}';
 
     protected $description = 'Run provisioning orchestrator queue and retries';
 
@@ -22,6 +23,7 @@ class ProvisioningRun extends Command
         $provider = (string) $this->option('provider');
         $serviceId = $this->option('service-id');
         $jobId = $this->option('job-id');
+        $forceReprovision = (bool) $this->option('force-reprovision');
         $limit = max((int) $this->option('limit'), 1);
 
         if ($serviceId !== null) {
@@ -40,6 +42,7 @@ class ProvisioningRun extends Command
 
             $job = $orchestrator->enqueueForService($service, $provider, [
                 'trigger' => 'artisan',
+                'force_reprovision' => $forceReprovision,
             ]);
 
             $this->info("Enqueued provisioning job #{$job->id} for service #{$service->id}.");

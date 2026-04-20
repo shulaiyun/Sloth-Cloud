@@ -3,9 +3,9 @@
 namespace Paymenter\Extensions\Others\Affiliates\Listeners;
 
 use App\Events\Order\Created;
-use Illuminate\Support\Facades\Cookie;
 use Paymenter\Extensions\Others\Affiliates\Models\Affiliate;
 use Paymenter\Extensions\Others\Affiliates\Models\AffiliateOrder;
+use Paymenter\Extensions\Others\Affiliates\Support\ReferralCodeResolver;
 
 class AssociateOrderWithAffiliate
 {
@@ -22,17 +22,26 @@ class AssociateOrderWithAffiliate
      */
     public function handle(Created $event): void
     {
-        $referral_code = Cookie::get('referred_by');
+        if (request()->is('api/*')) {
+            return;
+        }
+
+        $referral_code = ReferralCodeResolver::fromRequest();
+        if (!$referral_code) {
+            return;
+        }
 
         /** @var Affiliate */
-        $affiliate = Affiliate::where('code', $referral_code)->first();
+        $affiliate = Affiliate::where('code', $referral_code)
+            ->where('enabled', true)
+            ->first();
         if (!$affiliate || $affiliate->user->id === $event->order->user_id) {
             return;
         }
 
-        AffiliateOrder::create([
-            'order_id' => $event->order->id,
-            'affiliate_id' => $affiliate->id,
-        ]);
+        AffiliateOrder::firstOrCreate(
+            ['order_id' => $event->order->id],
+            ['affiliate_id' => $affiliate->id],
+        );
     }
 }

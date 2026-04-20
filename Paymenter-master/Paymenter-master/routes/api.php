@@ -42,6 +42,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/categories', [CatalogController::class, 'categories']);
         Route::get('/products', [CatalogController::class, 'products']);
         Route::get('/products/{product:slug}', [CatalogController::class, 'product']);
+        Route::get('/products/{product:slug}/vps-app-market', [CatalogController::class, 'vpsAppMarket']);
     });
 
     Route::middleware('auth:api')->group(function () {
@@ -60,11 +61,20 @@ Route::prefix('v1')->group(function () {
         Route::post('/services/{service}/cancel', [HeadlessServiceController::class, 'cancel']);
         Route::delete('/services/{service}/cancel', [HeadlessServiceController::class, 'revokeCancellation']);
         Route::post('/services/{service}/renew', [HeadlessServiceController::class, 'renew']);
+        Route::get('/services/{service}/upgrade-options', [HeadlessServiceController::class, 'upgradeOptions']);
+        Route::post('/services/{service}/upgrade', [HeadlessServiceController::class, 'upgrade']);
+        Route::put('/services/{service}/credentials/password', [HeadlessServiceController::class, 'storePassword']);
+        Route::post('/services/{service}/runtime-mapping/clear', [HeadlessServiceController::class, 'clearRuntimeMapping']);
         Route::post('/services/{service}/actions/{action}', [HeadlessServiceController::class, 'action']);
         Route::get('/services/{service}/operation-logs', [HeadlessServiceController::class, 'operationLogs']);
         Route::post('/services/{service}/operation-logs', [HeadlessServiceController::class, 'storeOperationLog']);
         Route::get('/services/{service}/provisioning', [HeadlessServiceController::class, 'provisioning']);
         Route::post('/services/{service}/provisioning/retry', [HeadlessServiceController::class, 'retryProvisioning']);
+        Route::get('/services/{service}/apps', [HeadlessServiceController::class, 'apps']);
+        Route::post('/services/{service}/apps/reinstall-plan', [HeadlessServiceController::class, 'prepareReinstallApps']);
+        Route::post('/services/{service}/apps/install', [HeadlessServiceController::class, 'installApps']);
+        Route::post('/services/{service}/apps/{install}/retry', [HeadlessServiceController::class, 'retryAppInstall']);
+        Route::get('/services/{service}/apps/{install}/logs', [HeadlessServiceController::class, 'appInstallLogs']);
 
         Route::get('/invoices', [HeadlessInvoiceController::class, 'index']);
         Route::get('/invoices/{invoice}', [HeadlessInvoiceController::class, 'show']);

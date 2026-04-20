@@ -2,6 +2,7 @@
 
 namespace App\Services\Provisioning;
 
+use App\Helpers\ExtensionHelper;
 use App\Models\ProvisioningMapping;
 use App\Models\Service;
 use Illuminate\Support\Str;
@@ -84,9 +85,11 @@ class ProvisioningMappingResolver
      */
     public function buildPropertyOverrides(Service $service, ProvisioningMapping $mapping): array
     {
+        $service->loadMissing(['properties', 'configs.configOption', 'configs.configValue']);
         $rawConfig = $mapping->config ?? [];
         $config = is_array($rawConfig) ? $rawConfig : [];
         $properties = is_array($config['properties'] ?? null) ? $config['properties'] : [];
+        $serviceProperties = ExtensionHelper::getServiceProperties($service);
 
         if ($mapping->provider === ProvisioningMapping::PROVIDER_MANAGED_APP) {
             $properties['runtime_kind'] = 'managed-app';
@@ -110,7 +113,17 @@ class ProvisioningMappingResolver
             $properties['node'] = $mapping->node_ref;
         }
 
-        if ($mapping->template_ref) {
+        $requestedOs = trim((string) (
+            $serviceProperties['selected_os']
+            ?? $serviceProperties['requested_os']
+            ?? $serviceProperties['os']
+            ?? ''
+        ));
+
+        if ($requestedOs !== '') {
+            $properties['selected_os'] = $requestedOs;
+            $properties['os'] = $requestedOs;
+        } elseif ($mapping->template_ref) {
             $properties['os'] = $mapping->template_ref;
         }
 
@@ -125,6 +138,7 @@ class ProvisioningMappingResolver
             'ipv6',
             'start_on_create',
             'hostname',
+            'account_password',
         ];
 
         foreach ($directKeys as $key) {
@@ -135,11 +149,145 @@ class ProvisioningMappingResolver
             $properties[$key] = $config[$key];
         }
 
+        foreach ($this->serviceConfigOverrides($service, $directKeys) as $key => $value) {
+            $properties[$key] = $value;
+        }
+
+        $requestedHostname = trim((string) (
+            $this->firstPropertyValue($service, ['domain', 'domain_name', 'fqdn', 'hostname', 'host_name', 'server_name'])
+            ?? $serviceProperties['domain']
+            ?? $serviceProperties['domain_name']
+            ?? $serviceProperties['fqdn']
+            ?? $serviceProperties['hostname']
+            ?? $serviceProperties['host_name']
+            ?? $serviceProperties['server_name']
+            ?? $config['hostname']
+            ?? $config['domain']
+            ?? ''
+        ));
+        if ($requestedHostname !== '') {
+            $properties['hostname'] = $requestedHostname;
+        }
+
+        $requestedPassword = trim((string) (
+            $this->firstPropertyValue($service, ['account_password', 'server_password', 'password', 'root_password'])
+            ??
+            $serviceProperties['account_password']
+            ?? $serviceProperties['server_password']
+            ?? $serviceProperties['password']
+            ?? $serviceProperties['root_password']
+            ?? $config['account_password']
+            ?? $config['server_password']
+            ?? $config['password']
+            ?? ''
+        ));
+        if ($requestedPassword !== '') {
+            $properties['account_password'] = $requestedPassword;
+            $properties['server_password'] = $requestedPassword;
+            $properties['password'] = $requestedPassword;
+        }
+
         if (!isset($properties['hostname']) || !is_string($properties['hostname']) || trim($properties['hostname']) === '') {
             $properties['hostname'] = $this->defaultHostname($service);
         }
 
         return $properties;
+    }
+
+    /**
+     * @param  array<int, string>  $allowedKeys
+     * @return array<string, mixed>
+     */
+    protected function serviceConfigOverrides(Service $service, array $allowedKeys): array
+    {
+        $overrides = [];
+        $allowedLookup = array_fill_keys($allowedKeys, true);
+
+        foreach ($service->configs as $serviceConfig) {
+            $option = $serviceConfig->configOption;
+            $value = $serviceConfig->configValue;
+            if (!$option || !$value) {
+                continue;
+            }
+
+            $key = $this->normalizeConfigKey((string) ($option->env_variable ?: $option->name));
+            if ($key === null || !isset($allowedLookup[$key])) {
+                continue;
+            }
+
+            $rawValue = trim((string) ($value->env_variable ?: $value->name));
+            if ($rawValue === '') {
+                continue;
+            }
+
+            $overrides[$key] = $this->normalizeConfigValue($key, $rawValue);
+        }
+
+        return $overrides;
+    }
+
+    protected function normalizeConfigKey(string $key): ?string
+    {
+        $normalized = Str::of($key)->lower()->replaceMatches('/[^a-z0-9]+/', '_')->trim('_')->value();
+
+        return match ($normalized) {
+            'bandwidth', 'bandwidth_tier', 'bandwidth_limit', 'traffic', 'traffic_package', 'transfer' => 'bandwidth',
+            'ipv4', 'ip', 'ip_count', 'ipv4_count', 'additional_ip', 'additional_ipv4', 'public_ipv4' => 'ipv4',
+            'ipv6', 'ipv6_count', 'additional_ipv6' => 'ipv6',
+            'cpu', 'vcpu', 'cpu_cores' => 'cpu',
+            'ram', 'memory', 'memory_mib' => 'ram',
+            'disk', 'storage', 'disk_mib' => 'disk',
+            'snapshot', 'snapshots' => 'snapshot',
+            'backups', 'backup' => 'backups',
+            'hostname', 'host_name', 'fqdn', 'domain', 'domain_name', 'server_name' => 'hostname',
+            default => null,
+        };
+    }
+
+    protected function normalizeConfigValue(string $key, string $value): mixed
+    {
+        if (in_array($key, ['bandwidth', 'ipv4', 'ipv6', 'cpu', 'ram', 'disk', 'snapshot', 'backups'], true)) {
+            if (is_numeric($value)) {
+                return (int) $value;
+            }
+
+            if (preg_match('/\d+/', $value, $matches) === 1) {
+                return (int) $matches[0];
+            }
+        }
+
+        return $value;
+    }
+
+    protected function firstPropertyValue(Service $service, array $keys): ?string
+    {
+        if ($service->relationLoaded('properties') === false) {
+            $service->loadMissing('properties');
+        }
+
+        $normalizedKeys = array_map(static fn (string $key) => mb_strtolower($key), $keys);
+        $lookup = array_fill_keys($normalizedKeys, true);
+        $resolved = [];
+
+        foreach ($service->properties as $property) {
+            $key = mb_strtolower(trim((string) ($property->key ?? '')));
+            if ($key === '' || !isset($lookup[$key])) {
+                continue;
+            }
+
+            $value = trim((string) ($property->value ?? ''));
+            if ($value !== '' && !isset($resolved[$key])) {
+                $resolved[$key] = $value;
+            }
+        }
+
+        foreach ($normalizedKeys as $key) {
+            if (isset($resolved[$key])) {
+                return $resolved[$key];
+            }
+        }
+
+        return null;
     }
 
     protected function scoreMapping(Service $service, ProvisioningMapping $mapping): int

@@ -1,0 +1,238 @@
+.operator-console-page {
+  display: grid;
+  gap: 24px;
+}
+
+.operator-console-shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1.2fr) minmax(320px, 0.95fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.operator-console-rail,
+.operator-console-center,
+.operator-console-stage {
+  display: grid;
+  gap: 18px;
+}
+
+.operator-console-rail__header,
+.operator-console-panel {
+  border-radius: 28px;
+  border: 1px solid var(--operator-console-panel-border);
+  background: var(--operator-console-panel);
+  color: var(--operator-console-ink);
+  box-shadow: 0 24px 68px rgba(2, 10, 19, 0.34);
+}
+
+.operator-console-rail__header,
+.operator-console-panel {
+  padding: 20px;
+}
+
+.operator-console-rail__header p,
+.operator-console-workspace p,
+.operator-console-chat-card p,
+.operator-console-chat-card small,
+.operator-console-diagnostics p,
+.operator-console-diagnostics small,
+.operator-console-job p,
+.operator-console-job small,
+.operator-console-empty p,
+.operator-console-hint,
+.operator-console-workspace span,
+.operator-console-keyvals span {
+  color: var(--operator-console-muted);
+}
+
+.operator-console-workspace-list,
+.operator-console-chat-stack,
+.operator-console-job-list,
+.operator-console-stage__stack {
+  display: grid;
+  gap: 12px;
+}
+
+.operator-console-workspace {
+  width: 100%;
+  text-align: left;
+  border-radius: 22px;
+  border: 1px solid rgba(123, 214, 255, 0.1);
+  background: var(--operator-console-soft);
+  color: var(--operator-console-ink);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.operator-console-workspace.active,
+.operator-console-tab.active {
+  border-color: rgba(123, 232, 210, 0.58);
+  background: linear-gradient(135deg, rgba(103, 178, 255, 0.2), rgba(123, 232, 210, 0.16));
+}
+
+.operator-console-workspace__top,
+.operator-console-workspace__meta,
+.operator-console-panel__head,
+.operator-console-stage-card__head,
+.operator-console-job__top,
+.operator-console-form__actions,
+.operator-console-kpi-grid,
+.operator-console-tabs,
+.operator-console-form__row {
+  display: flex;
+  gap: 12px;
+}
+
+.operator-console-workspace__top,
+.operator-console-workspace__meta,
+.operator-console-panel__head,
+.operator-console-stage-card__head,
+.operator-console-job__top,
+.operator-console-form__actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.operator-console-tabs {
+  flex-wrap: wrap;
+}
+
+.operator-console-tab {
+  border-radius: 999px;
+  border: 1px solid rgba(123, 214, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--operator-console-ink);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.operator-console-form,
+.operator-console-form label {
+  display: grid;
+  gap: 10px;
+}
+
+.operator-console-form__row {
+  align-items: start;
+}
+
+.operator-console-form__row > label {
+  flex: 1 1 0;
+}
+
+.operator-console-form__row--triple > label {
+  flex: 1 1 0;
+}
+
+.operator-console-form input,
+.operator-console-form textarea,
+.operator-console-form select {
+  border-radius: 18px;
+  border: 1px solid rgba(123, 214, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--operator-console-ink);
+  padding: 14px 16px;
+}
+
+.operator-console-form textarea {
+  resize: vertical;
+}
+
+.operator-console-chat-card,
+.operator-console-stage-card,
+.operator-console-empty {
+  border-radius: 24px;
+  border: 1px solid rgba(123, 214, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.operator-console-chat-card--user {
+  background: linear-gradient(135deg, rgba(103, 178, 255, 0.18), rgba(255, 255, 255, 0.04));
+}
+
+.operator-console-empty--tall {
+  min-height: 240px;
+  align-content: center;
+}
+
+.operator-console-kpi-grid,
+.operator-console-keyvals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operator-console-kpi-grid article,
+.operator-console-keyvals div {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.operator-console-preview {
+  width: 100%;
+  min-height: 280px;
+  border: 0;
+  border-radius: 18px;
+  background: #09131d;
+}
+
+.operator-console-job {
+  border-radius: 18px;
+  border: 1px solid rgba(123, 214, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.operator-console-panel--sticky {
+  position: sticky;
+  top: 18px;
+}
+
+.operator-console-hint {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+@media (max-width: 1280px) {
+  .operator-console-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .operator-console-stage {
+    grid-column: 1 / -1;
+  }
+
+  .operator-console-panel--sticky {
+    position: static;
+  }
+}
+
+@media (max-width: 880px) {
+  .operator-console-shell,
+  .operator-console-form__row,
+  .operator-console-kpi-grid,
+  .operator-console-keyvals {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-console-workspace__top,
+  .operator-console-workspace__meta,
+  .operator-console-panel__head,
+  .operator-console-stage-card__head,
+  .operator-console-job__top,
+  .operator-console-form__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

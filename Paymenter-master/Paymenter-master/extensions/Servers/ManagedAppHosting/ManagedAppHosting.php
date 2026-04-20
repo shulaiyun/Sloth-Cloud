@@ -4,6 +4,9 @@ namespace Paymenter\Extensions\Servers\ManagedAppHosting;
 
 use App\Classes\Extension\Server;
 use App\Models\Product;
+use App\Models\ProvisioningMapping;
+use App\Models\Service;
+use App\Services\Provisioning\ProvisioningOrchestrator;
 
 class ManagedAppHosting extends Server
 {
@@ -126,8 +129,8 @@ class ManagedAppHosting extends Server
                 'label' => 'Public Git Repository URL',
                 'required' => true,
                 'placeholder' => 'https://github.com/example/app',
-                'validation' => ['required', 'url', 'max:2048', 'starts_with:https://', 'not_regex:/@/'],
-                'description' => 'Only public repositories are supported in v1. Build and deploy happen inside Sloth Cloud.',
+                'validation' => ['required', 'url', 'max:2048', 'starts_with:https://,http://', 'not_regex:/@/'],
+                'description' => 'Public Git repositories and HTTP/HTTPS source archives are supported in v1. Build and deploy happen inside Sloth Cloud.',
             ],
             [
                 'name' => 'git_branch',
@@ -152,6 +155,24 @@ class ManagedAppHosting extends Server
                 'required' => true,
                 'default' => 'Dockerfile',
                 'validation' => ['required', 'string', 'max:255'],
+            ],
+            [
+                'name' => 'compose_file_path',
+                'type' => 'text',
+                'label' => 'Compose File Path (Optional)',
+                'required' => false,
+                'placeholder' => 'docker-compose.yml',
+                'validation' => ['nullable', 'string', 'max:255'],
+                'description' => 'When provided, Sloth Cloud parses the compose file and maps the selected service to a managed app runtime.',
+            ],
+            [
+                'name' => 'compose_service_name',
+                'type' => 'text',
+                'label' => 'Compose Service Name (Optional)',
+                'required' => false,
+                'placeholder' => 'web',
+                'validation' => ['nullable', 'string', 'max:120'],
+                'description' => 'Optional service name in the compose file. Leave empty to auto-select the first buildable service.',
             ],
             [
                 'name' => 'runtime_port',
@@ -201,14 +222,6 @@ class ManagedAppHosting extends Server
                 'validation' => ['nullable', 'string', 'max:4000'],
             ],
             [
-                'name' => 'initial_domain',
-                'type' => 'text',
-                'label' => 'Initial Domain',
-                'required' => false,
-                'placeholder' => 'app.example.com',
-                'validation' => ['nullable', 'string', 'max:255'],
-            ],
-            [
                 'name' => 'persistent_storage_size',
                 'type' => 'text',
                 'label' => 'Persistent Storage Size',
@@ -242,5 +255,32 @@ class ManagedAppHosting extends Server
     public function testConfig(): bool|string
     {
         return true;
+    }
+
+    public function terminateServer(Service $service, $settings, $properties): array
+    {
+        $orchestrator = app(ProvisioningOrchestrator::class);
+        $provider = $orchestrator->providerForService($service);
+
+        if ($provider !== ProvisioningMapping::PROVIDER_MANAGED_APP) {
+            return [
+                'success' => false,
+                'message' => 'Service is not mapped to the managed-app runtime provider.',
+            ];
+        }
+
+        $result = $orchestrator->deprovisionManagedApp($service, [
+            'trigger' => 'server-extension.terminate',
+            'source' => 'paymenter.extension',
+            'max_attempts' => max((int) config('provisioning.max_attempts', 3), 1),
+        ]);
+
+        return [
+            'success' => true,
+            'status' => data_get($result, 'runtime.status', 'deleting'),
+            'message' => (string) (data_get($result, 'message') ?: 'Managed App deletion submitted.'),
+            'runtime' => data_get($result, 'runtime'),
+            'properties' => data_get($result, 'properties'),
+        ];
     }
 }

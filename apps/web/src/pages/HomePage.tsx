@@ -1,42 +1,111 @@
 import { Link } from 'react-router-dom';
 
 import { BrandLogo } from '../components/BrandLogo';
+import { CountryFlagIcon } from '../components/FlagIcon';
 import { useApiData } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { brand } from '../lib/brand';
 import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
+import { getUiText, productLineFor } from '../lib/ui-text';
 import { useSite } from '../lib/site-context';
-import type { HomeResponse } from '../lib/types';
+import { getCountryMeta, inferCountryCode } from '../lib/visual-metadata';
+import type { CatalogProductsResponse, CategorySummary, HomeResponse, ProductSummary } from '../lib/types';
 
-function emptyProductsTitle(locale: string) {
-  return locale.startsWith('zh')
-    ? '\u6682\u65e0\u53ef\u552e\u5546\u54c1'
-    : 'No products available yet';
+function productTitle(product: ProductSummary, locale: ReturnType<typeof useSite>['locale'], fallback: string) {
+  return localizeText(product.name, locale, fallback);
 }
 
-function emptyProductsBody(locale: string) {
-  return locale.startsWith('zh')
-    ? '\u8bf7\u5728\u8ba1\u8d39\u540e\u53f0\u5b8c\u6210\u5546\u54c1\u4e0a\u67b6\u4e0e\u4ef7\u683c\u914d\u7f6e\u540e\u518d\u91cd\u8bd5\u3002'
-    : 'Please publish products and pricing in billing admin, then refresh this page.';
-}
+function deriveNodeHighlights(
+  products: ProductSummary[],
+  categories: CategorySummary[],
+  locale: ReturnType<typeof useSite>['locale'],
+) {
+  const map = new Map<string, {
+    code: string;
+    countryName: string;
+    count: number;
+    productSlug: string | null;
+    sampleTitles: string[];
+  }>();
 
-function emptyCategoriesTitle(locale: string) {
-  return locale.startsWith('zh')
-    ? '\u6682\u65e0\u53ef\u89c1\u5206\u7c7b'
-    : 'No visible categories';
-}
+  for (const product of products) {
+    const localizedName = localizeText(product.name, locale, '');
+    const localizedDescription = localizeText(product.description, locale, '');
+    const countryCode = product.countryCode
+      ?? product.category?.countryCode
+      ?? inferCountryCode(product.slug, product.category?.slug, localizedName, localizedDescription);
 
-function emptyCategoriesBody(locale: string) {
-  return locale.startsWith('zh')
-    ? '\u8bf7\u68c0\u67e5\u5206\u7c7b\u662f\u5426\u7ed1\u5b9a\u53ef\u89c1\u5546\u54c1\u3002'
-    : 'Check whether categories are linked to visible products.';
+    if (!countryCode) {
+      continue;
+    }
+
+    const country = getCountryMeta(countryCode);
+    if (!country) {
+      continue;
+    }
+
+    const existing = map.get(countryCode) ?? {
+      code: countryCode,
+      countryName: country.name,
+      count: 0,
+      productSlug: null,
+      sampleTitles: [] as string[],
+    };
+
+    existing.count += 1;
+    existing.productSlug ??= product.slug;
+    const title = productTitle(product, locale, '');
+    if (title.trim() !== '' && !existing.sampleTitles.includes(title) && existing.sampleTitles.length < 2) {
+      existing.sampleTitles.push(title);
+    }
+    map.set(countryCode, existing);
+  }
+
+  for (const category of categories) {
+    const countryCode = category.countryCode?.toUpperCase() ?? inferCountryCode(category.slug, localizeText(category.name, locale, ''), localizeText(category.description, locale, ''));
+    if (!countryCode) {
+      continue;
+    }
+    const country = getCountryMeta(countryCode);
+    if (!country) {
+      continue;
+    }
+
+    const existing = map.get(countryCode) ?? {
+      code: countryCode,
+      countryName: country.name,
+      count: 0,
+      productSlug: null,
+      sampleTitles: [] as string[],
+    };
+
+    if (category.productCount > existing.count) {
+      existing.count = category.productCount;
+    }
+    if (existing.countryName.trim() === '') {
+      existing.countryName = country.name;
+    }
+
+    map.set(countryCode, existing);
+  }
+
+  return [...map.values()]
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+      return left.countryName.localeCompare(right.countryName);
+    })
+    .slice(0, 12);
 }
 
 export function HomePage() {
-  const { text, formatMoney, locale } = useSite();
+  const { text, locale } = useSite();
+  const ui = getUiText(locale);
   const { isAuthenticated } = useAuth();
   const { data, error, loading } = useApiData<HomeResponse>('/api/v1/catalog/home');
+  const catalogProductsState = useApiData<CatalogProductsResponse>('/api/v1/catalog/products');
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
@@ -47,218 +116,155 @@ export function HomePage() {
   }
 
   const featuredProducts = data.data.featuredProducts;
+  const allCatalogProducts = Array.isArray(catalogProductsState.data?.data) && catalogProductsState.data.data.length > 0
+    ? catalogProductsState.data.data
+    : featuredProducts;
+  const homeProducts = allCatalogProducts.length > 0 ? allCatalogProducts : featuredProducts;
   const categories = data.data.categories;
-  const managedCategory = categories.find((category) => category.slug === 'app-hosting') ?? null;
-  const managedProducts = featuredProducts.filter((product) => product.category?.slug === 'app-hosting');
-  const hasProducts = featuredProducts.length > 0;
-  const hasCategories = categories.length > 0;
+  const vpsProducts = homeProducts.filter((product) => productLineFor(product.category?.slug, product.slug) === 'vps');
+  const nodeHighlights = deriveNodeHighlights(homeProducts, categories, locale);
 
-  const metricCards = [
+  const lineCards = [
     {
-      label: text.home.categoryTitle,
-      value: String(categories.length),
-      hint: text.home.categorySubtitle,
-      tone: 'catalog',
+      key: 'launch' as const,
+      badge: locale.startsWith('zh') ? '计划 -> 预览 -> 部署' : 'Plan -> Preview -> Deploy',
+      title: locale.startsWith('zh') ? 'AI 工作台' : 'AI Workspace',
+      body: locale.startsWith('zh')
+        ? '普通用户先描述目标，AI 负责计划、生成可交互第一版、共享预览和后续上线建议。'
+        : 'Describe the goal first, then let AI handle the plan, interactive first version, shared preview, and next launch steps.',
+      href: '/operator',
+      count: null,
     },
     {
-      label: text.home.featuredTitle,
-      value: String(featuredProducts.length),
-      hint: text.home.featuredSubtitle,
-      tone: 'products',
+      key: 'vps' as const,
+      badge: null,
+      title: ui.home.vpsTitle as string,
+      body: ui.home.vpsBody as string,
+      href: '/catalog',
+      count: vpsProducts.length,
     },
-  ] as const;
+  ];
+
+  const heroTitle = locale.startsWith('zh')
+    ? '把想法、项目和旧服务器直接变成在线服务'
+    : 'Turn ideas, projects, and existing servers into live services';
+  const heroSubtitle = locale.startsWith('zh')
+    ? '树懒云把 AI 计划、预览部署、正式发布、接管迁移和后续运维放进同一个前台。小白能看懂，专业用户也能继续深挖。'
+    : 'Sloth Cloud puts AI planning, preview deploys, production cutover, server takeover, migration, and ongoing operations into one portal.';
 
   return (
-    <div className="stack-24">
-      <section className="hero-card">
+    <div className="stack-32 home-page">
+      <section className="hero-card hero-card--focus">
         <div className="hero-copy">
-          <span className="eyebrow">{text.home.kicker}</span>
-          <h1>{text.home.title}</h1>
-          <p>{text.home.subtitle}</p>
+          <span className="eyebrow">{locale.startsWith('zh') ? 'AI 应用生成与部署平台' : 'AI app generation and deployment platform'}</span>
+          <h1>{heroTitle}</h1>
+          <p>{heroSubtitle}</p>
           <div className="action-row">
-            <Link className="button primary" to="/catalog">
-              {text.home.primaryCta}
+            <Link className="button primary" to="/operator">{locale.startsWith('zh') ? '进入 AI 工作台' : 'Open AI workspace'}</Link>
+            <Link className="button secondary" to={isAuthenticated ? '/services' : '/login'}>
+              {isAuthenticated
+                ? (locale.startsWith('zh') ? '查看运行中的服务' : 'Open my running services')
+                : text.home.secondaryCta}
             </Link>
-            {!isAuthenticated ? (
-              <Link className="button secondary" to="/login">
-                {text.home.secondaryCta}
-              </Link>
-            ) : null}
           </div>
         </div>
 
-        <div className="hero-panel">
-          <div className="glass-panel brand-panel">
-            <div className="brand-feature">
-              <span className="brand-mark brand-mark--hero">
-                <BrandLogo variant="hero" />
-              </span>
-              <div className="brand-feature-copy">
-                <span className="panel-kicker">{brand.nameEnCompact}</span>
-                <strong className="brand-feature-name">{brand.nameCn}</strong>
-                <span className="brand-feature-en">{brand.nameEn}</span>
-                <p className="brand-feature-slogan">{brand.sloganCn}</p>
-                <p className="brand-feature-note">{brand.sloganEn}</p>
-              </div>
-            </div>
-            <div className="brand-signal-list" aria-label="Brand capability highlights">
-              <span className="brand-signal">{locale.startsWith('zh') ? '\u7edf\u4e00\u5546\u4e1a\u8d26\u672c' : 'Unified commerce ledger'}</span>
-              <span className="brand-signal">{locale.startsWith('zh') ? '\u81ea\u52a8\u5316\u5f00\u901a\u7f16\u6392' : 'Automated provisioning orchestrator'}</span>
-              <span className="brand-signal">{locale.startsWith('zh') ? '\u7edf\u4e00\u8fd0\u884c\u65f6\u63a7\u5236 API' : 'Unified runtime control API'}</span>
-            </div>
+        <aside className="brand-panel">
+          <span style={{ width: 92, height: 92, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <BrandLogo variant="hero" />
+          </span>
+          <div>
+            <span className="panel-kicker">{brand.nameEnCompact}</span>
+            <strong className="brand-feature-name">{brand.nameCn}</strong>
+            <span className="brand-feature-en">{brand.nameEn}</span>
           </div>
+        </aside>
+      </section>
+      <section className="page-section node-market-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">{locale.startsWith('zh') ? '热门节点' : 'Popular locations'}</p>
+            <h2>{locale.startsWith('zh') ? '先按国家节点挑，再进入具体套餐' : 'Start with the country, then drill into the matching plans'}</h2>
+          </div>
+          <Link className="button ghost" to="/catalog">
+            {locale.startsWith('zh') ? '查看全部节点' : 'Browse all locations'}
+          </Link>
+        </div>
+        <div className="node-market-grid">
+          {nodeHighlights.length > 0 ? nodeHighlights.map((node) => (
+            <article className="node-market-card" key={node.code}>
+              <div className="choice-card__headline">
+                <CountryFlagIcon countryCode={node.code} />
+                <div className="stack-8">
+                  <strong>{node.countryName}</strong>
+                  <span>{locale.startsWith('zh') ? `${node.count} 个可见套餐` : `${node.count} visible plans`}</span>
+                </div>
+              </div>
+              {node.sampleTitles.length > 0 ? (
+                <div className="stack-8">
+                  {node.sampleTitles.map((title) => (
+                    <p className="muted node-market-card__plan" key={`${node.code}-${title}`}>{title}</p>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {locale.startsWith('zh') ? '当前没有可售套餐。' : 'No sellable plans are currently published for this node.'}
+                </p>
+              )}
+              <Link className="button secondary" to={`/catalog?node=${encodeURIComponent(node.code)}`}>
+                {locale.startsWith('zh') ? '查看该节点套餐' : 'View plans in this location'}
+              </Link>
+            </article>
+          )) : (
+            <article className="empty-state compact">
+              <h3>{locale.startsWith('zh') ? '暂时没有可展示的节点' : 'No node highlights are available yet'}</h3>
+              <p>{locale.startsWith('zh') ? '等真实商品发布后，这里会自动显示。' : 'This section updates automatically once live regional products are published.'}</p>
+            </article>
+          )}
         </div>
       </section>
 
-      <section className="section-frame section-shell">
+      <section className="page-section">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">{locale.startsWith('zh') ? '\u8fd0\u8425\u603b\u89c8' : 'Operations Overview'}</p>
-            <h2>{locale.startsWith('zh') ? `${brand.nameCn} \u4ea7\u54c1\u89c4\u6a21` : `${brand.nameEn} Product Footprint`}</h2>
+            <p className="eyebrow">{locale.startsWith('zh') ? '两条主入口' : 'Two primary entry points'}</p>
+            <h2>{locale.startsWith('zh') ? '普通用户走 AI 工作台，专业用户继续挑 VPS' : 'Start with the AI workspace for app ideas, or browse VPS directly'}</h2>
           </div>
         </div>
-        <div className="metrics-grid">
-          {metricCards.map((item) => (
-            <article className={`metric-card metric-card--${item.tone}`} key={item.label}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-              <p>{item.hint}</p>
+        <div className="line-grid">
+          {lineCards.map((line) => (
+            <article className={`line-card line-card--${line.key}`} key={line.key}>
+              {line.count !== null ? (
+                <span className="chip">{line.count} {text.common.products}</span>
+              ) : (
+                <span className="chip">{line.badge}</span>
+              )}
+              <h3>{line.title}</h3>
+              <p>{line.body}</p>
+              <Link className="button ghost" to={line.href}>
+                {text.common.open}
+              </Link>
             </article>
           ))}
         </div>
       </section>
 
-      <section className="section-frame section-shell section-products">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">{text.home.featuredTitle}</p>
-            <h2>{text.home.featuredSubtitle}</h2>
-          </div>
+      <section className="page-section assurance-band">
+        <div>
+          <p className="eyebrow">{ui.home.assuranceTitle}</p>
+          <h2>{ui.home.assuranceSubtitle}</h2>
         </div>
-        <div className="card-grid product-grid">
-          {hasProducts ? (
-            featuredProducts.map((product) => (
-              <article className="product-card" key={product.id}>
-                <div className="chip-row">
-                  {product.category ? (
-                    <span className="chip">
-                      {localizeText(product.category.name, locale, product.category.name)}
-                    </span>
-                  ) : null}
-                  <span className="chip">
-                    {localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}
-                  </span>
-                </div>
-                <h3>{localizeText(product.name, locale, product.name)}</h3>
-                <p>{localizeText(product.description, locale, product.description)}</p>
-                <div className="card-footer">
-                  <strong>
-                    {formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}
-                  </strong>
-                  <Link className="button ghost" to={`/product/${product.slug}`}>
-                    {text.common.view}
-                  </Link>
-                </div>
-              </article>
-            ))
-          ) : (
-            <article className="product-card">
-              <h3>{emptyProductsTitle(locale)}</h3>
-              <p>{emptyProductsBody(locale)}</p>
-              <div className="card-footer">
-                <Link className="button secondary" to="/catalog">
-                  {text.nav.catalog}
-                </Link>
-              </div>
-            </article>
-          )}
+        <div className="assurance-list">
+          {(ui.home.assuranceItems as string[]).map((item) => (
+            <span key={item}>{item}</span>
+          ))}
         </div>
-      </section>
-
-      <section className="section-frame section-shell section-products">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91' : 'Managed App Hosting'}</p>
-            <h2>
-              {locale.startsWith('zh')
-                ? '\u5728\u6811\u61d2\u4e91\u524d\u53f0\u7ba1\u7406\u5e94\u7528\u3001\u57df\u540d\u3001HTTPS \u4e0e\u6269\u5bb9'
-                : 'Run your app with domain, HTTPS, logs, env, and scaling in one panel'}
-            </h2>
-          </div>
-          <Link className="button ghost" to={managedCategory ? `/catalog/${managedCategory.slug}` : '/catalog'}>
-            {locale.startsWith('zh') ? '\u8fdb\u5165\u4ea7\u54c1\u7ebf' : 'Open product line'}
-          </Link>
-        </div>
-        <div className="chip-row">
-          <span className="chip">{locale.startsWith('zh') ? '\u5e94\u7528\u5b9e\u4f8b' : 'Application instance'}</span>
-          <span className="chip">{locale.startsWith('zh') ? '\u65e5\u5fd7' : 'Logs'}</span>
-          <span className="chip">{locale.startsWith('zh') ? '\u73af\u5883\u53d8\u91cf' : 'Environment variables'}</span>
-          <span className="chip">{locale.startsWith('zh') ? '\u57df\u540d + HTTPS' : 'Domain + HTTPS'}</span>
-          <span className="chip">{locale.startsWith('zh') ? '\u6269\u5bb9' : 'Scaling'}</span>
-        </div>
-        <div className="card-grid product-grid">
-          {managedProducts.length > 0 ? (
-            managedProducts.map((product) => (
-              <article className="product-card" key={product.id}>
-                <div className="chip-row">
-                  <span className="chip">{product.slug}</span>
-                  <span className="chip">
-                    {localizeText(product.pricing?.planName ?? '', locale, text.common.defaultPlan)}
-                  </span>
-                </div>
-                <h3>{localizeText(product.name, locale, product.name)}</h3>
-                <p>{localizeText(product.description, locale, product.description)}</p>
-                <div className="card-footer">
-                  <strong>
-                    {formatMoney(product.pricing?.price ?? null, product.pricing?.currencyCode ?? 'USD')}
-                  </strong>
-                  <Link className="button ghost" to={`/product/${product.slug}`}>
-                    {text.common.inspect}
-                  </Link>
-                </div>
-              </article>
-            ))
-          ) : (
-            <article className="product-card">
-              <h3>{locale.startsWith('zh') ? '\u6258\u7ba1\u5bb9\u5668\u4e91\u5957\u9910\u5373\u5c06\u4e0a\u7ebf' : 'Managed app plans are being prepared'}</h3>
-              <p>
-                {locale.startsWith('zh')
-                  ? '\u5957\u9910\u6b63\u5728\u914d\u7f6e\u4e2d\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u6216\u8054\u7cfb\u5ba2\u670d\u5f00\u901a\u3002'
-                  : 'Plans are being configured. Please refresh later or contact support.'}
-              </p>
-            </article>
-          )}
-        </div>
-      </section>
-
-      <section className="section-frame section-shell section-categories">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">{text.home.categoryTitle}</p>
-            <h2>{text.home.categorySubtitle}</h2>
-          </div>
-        </div>
-        <div className="card-grid category-grid">
-          {hasCategories ? (
-            categories.map((category) => (
-              <article className="category-card" key={category.id}>
-                <h3>{localizeText(category.name, locale, category.name)}</h3>
-                <p>{localizeText(category.description, locale, category.description)}</p>
-                <strong>
-                  {category.productCount} {text.common.products}
-                </strong>
-                <Link className="button ghost" to={`/catalog/${category.slug}`}>
-                  {text.common.open}
-                </Link>
-              </article>
-            ))
-          ) : (
-            <article className="category-card">
-              <h3>{emptyCategoriesTitle(locale)}</h3>
-              <p>{emptyCategoriesBody(locale)}</p>
-            </article>
-          )}
-        </div>
+        {categories.length === 0 ? (
+          <article className="empty-state compact">
+            <h3>{ui.home.emptyCategoriesTitle}</h3>
+            <p>{ui.home.emptyCategoriesBody}</p>
+          </article>
+        ) : null}
       </section>
     </div>
   );

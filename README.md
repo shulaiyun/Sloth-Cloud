@@ -27,19 +27,20 @@ E:\vps
 - `apps/api`: Fastify 5 + TypeScript
 - 共享策略: 一期先以清晰的 BFF contract 为核心，等接口稳定后再抽取共享 types package
 - 运行方式: `corepack pnpm`
+  说明: 若本机没有 `corepack`，直接使用 `pnpm` 即可
 
 ## 快速启动
 
 1. 安装依赖
 
-```powershell
-corepack pnpm install
+```bash
+pnpm install
 ```
 
 2. 启动前端与 BFF
 
-```powershell
-corepack pnpm dev
+```bash
+pnpm dev
 ```
 
 3. 默认地址
@@ -59,4 +60,3 @@ corepack pnpm dev
 - [接口约定](E:\vps\docs\interface-contract.md)
 - [实施计划](E:\vps\docs\implementation-plan.md)
 - [Paymenter 接口缺口分析](E:\vps\docs\paymenter-gap-analysis.md)
-

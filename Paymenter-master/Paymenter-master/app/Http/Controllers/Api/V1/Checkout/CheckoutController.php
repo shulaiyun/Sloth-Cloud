@@ -30,6 +30,7 @@ class CheckoutController extends Controller
     {
         $validated = $request->validate([
             'tos' => ['sometimes', 'boolean'],
+            'referral_code' => ['sometimes', 'nullable', 'string', 'alpha_num:ascii', 'min:5', 'max:25', 'exists:ext_affiliates,code'],
         ]);
 
         /** @var User $user */
@@ -58,8 +59,10 @@ class CheckoutController extends Controller
             $this->validateCouponForCart($cart, $user, $cart->coupon->code);
         }
 
+        $referralCode = trim((string) ($validated['referral_code'] ?? ''));
+
         try {
-            [$order, $invoice, $redirect] = DB::transaction(function () use ($cart, $user) {
+            [$order, $invoice, $redirect] = DB::transaction(function () use ($cart, $user, $referralCode) {
                 $cart = $this->loadHeadlessCart($cart->fresh());
                 $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
                 $itemPrices = [];
@@ -117,6 +120,13 @@ class CheckoutController extends Controller
                         'due_at' => now()->addDays(7),
                         'currency_code' => $cart->currency_code,
                     ]);
+
+                    if ($referralCode !== '') {
+                        $invoice->properties()->updateOrCreate(
+                            ['key' => 'affiliate_referral_code'],
+                            ['value' => $referralCode],
+                        );
+                    }
                 }
 
                 foreach ($cart->items as $item) {
@@ -138,9 +148,21 @@ class CheckoutController extends Controller
                     ]);
 
                     foreach (($item->checkout_config ?? []) as $key => $value) {
+                        if ($value === null) {
+                            continue;
+                        }
+
+                        if (is_array($value) || is_object($value)) {
+                            $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                        } elseif (is_bool($value)) {
+                            $value = $value ? '1' : '0';
+                        } elseif (!is_scalar($value)) {
+                            continue;
+                        }
+
                         $service->properties()->updateOrCreate(
                             ['key' => $key],
-                            ['value' => $value],
+                            ['value' => (string) $value],
                         );
                     }
 

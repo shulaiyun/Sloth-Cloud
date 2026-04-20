@@ -1,5 +1,6 @@
 node_modules/
 .turbo/
+.next/
 dist/
 coverage/
 .DS_Store
@@ -10,3 +11,10 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.openclaw/
+test-results/
+runtime/data/
+runtime/sloth-daemon.json
+runtime/env/*.swp
+runtime/env/api.env
+runtime/env/paymenter.env

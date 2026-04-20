@@ -13,14 +13,29 @@ class Convoy extends Server
 {
     public function request($url, $method = 'get', $data = []): array
     {
-        $this->guardHost($this->config('host'));
+        $host = (string) $this->config('host');
+        $this->guardHost($host);
 
         // Trim any leading slashes from the base url and add the path URL to it
-        $req_url = rtrim($this->config('host'), '/') . '/api/application/' . $url;
-        $response = Http::withHeaders([
+        $req_url = rtrim($host, '/') . '/api/application/' . $url;
+        $request = Http::withHeaders([
             'Authorization' => 'Bearer ' . $this->config('api_key'),
             'Accept' => 'application/json',
-        ])->$method($req_url, $data);
+        ]);
+
+        $parsedHost = strtolower((string) parse_url($req_url, PHP_URL_HOST));
+        if ($this->shouldBypassProxy($parsedHost)) {
+            $request = $request->withOptions([
+                'proxy' => [
+                    'no' => [$parsedHost],
+                ],
+                'curl' => [
+                    CURLOPT_NOPROXY => $parsedHost,
+                ],
+            ]);
+        }
+
+        $response = $request->$method($req_url, $data);
 
         if (!$response->successful()) {
             $payload = $response->json();
@@ -142,38 +157,26 @@ class Convoy extends Server
     public function getCheckoutConfig(Product $product): array
     {
         $options = [];
-        $node = trim((string) ($product->settings()->where('key', 'node')->first()?->value ?? ''));
-        $defaultTemplate = trim((string) ($product->settings()->where('key', 'os')->first()?->value ?? ''));
+        $templates = $this->getTemplateOptions($product);
+        $catalogService = app(\App\Services\VpsApps\VpsAppCatalogService::class);
 
-        if ($defaultTemplate !== '') {
-            $options[$defaultTemplate] = $defaultTemplate;
+        foreach ($catalogService->supportedOsOptionsFromTemplates($templates) as $option) {
+            $options[(string) $option['value']] = (string) $option['label'];
         }
 
-        if ($node !== '') {
-            try {
-                $os = $this->request('nodes/' . $node . '/template-groups');
-                foreach (($os['data'] ?? []) as $group) {
-                    if (!is_array($group)) {
-                        continue;
-                    }
-
-                    foreach ($this->extractTemplatesFromGroup($group) as $template) {
-                        $uuid = trim((string) ($template['uuid'] ?? ''));
-                        if ($uuid === '') {
-                            continue;
-                        }
-
-                        $name = trim((string) ($template['name'] ?? $uuid));
-                        $options[$uuid] = $name !== '' ? $name : $uuid;
-                    }
+        if ($options === []) {
+            foreach ($templates as $template) {
+                $name = trim((string) ($template['name'] ?? ''));
+                if ($name === '') {
+                    continue;
                 }
-            } catch (Exception $exception) {
-                report($exception);
+
+                $options[$name] = $name;
             }
         }
 
         if ($options === []) {
-            $options['ubuntu-22-04'] = 'Ubuntu 22.04 LTS';
+            $options['Ubuntu 22.04'] = 'Ubuntu 22.04';
         }
 
         return [
@@ -192,7 +195,90 @@ class Convoy extends Server
                 'required' => true,
                 'validation' => 'required|string|max:40',
             ],
+            [
+                'name' => 'account_password',
+                'type' => 'password',
+                'label' => 'Custom Password',
+                'placeholder' => 'Leave blank to auto-generate',
+                'required' => false,
+                'validation' => ['nullable', 'string', 'min:8', 'max:50', 'regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,50}$/'],
+                'description' => 'Optional. 8-50 characters with uppercase, lowercase, number, and special character. When provided, Convoy will use this password for the initial server account.',
+            ],
+            [
+                'name' => 'password_confirmation',
+                'type' => 'password',
+                'label' => 'Confirm Password',
+                'placeholder' => 'Repeat the custom password',
+                'required' => false,
+                'validation' => ['nullable', 'string', 'required_with:checkoutConfig.account_password', 'same:checkoutConfig.account_password'],
+                'description' => 'Only required when you set a custom password.',
+            ],
+            [
+                'name' => 'primary_app_slug',
+                'type' => 'text',
+                'label' => 'Primary App',
+                'required' => false,
+                'validation' => ['nullable', 'string', 'max:191'],
+                'description' => 'Reserved for the VPS app marketplace checkout flow.',
+            ],
+            [
+                'name' => 'addon_app_slugs',
+                'type' => 'multiselect',
+                'label' => 'Addon Apps',
+                'required' => false,
+                'default' => [],
+                'validation' => ['nullable', 'array'],
+                'description' => 'Reserved for the VPS app marketplace checkout flow.',
+            ],
         ];
+    }
+
+    /**
+     * @return array<int, array{uuid: string, name: string}>
+     */
+    public function getTemplateOptions(Product $product): array
+    {
+        $options = [];
+        $node = trim((string) ($product->settings()->where('key', 'node')->first()?->value ?? ''));
+        $defaultTemplate = trim((string) ($product->settings()->where('key', 'os')->first()?->value ?? ''));
+
+        if ($defaultTemplate !== '') {
+            $options[] = [
+                'uuid' => '',
+                'name' => $defaultTemplate,
+            ];
+        }
+
+        if ($node === '') {
+            return $options;
+        }
+
+        try {
+            $payload = $this->request('nodes/' . $node . '/template-groups');
+            foreach (($payload['data'] ?? []) as $group) {
+                if (!is_array($group)) {
+                    continue;
+                }
+
+                foreach ($this->extractTemplatesFromGroup($group) as $template) {
+                    $options[] = $template;
+                }
+            }
+        } catch (Exception $exception) {
+            report($exception);
+        }
+
+        return array_values(array_reduce($options, function (array $carry, array $template): array {
+            $key = trim((string) ($template['uuid'] ?? '')) . '::' . trim((string) ($template['name'] ?? ''));
+            if ($key !== '::') {
+                $carry[$key] = [
+                    'uuid' => trim((string) ($template['uuid'] ?? '')),
+                    'name' => trim((string) ($template['name'] ?? '')),
+                ];
+            }
+
+            return $carry;
+        }, []));
     }
 
     /**
@@ -225,6 +311,39 @@ class Convoy extends Server
                 'Convoy host cannot be localhost/host.docker.internal in Docker runtime. Use a container-reachable host, for example http://sloth-convoy-web.'
             );
         }
+    }
+
+    protected function shouldBypassProxy(string $host): bool
+    {
+        if ($host === '') {
+            return false;
+        }
+
+        if (str_starts_with($host, 'sloth-') || !str_contains($host, '.')) {
+            return true;
+        }
+
+        $noProxy = array_merge(
+            explode(',', (string) env('NO_PROXY', '')),
+            explode(',', (string) env('no_proxy', ''))
+        );
+
+        foreach ($noProxy as $candidate) {
+            $candidate = strtolower(trim($candidate));
+            if ($candidate === '') {
+                continue;
+            }
+
+            if ($host === $candidate) {
+                return true;
+            }
+
+            if (str_starts_with($candidate, '.') && str_ends_with($host, $candidate)) {
+                return true;
+            }
+        }
+
+        return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
     }
 
     /**
@@ -286,6 +405,7 @@ class Convoy extends Server
         }
 
         $groups = $this->request('nodes/' . $nodeId . '/template-groups');
+        $matches = [];
         foreach ($groups['data'] ?? [] as $group) {
             if (!is_array($group)) {
                 continue;
@@ -299,16 +419,62 @@ class Convoy extends Server
                     continue;
                 }
 
-                if (
-                    mb_strtolower($candidate) === mb_strtolower($name)
-                    || Str::slug($candidate) === Str::slug($name)
-                ) {
-                    return $uuid;
+                $score = $this->templateCandidateScore($candidate, $name);
+                if ($score === null) {
+                    continue;
                 }
+
+                $matches[] = [
+                    'uuid' => $uuid,
+                    'name' => $name,
+                    'score' => $score,
+                    'length' => strlen($name),
+                ];
             }
         }
 
+        if ($matches !== []) {
+            usort($matches, function (array $left, array $right) {
+                if ($left['score'] === $right['score']) {
+                    return $left['length'] <=> $right['length'];
+                }
+
+                return $left['score'] <=> $right['score'];
+            });
+
+            return (string) $matches[0]['uuid'];
+        }
+
         throw new Exception('The selected template uuid is invalid.');
+    }
+
+    protected function templateAliasKey(string $value): string
+    {
+        return (string) preg_replace('/[^a-z0-9]+/', '', mb_strtolower($value));
+    }
+
+    protected function templateCandidateScore(string $candidate, string $templateName): ?int
+    {
+        $candidateLower = mb_strtolower($candidate);
+        $templateLower = mb_strtolower($templateName);
+        $candidateSlug = Str::slug($candidate);
+        $templateSlug = Str::slug($templateName);
+        $candidateAlias = $this->templateAliasKey($candidate);
+        $templateAlias = $this->templateAliasKey($templateName);
+
+        if ($candidateLower === $templateLower || $candidateSlug === $templateSlug || $candidateAlias === $templateAlias) {
+            return 0;
+        }
+
+        if (str_starts_with($templateLower, $candidateLower) || str_starts_with($templateAlias, $candidateAlias)) {
+            return 1;
+        }
+
+        if (str_contains($templateLower, $candidateLower) || str_contains($templateAlias, $candidateAlias)) {
+            return 2;
+        }
+
+        return null;
     }
 
     protected function extractErrorMessage(mixed $payload): string
@@ -391,9 +557,13 @@ class Convoy extends Server
     public function createServer(Service $service, $settings, $properties)
     {
         $node = (int) ($properties['node'] ?? $settings['node']);
-        $os = $this->resolveTemplateUuid($node, $properties['os'] ?? null);
+        $os = $this->resolveTemplateUuid($node, $properties['install_template_ref'] ?? $properties['os'] ?? null);
         $hostname = $properties['hostname'];
-        $password = $properties['password'] ?? $this->createPassword();
+        $password = $properties['account_password']
+            ?? $properties['server_password']
+            ?? $properties['password']
+            ?? $properties['root_password']
+            ?? $this->createPassword();
         $cpu = $properties['cpu'] ?? $settings['cpu'];
         $ram = $properties['ram'] ?? $settings['ram'];
         $disk = $properties['disk'] ?? $settings['disk'];
@@ -403,13 +573,21 @@ class Convoy extends Server
         $ipv4 = $properties['ipv4'] ?? $settings['ipv4'];
         $ipv6 = $properties['ipv6'] ?? $settings['ipv6'];
 
+        $this->assertNodeHasCapacity($node, (int) $ram, (int) $disk);
+
         $ips = [];
         if ($ipv4 > 0) {
             $ip = $this->request('nodes/' . $node . '/addresses', data: ['filter[server_id]' => '', 'filter[type]' => 'ipv4', 'per_page' => $ipv4]);
+            if (count($ip['data'] ?? []) < (int) $ipv4) {
+                throw new Exception(sprintf('Node %d does not have enough free IPv4 addresses for this order.', $node));
+            }
             $ips = array_merge($ips, array_column($ip['data'], 'id'));
         }
         if ($ipv6 > 0) {
             $ip = $this->request('nodes/' . $node . '/addresses', data: ['filter[server_id]' => '', 'filter[type]' => 'ipv6', 'per_page' => $ipv6]);
+            if (count($ip['data'] ?? []) < (int) $ipv6) {
+                throw new Exception(sprintf('Node %d does not have enough free IPv6 addresses for this order.', $node));
+            }
             $ips = array_merge($ips, array_column($ip['data'], 'id'));
         }
 
@@ -454,6 +632,90 @@ class Convoy extends Server
             'password' => $password,
             'server' => $server['data'],
         ];
+    }
+
+    protected function assertNodeHasCapacity(int $nodeId, int $ramMiB, int $diskMiB): void
+    {
+        $node = $this->resolveNodeRecord($nodeId);
+        if ($node === []) {
+            return;
+        }
+
+        $requestedMemory = max($ramMiB, 0) * 1024 * 1024;
+        $requestedDisk = max($diskMiB, 0) * 1024 * 1024;
+
+        $memoryCapacity = $this->resolveNodeCapacityBytes($node['memory'] ?? null, $node['memory_overallocate'] ?? 0);
+        $memoryAllocated = $this->normalizeNodeMetric($node['memory_allocated'] ?? null);
+        if ($requestedMemory > 0 && $memoryCapacity !== null && $memoryAllocated !== null && ($memoryAllocated + $requestedMemory) > $memoryCapacity) {
+            $remainingMiB = max((int) floor(($memoryCapacity - $memoryAllocated) / 1024 / 1024), 0);
+            throw new Exception(sprintf(
+                'Node %d does not have enough free memory for this order. requested=%d MiB remaining=%d MiB.',
+                $nodeId,
+                $ramMiB,
+                $remainingMiB
+            ));
+        }
+
+        $diskCapacity = $this->resolveNodeCapacityBytes($node['disk'] ?? null, $node['disk_overallocate'] ?? 0);
+        $diskAllocated = $this->normalizeNodeMetric($node['disk_allocated'] ?? null);
+        if ($requestedDisk > 0 && $diskCapacity !== null && $diskAllocated !== null && ($diskAllocated + $requestedDisk) > $diskCapacity) {
+            $remainingGiB = max((int) floor(($diskCapacity - $diskAllocated) / 1024 / 1024 / 1024), 0);
+            throw new Exception(sprintf(
+                'Node %d does not have enough free disk for this order. requested=%d GiB remaining=%d GiB.',
+                $nodeId,
+                $diskMiB / 1024,
+                $remainingGiB
+            ));
+        }
+    }
+
+    protected function resolveNodeRecord(int $nodeId): array
+    {
+        try {
+            $payload = $this->request('nodes/' . $nodeId);
+            $data = $payload['data'] ?? null;
+            if (is_array($data)) {
+                return $data;
+            }
+        } catch (Exception $exception) {
+            report($exception);
+        }
+
+        try {
+            $payload = $this->request('nodes');
+            foreach (($payload['data'] ?? []) as $node) {
+                if ((int) ($node['id'] ?? 0) === $nodeId && is_array($node)) {
+                    return $node;
+                }
+            }
+        } catch (Exception $exception) {
+            report($exception);
+        }
+
+        return [];
+    }
+
+    protected function resolveNodeCapacityBytes(mixed $baseCapacity, mixed $overallocatePercent): ?int
+    {
+        $base = $this->normalizeNodeMetric($baseCapacity);
+        if ($base === null) {
+            return null;
+        }
+
+        $overallocate = is_numeric($overallocatePercent) ? (float) $overallocatePercent : 0.0;
+
+        return (int) floor($base * (1 + max($overallocate, 0.0) / 100));
+    }
+
+    protected function normalizeNodeMetric(mixed $value): ?int
+    {
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $resolved = (int) $value;
+
+        return $resolved >= 0 ? $resolved : null;
     }
 
     public function upgradeServer(Service $service, $settings, $properties)
@@ -563,6 +825,19 @@ class Convoy extends Server
                 'function' => 'ssoLink',
             ],
         ];
+    }
+
+    public function getServer(string $serverRef): array
+    {
+        return $this->request('servers/' . $serverRef);
+    }
+
+    public function rotateServerPassword(string $serverRef, string $password): array
+    {
+        return $this->request('servers/' . $serverRef . '/settings/password', 'post', [
+            'password' => $password,
+            'account_password' => $password,
+        ]);
     }
 
     public function ssoLink(Service $service): string

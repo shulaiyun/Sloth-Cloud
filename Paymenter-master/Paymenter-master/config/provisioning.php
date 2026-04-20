@@ -58,6 +58,12 @@ return [
             'app_replicas',
             'app_env_vars',
             'app_image_ref',
+            'runtime_port',
+            'git_context_dir',
+            'dockerfile_path',
+            'compose_file_path',
+            'compose_service_name',
+            'env_vars',
         ],
     ],
 

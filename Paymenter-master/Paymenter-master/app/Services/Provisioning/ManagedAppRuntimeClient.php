@@ -82,11 +82,25 @@ class ManagedAppRuntimeClient
             throw new Exception('Managed App internal API token is missing.');
         }
 
-        return Http::acceptJson()
+        $request = Http::acceptJson()
             ->contentType('application/json')
             ->baseUrl($baseUrl)
             ->withToken($token)
             ->timeout((int) config('provisioning.managed_app.timeout_seconds', 30));
+
+        $host = strtolower((string) parse_url($baseUrl, PHP_URL_HOST));
+        if ($this->shouldBypassProxy($host)) {
+            $request = $request->withOptions([
+                'proxy' => [
+                    'no' => [$host],
+                ],
+                'curl' => [
+                    CURLOPT_NOPROXY => $host,
+                ],
+            ]);
+        }
+
+        return $request;
     }
 
     /**
@@ -109,6 +123,39 @@ class ManagedAppRuntimeClient
         $json = $response->json();
 
         return is_array($json) ? $json : [];
+    }
+
+    protected function shouldBypassProxy(string $host): bool
+    {
+        if ($host === '') {
+            return false;
+        }
+
+        if (str_starts_with($host, 'sloth-') || !str_contains($host, '.')) {
+            return true;
+        }
+
+        $noProxy = array_merge(
+            explode(',', (string) env('NO_PROXY', '')),
+            explode(',', (string) env('no_proxy', ''))
+        );
+
+        foreach ($noProxy as $candidate) {
+            $candidate = strtolower(trim($candidate));
+            if ($candidate === '') {
+                continue;
+            }
+
+            if ($host === $candidate) {
+                return true;
+            }
+
+            if (str_starts_with($candidate, '.') && str_ends_with($host, $candidate)) {
+                return true;
+            }
+        }
+
+        return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
     }
 
     /**

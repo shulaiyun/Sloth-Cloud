@@ -172,25 +172,27 @@ class AppServiceProvider extends ServiceProvider
         }
 
         Queue::after(function (JobProcessed $event) {
-            if ($event->job->resolveName() === 'App\Mail\Mail') {
-                $payload = json_decode($event->job->getRawBody());
-                $data = unserialize($payload->data->command);
-                EmailLog::where('id', $data->mailable->email_log_id)->update([
-                    'sent_at' => now(),
-                    'status' => 'sent',
-                ]);
+            $emailLogId = $this->extractQueuedMailLogId($event->job->resolveName(), $event->job->getRawBody());
+            if (!$emailLogId) {
+                return;
             }
+
+            EmailLog::where('id', $emailLogId)->update([
+                'sent_at' => now(),
+                'status' => 'sent',
+            ]);
         });
         Queue::failing(function (JobFailed $event) {
-            if ($event->job->resolveName() === 'App\Mail\Mail') {
-                $payload = json_decode($event->job->getRawBody());
-                $data = unserialize($payload->data->command);
-                EmailLog::where('id', $data->mailable->email_log_id)->update([
-                    'status' => 'failed',
-                    'error' => $event->exception->getMessage(),
-                    'job_uuid' => $event->job->uuid(),
-                ]);
+            $emailLogId = $this->extractQueuedMailLogId($event->job->resolveName(), $event->job->getRawBody());
+            if (!$emailLogId) {
+                return;
             }
+
+            EmailLog::where('id', $emailLogId)->update([
+                'status' => 'failed',
+                'error' => $event->exception->getMessage(),
+                'job_uuid' => $event->job->uuid(),
+            ]);
         });
 
         Str::macro('markdown', function ($markdown) {
@@ -213,5 +215,33 @@ class AppServiceProvider extends ServiceProvider
                     );
                 });
         }
+    }
+
+    protected function extractQueuedMailLogId(string $jobName, string $rawBody): ?int
+    {
+        if (!in_array($jobName, ['App\Mail\Mail', 'App\Mail\SystemMail', 'Illuminate\Mail\SendQueuedMailable'], true)) {
+            return null;
+        }
+
+        $payload = json_decode($rawBody);
+        $serialized = $payload->data->command ?? null;
+        if (!is_string($serialized) || $serialized === '') {
+            return null;
+        }
+
+        $command = @unserialize($serialized);
+        if (!is_object($command)) {
+            return null;
+        }
+
+        $mailable = $command->mailable ?? null;
+        $emailLogId = is_object($mailable) ? ($mailable->email_log_id ?? null) : null;
+        if ($emailLogId === null && property_exists($command, 'email_log_id')) {
+            $emailLogId = $command->email_log_id;
+        }
+
+        $resolved = (int) $emailLogId;
+
+        return $resolved > 0 ? $resolved : null;
     }
 }

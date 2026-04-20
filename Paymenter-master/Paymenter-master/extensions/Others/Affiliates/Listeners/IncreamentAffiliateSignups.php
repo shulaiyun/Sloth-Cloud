@@ -3,8 +3,8 @@
 namespace Paymenter\Extensions\Others\Affiliates\Listeners;
 
 use App\Events\User\Created;
-use Illuminate\Support\Facades\Cookie;
 use Paymenter\Extensions\Others\Affiliates\Models\Affiliate;
+use Paymenter\Extensions\Others\Affiliates\Support\ReferralCodeResolver;
 
 class IncreamentAffiliateSignups
 {
@@ -21,11 +21,16 @@ class IncreamentAffiliateSignups
      */
     public function handle(Created $event): void
     {
-        $referral_code = Cookie::get('referred_by');
+        $referral_code = ReferralCodeResolver::fromRequest();
+        if (!$referral_code) {
+            return;
+        }
 
         /** @var Affiliate */
-        $affiliate = Affiliate::where('code', $referral_code)->first();
-        if (!$affiliate) {
+        $affiliate = Affiliate::where('code', $referral_code)
+            ->where('enabled', true)
+            ->first();
+        if (!$affiliate || $affiliate->user_id === $event->user->id) {
             return;
         }
 

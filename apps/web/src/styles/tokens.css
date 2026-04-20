@@ -1,0 +1,11 @@
+:root {
+  --operator-console-bg: rgba(8, 18, 30, 0.92);
+  --operator-console-panel: rgba(13, 28, 42, 0.9);
+  --operator-console-panel-border: rgba(123, 214, 255, 0.14);
+  --operator-console-soft: rgba(19, 43, 65, 0.82);
+  --operator-console-ink: #ecf6ff;
+  --operator-console-muted: rgba(219, 235, 250, 0.7);
+  --operator-console-accent: #7be8d2;
+  --operator-console-accent-strong: #67b2ff;
+  --operator-console-danger: #ff9b9b;
+}

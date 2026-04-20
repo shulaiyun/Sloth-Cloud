@@ -12,7 +12,7 @@ class RotatePasswordRequest extends BaseApiRequest
     {
         return [
             'password' => ['nullable', 'string', 'min:8', 'max:191', new Password(), new USKeyboardCharacters()],
+            'restart_after_reset' => ['sometimes', 'boolean'],
         ];
     }
 }
-

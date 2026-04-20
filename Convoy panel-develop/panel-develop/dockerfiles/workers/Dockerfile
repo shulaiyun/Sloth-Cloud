@@ -10,7 +10,8 @@ RUN ALPINE_MINOR="$(cut -d. -f1,2 /etc/alpine-release)" \
     && apk update \
     && apk add --no-cache \
         $PHPIZE_DEPS \
-    && pecl install redis \
+    && pecl channel-update pecl.php.net \
+    && pecl install redis-6.2.0 \
     && docker-php-ext-enable redis \
     && docker-php-ext-install -j"$(nproc)" pdo_mysql pcntl opcache \
     && apk del --no-network $PHPIZE_DEPS

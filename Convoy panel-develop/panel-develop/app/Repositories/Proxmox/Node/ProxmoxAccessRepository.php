@@ -84,6 +84,22 @@ class ProxmoxAccessRepository extends ProxmoxRepository
         return $this->getData($response);
     }
 
+    public function updateRole(string $name, string $privileges)
+    {
+        Assert::isInstanceOf($this->node, Node::class);
+
+        $response = $this->getHttpClient()
+            ->withUrlParameters([
+                'role' => $name,
+            ])
+            ->put('/api2/json/access/roles/{role}', [
+                'privs' => $privileges,
+            ])
+            ->json();
+
+        return $this->getData($response);
+    }
+
     public function createUserCredentials(RealmType $realmType, string $userid, string $password): UserCredentialsData
     {
         Assert::isInstanceOf($this->node, Node::class);

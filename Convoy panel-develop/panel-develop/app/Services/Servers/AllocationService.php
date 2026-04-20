@@ -82,12 +82,27 @@ class AllocationService
     public function getBootOrder(Server $server): Collection
     {
         $disks = $this->getDisks($server);
+        $config = collect($this->repository->setServer($server)->getConfig());
 
-        $raw = collect($this->repository->setServer($server)->getConfig())->where('key', 'boot')->firstOrFail();
+        $raw = $config->where('key', 'boot')->firstOrFail();
 
         $untaggedDisks = array_values(array_filter(explode(';', Arr::last(explode('=', $raw['pending'] ?? $raw['value']))), function ($disk) {
             return ! ctype_space($disk) && in_array($disk, array_column(DiskInterface::cases(), 'value')); // filter literally whitespace entries because Proxmox keeps empty strings for some reason >:(
         }));
+
+        if ($untaggedDisks === []) {
+            $bootDisk = trim((string) ($config->where('key', 'bootdisk')->first()['pending'] ?? $config->where('key', 'bootdisk')->first()['value'] ?? ''));
+            if ($bootDisk !== '' && in_array($bootDisk, array_column(DiskInterface::cases(), 'value'))) {
+                $untaggedDisks[] = $bootDisk;
+            }
+        }
+
+        if ($untaggedDisks === []) {
+            $fallbackDisk = $disks->first(fn (DiskData $disk) => !$disk->is_media);
+            if ($fallbackDisk) {
+                return collect([$fallbackDisk]);
+            }
+        }
 
         $taggedDisks = [];
 

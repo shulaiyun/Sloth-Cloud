@@ -1,49 +1,34 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { useApiData } from '../lib/api';
+import { CountryFlagIcon } from '../components/FlagIcon';
+import { VisualIcon } from '../components/VisualIcon';
+import { requestJson, useApiData } from '../lib/api';
 import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
+import {
+  getUiText,
+  normalizeServiceStatus,
+  productLineFor,
+  productLineLabel,
+  runtimeStatusLabel,
+  serviceStatusLabel,
+  statusClassName,
+} from '../lib/ui-text';
 import { useSite } from '../lib/site-context';
-import type { ServiceSummary, ServicesResponse } from '../lib/types';
+import { getOsVisual, inferCountryCode } from '../lib/visual-metadata';
+import type { RuntimeOverviewResponse, ServiceSummary, ServicesResponse } from '../lib/types';
 
-type ServiceStatusFilter = 'all' | 'active' | 'pending' | 'suspended' | 'cancelled' | 'unknown';
+type ServiceStatusFilter = 'all' | 'active' | 'pending' | 'suspended' | 'cancelled' | 'failed' | 'unknown';
 type ServiceSort = 'status' | 'price-desc' | 'price-asc' | 'expires-asc';
+type ServiceRuntimeContractState = RuntimeOverviewResponse['data']['status'];
+type ServiceRowRuntimeSummary = {
+  status: ServiceRuntimeContractState;
+  powerState: string | null;
+  provisioningStatus: string | null;
+};
 
-function normalizeServiceStatus(status: string): Exclude<ServiceStatusFilter, 'all'> {
-  const value = status.trim().toLowerCase();
-  if (value === 'active') return 'active';
-  if (value === 'pending' || value === 'provisioning') return 'pending';
-  if (value === 'suspended') return 'suspended';
-  if (value === 'cancelled' || value === 'canceled') return 'cancelled';
-  return 'unknown';
-}
-
-function serviceStatusClassName(status: string) {
-  switch (normalizeServiceStatus(status)) {
-    case 'active':
-      return 'status-active';
-    case 'pending':
-      return 'status-pending';
-    case 'suspended':
-      return 'status-suspended';
-    case 'cancelled':
-      return 'status-cancelled';
-    default:
-      return 'status-unknown';
-  }
-}
-
-function serviceStatusLabel(status: string, locale: string) {
-  const key = normalizeServiceStatus(status);
-  const zh = locale.startsWith('zh');
-
-  if (key === 'active') return zh ? '\u8fd0\u884c\u4e2d' : 'Active';
-  if (key === 'pending') return zh ? '\u5f00\u901a\u4e2d' : 'Provisioning';
-  if (key === 'suspended') return zh ? '\u5df2\u6682\u505c' : 'Suspended';
-  if (key === 'cancelled') return zh ? '\u5df2\u53d6\u6d88' : 'Cancelled';
-  return zh ? '\u672a\u77e5' : 'Unknown';
-}
+const serviceListRuntimeRefreshMs = 5_000;
 
 function isPurchasedService(service: ServiceSummary) {
   const normalizedId = service.id.trim();
@@ -55,29 +40,219 @@ function isPurchasedService(service: ServiceSummary) {
   return normalizedId !== '' && (hasLabel || hasProduct || hasPlan || hasLifecycleMeta);
 }
 
+function normalizeProvisioningStage(service: ServiceSummary) {
+  return (service.provisioning?.status ?? '').trim().toLowerCase();
+}
+
+function isProvisioningFailureStage(stage: string) {
+  return stage !== '' && (
+    stage === 'failed'
+    || stage === 'build_failed'
+    || stage.includes('fail')
+    || stage.includes('error')
+  );
+}
+
+function isProvisioningInFlightStage(stage: string) {
+  return ['pending', 'provisioning', 'queued', 'building', 'pushing', 'deploying', 'retrying', 'deleting'].includes(stage);
+}
+
+function effectiveLifecycleStatus(service: ServiceSummary) {
+  if (service.cancellation) {
+    return 'cancelled';
+  }
+
+  const provisioningStage = normalizeProvisioningStage(service);
+  if (isProvisioningFailureStage(provisioningStage)) {
+    return 'failed';
+  }
+  if (isProvisioningInFlightStage(provisioningStage)) {
+    return 'pending';
+  }
+
+  return normalizeServiceStatus(service.status);
+}
+
+function effectiveLifecycleLabel(service: ServiceSummary, locale: string) {
+  if (service.cancellation) {
+    return locale.startsWith('zh') ? '已申请取消' : 'Cancellation scheduled';
+  }
+
+  const provisioningStage = normalizeProvisioningStage(service);
+  if (isProvisioningFailureStage(provisioningStage) || isProvisioningInFlightStage(provisioningStage)) {
+    return runtimeStatusLabel(provisioningStage || 'pending', locale);
+  }
+
+  return serviceStatusLabel(service.status, locale);
+}
+
+function isVpsService(service: ServiceSummary) {
+  return (service.runtimeKind ?? 'unknown') === 'vps';
+}
+
+function runtimeStateClassName(status: string | null | undefined) {
+  const normalized = (status ?? '').trim().toLowerCase();
+
+  if (normalized === 'running' || normalized === 'started' || normalized === 'ready' || normalized === 'active') {
+    return 'status-active';
+  }
+
+  if (
+    normalized === 'installing'
+    || normalized === 'building'
+    || normalized === 'provisioning'
+    || normalized === 'pending'
+    || normalized === 'queued'
+    || normalized === 'deploying'
+    || normalized === 'retrying'
+  ) {
+    return 'status-pending';
+  }
+
+  if (normalized === 'failed') {
+    return 'status-overdue';
+  }
+
+  if (normalized === 'suspended') {
+    return 'status-suspended';
+  }
+
+  if (normalized === 'deleting' || normalized === 'deleted') {
+    return 'status-cancelled';
+  }
+
+  return 'status-unknown';
+}
+
+function serverRuntimeStatusLabel(status: string, locale: string) {
+  const normalized = status.trim().toLowerCase();
+
+  if (normalized === 'running' || normalized === 'started') return runtimeStatusLabel('running', locale);
+  if (normalized === 'stopped' || normalized === 'shutdown' || normalized === 'offline') {
+    return locale.startsWith('zh') ? '已关机' : 'Stopped';
+  }
+  if (normalized === 'installing' || normalized === 'building') return runtimeStatusLabel('building', locale);
+  if (normalized === 'provisioning' || normalized === 'pending') return runtimeStatusLabel('pending', locale);
+  if (normalized === 'failed') return runtimeStatusLabel('failed', locale);
+  if (normalized === 'suspended') {
+    return locale.startsWith('zh') ? '已暂停' : 'Suspended';
+  }
+  if (normalized === 'unavailable' || normalized === 'upstream_unavailable') {
+    return locale.startsWith('zh') ? '状态失联' : 'Unavailable';
+  }
+  if (normalized === 'unmapped') {
+    return locale.startsWith('zh') ? '未映射' : 'Unmapped';
+  }
+  if (normalized === 'archived') {
+    return locale.startsWith('zh') ? '已归档' : 'Archived';
+  }
+  if (!normalized || normalized === '-') return '-';
+  return status;
+}
+
+function serviceRuntimeSummaryBadge(
+  service: ServiceSummary,
+  runtimeSummary: ServiceRowRuntimeSummary | undefined,
+  locale: string,
+) {
+  if (!isVpsService(service)) {
+    return null;
+  }
+
+  if (!runtimeSummary) {
+    return {
+      className: 'status-pending',
+      label: locale.startsWith('zh') ? '同步中' : 'Syncing',
+    };
+  }
+
+  if (runtimeSummary.status === 'ready') {
+    return {
+      className: runtimeStateClassName(runtimeSummary.powerState),
+      label: serverRuntimeStatusLabel(runtimeSummary.powerState ?? 'unknown', locale),
+    };
+  }
+
+  if (runtimeSummary.status === 'provisioning') {
+    const provisioningState = runtimeSummary.provisioningStatus ?? service.provisioning?.status ?? 'pending';
+    return {
+      className: runtimeStateClassName(provisioningState),
+      label: runtimeStatusLabel(provisioningState, locale),
+    };
+  }
+
+  if (runtimeSummary.status === 'failed') {
+    return {
+      className: 'status-overdue',
+      label: runtimeStatusLabel('failed', locale),
+    };
+  }
+
+  return {
+    className: runtimeStateClassName(runtimeSummary.status),
+    label: serverRuntimeStatusLabel(runtimeSummary.status, locale),
+  };
+}
+
+function operatorEntryLabel(entryKind: string | null | undefined, locale: string) {
+  const zh = locale.startsWith('zh');
+  if (entryKind === 'upload-project') return zh ? '项目上线' : 'Project launch';
+  if (entryKind === 'generate-from-idea') return zh ? '想法生成' : 'Idea build';
+  if (entryKind === 'scan-server') return zh ? '旧服务器迁移' : 'Server migration';
+  return zh ? 'AI 来源' : 'AI source';
+}
+
+function operatorBusinessLabel(businessPath: string | null | undefined, locale: string) {
+  const text = (businessPath ?? '').trim().toLowerCase();
+  const zh = locale.startsWith('zh');
+  if (text === 'ai-managed-launch' || text === 'ai managed launch' || text === 'managed app hosting') {
+    return zh ? 'AI 托管上线' : 'AI managed launch';
+  }
+  if (text === 'vps-self-hosted' || text === 'vps self hosted') {
+    return zh ? '购买 VPS 并迁移' : 'Buy VPS and migrate';
+  }
+  if (text === 'server-migration' || text === 'server migration') {
+    return zh ? '接管旧服务器' : 'Existing server takeover';
+  }
+  return zh ? 'AI 商业闭环' : 'AI loop';
+}
+
 export function ServicesPage() {
-  const { text, locale } = useSite();
-  const { data, error, loading } = useApiData<ServicesResponse>('/api/v1/services');
+  const { text, locale, formatDate } = useSite();
+  const ui = getUiText(locale);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const { data, error, loading } = useApiData<ServicesResponse>(`/api/v1/services?refresh=${refreshNonce}`);
+  const [runtimeSummaryMap, setRuntimeSummaryMap] = useState<Record<string, ServiceRowRuntimeSummary>>({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ServiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<ServiceSort>('status');
-  const services = data?.data ?? [];
-  const zh = locale.startsWith('zh');
+  const services = Array.isArray(data?.data) ? data.data : [];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setRefreshNonce((current) => current + 1);
+    }, 15_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const statusOptions: Array<{ value: ServiceStatusFilter; label: string }> = [
-    { value: 'all', label: zh ? '\u5168\u90e8\u72b6\u6001' : 'All statuses' },
+    { value: 'all', label: ui.common.allStatuses },
     { value: 'active', label: serviceStatusLabel('active', locale) },
     { value: 'pending', label: serviceStatusLabel('pending', locale) },
     { value: 'suspended', label: serviceStatusLabel('suspended', locale) },
     { value: 'cancelled', label: serviceStatusLabel('cancelled', locale) },
+    { value: 'failed', label: serviceStatusLabel('failed', locale) },
     { value: 'unknown', label: serviceStatusLabel('unknown', locale) },
   ];
 
   const sortOptions: Array<{ value: ServiceSort; label: string }> = [
-    { value: 'status', label: zh ? '\u6309\u72b6\u6001' : 'Sort by status' },
-    { value: 'price-desc', label: zh ? '\u4ef7\u683c\u4ece\u9ad8\u5230\u4f4e' : 'Price high to low' },
-    { value: 'price-asc', label: zh ? '\u4ef7\u683c\u4ece\u4f4e\u5230\u9ad8' : 'Price low to high' },
-    { value: 'expires-asc', label: zh ? '\u5373\u5c06\u5230\u671f\u4f18\u5148' : 'Nearest expiry first' },
+    { value: 'status', label: ui.common.sortByStatus },
+    { value: 'price-desc', label: ui.services.priceHighToLow },
+    { value: 'price-asc', label: ui.services.priceLowToHigh },
+    { value: 'expires-asc', label: ui.services.nearestExpiry },
   ];
 
   const visibleServices = useMemo(() => {
@@ -85,7 +260,7 @@ export function ServicesPage() {
     const keyword = search.trim().toLowerCase();
 
     const filtered = purchasedServices.filter((service) => {
-      const normalizedStatus = normalizeServiceStatus(service.status);
+      const normalizedStatus = effectiveLifecycleStatus(service);
       if (statusFilter !== 'all' && normalizedStatus !== statusFilter) {
         return false;
       }
@@ -97,10 +272,10 @@ export function ServicesPage() {
       const serviceLabel = localizeText(
         service.label || service.baseLabel,
         locale,
-        service.label || service.baseLabel,
+        ui.common.unnamedService,
       ).toLowerCase();
       const productName = service.product?.name
-        ? localizeText(service.product.name, locale, service.product.name).toLowerCase()
+        ? localizeText(service.product.name, locale, ui.common.unnamedProduct).toLowerCase()
         : '';
 
       return serviceLabel.includes(keyword) || productName.includes(keyword) || service.id.toLowerCase().includes(keyword);
@@ -109,33 +284,109 @@ export function ServicesPage() {
     const statusWeight: Record<Exclude<ServiceStatusFilter, 'all'>, number> = {
       active: 0,
       pending: 1,
-      suspended: 2,
-      cancelled: 3,
-      unknown: 4,
+      failed: 2,
+      suspended: 3,
+      cancelled: 4,
+      unknown: 5,
     };
 
     return [...filtered].sort((left, right) => {
-      if (sortBy === 'price-desc') {
-        return right.price - left.price;
-      }
-      if (sortBy === 'price-asc') {
-        return left.price - right.price;
-      }
+      if (sortBy === 'price-desc') return right.price - left.price;
+      if (sortBy === 'price-asc') return left.price - right.price;
       if (sortBy === 'expires-asc') {
         const leftTime = left.expiresAt ? new Date(left.expiresAt).getTime() : Number.MAX_SAFE_INTEGER;
         const rightTime = right.expiresAt ? new Date(right.expiresAt).getTime() : Number.MAX_SAFE_INTEGER;
         return leftTime - rightTime;
       }
 
-      const leftStatus = statusWeight[normalizeServiceStatus(left.status)];
-      const rightStatus = statusWeight[normalizeServiceStatus(right.status)];
-      if (leftStatus !== rightStatus) {
-        return leftStatus - rightStatus;
-      }
-
+      const leftStatus = statusWeight[effectiveLifecycleStatus(left)];
+      const rightStatus = statusWeight[effectiveLifecycleStatus(right)];
+      if (leftStatus !== rightStatus) return leftStatus - rightStatus;
       return left.id.localeCompare(right.id);
     });
-  }, [services, locale, search, sortBy, statusFilter]);
+  }, [services, locale, search, sortBy, statusFilter, ui.common.unnamedProduct, ui.common.unnamedService]);
+
+  const visibleRuntimeServiceIds = useMemo(() => {
+    const seen = new Set<string>();
+
+    return visibleServices.reduce<string[]>((result, service) => {
+      if (!isVpsService(service)) {
+        return result;
+      }
+
+      const normalizedId = service.id.trim();
+      if (normalizedId === '' || seen.has(normalizedId)) {
+        return result;
+      }
+
+      seen.add(normalizedId);
+      result.push(normalizedId);
+      return result;
+    }, []);
+  }, [visibleServices]);
+
+  useEffect(() => {
+    let isCurrent = true;
+    let isFetching = false;
+
+    if (visibleRuntimeServiceIds.length === 0) {
+      setRuntimeSummaryMap({});
+      return;
+    }
+
+    const fetchRuntimeSummaries = async () => {
+      if (isFetching || document.visibilityState === 'hidden') {
+        return;
+      }
+
+      isFetching = true;
+      try {
+        const results = await Promise.allSettled(
+          visibleRuntimeServiceIds.map((serviceId) =>
+            requestJson<RuntimeOverviewResponse>(`/api/v1/services/${encodeURIComponent(serviceId)}/runtime/overview`),
+          ),
+        );
+
+        if (!isCurrent) {
+          return;
+        }
+
+        const nextSummaryMap: Record<string, ServiceRowRuntimeSummary> = {};
+        visibleRuntimeServiceIds.forEach((serviceId, index) => {
+          const result = results[index];
+          if (result?.status === 'fulfilled') {
+            nextSummaryMap[serviceId] = {
+              status: result.value.data.status,
+              powerState: result.value.data.overview?.powerState ?? null,
+              provisioningStatus: result.value.data.provisioning?.status ?? null,
+            };
+            return;
+          }
+
+          nextSummaryMap[serviceId] = {
+            status: 'upstream_unavailable',
+            powerState: null,
+            provisioningStatus: null,
+          };
+        });
+
+        setRuntimeSummaryMap(nextSummaryMap);
+      } finally {
+        isFetching = false;
+      }
+    };
+
+    void fetchRuntimeSummaries();
+
+    const timer = window.setInterval(() => {
+      void fetchRuntimeSummaries();
+    }, serviceListRuntimeRefreshMs);
+
+    return () => {
+      isCurrent = false;
+      window.clearInterval(timer);
+    };
+  }, [visibleRuntimeServiceIds]);
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
@@ -146,23 +397,22 @@ export function ServicesPage() {
   }
 
   return (
-    <div className="stack-24">
-      <section className="section-heading">
-        <div>
-          <p className="eyebrow">{text.nav.services}</p>
-          <h1>{text.services.title}</h1>
-          <p className="muted">{text.services.subtitle}</p>
+    <div className="stack-32 services-page">
+      <section className="page-section page-section--intro">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">{text.nav.services}</p>
+            <h1>{ui.services.title}</h1>
+            <p className="muted">{ui.services.subtitle}</p>
+          </div>
         </div>
-      </section>
-
-      <section className="panel stack-12">
-        <div className="filter-toolbar">
+        <div className="filter-toolbar filter-toolbar--flat">
           <label className="filter-control">
-            <span>{zh ? '\u641c\u7d22' : 'Search'}</span>
+            <span>{ui.common.search}</span>
             <input
               className="text-input"
               value={search}
-              placeholder={zh ? '\u8f93\u5165\u670d\u52a1\u540d\u3001\u4ea7\u54c1\u540d\u6216 ID' : 'Search by service, product, or ID'}
+              placeholder={ui.services.searchPlaceholder}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
@@ -181,7 +431,7 @@ export function ServicesPage() {
             </select>
           </label>
           <label className="filter-control compact">
-            <span>{zh ? '\u6392\u5e8f' : 'Sort'}</span>
+            <span>{ui.common.sort}</span>
             <select
               className="text-input select-input"
               value={sortBy}
@@ -198,34 +448,96 @@ export function ServicesPage() {
       </section>
 
       {visibleServices.length === 0 ? (
-        <div className="callout">{text.services.noServices}</div>
+        <article className="empty-state">
+          <h3>{ui.services.noServices}</h3>
+          <Link className="button primary" to="/catalog">
+            {text.nav.catalog}
+          </Link>
+        </article>
       ) : (
-        <section className="service-grid">
+        <section className="service-list">
           {visibleServices.map((service) => {
             const normalizedId = service.id.trim();
+            const productLine = productLineFor(service.product?.category?.slug, service.product?.slug);
+            const serviceLabel = localizeText(service.label || service.baseLabel, locale, ui.common.unnamedService);
+            const productName = service.product?.name
+              ? localizeText(service.product.name, locale, ui.common.unnamedProduct)
+              : ui.common.unnamedProduct;
+            const countryCode = service.countryCode
+              ?? service.product?.countryCode
+              ?? inferCountryCode(serviceLabel, productName);
+            const osVisual = getOsVisual(service.selectedOs ?? `${serviceLabel} ${productName}`);
+            const lifecycleStatus = effectiveLifecycleStatus(service);
+            const operatorOrigin = service.operatorOrigin ?? null;
+            const runtimeBadge = serviceRuntimeSummaryBadge(service, runtimeSummaryMap[normalizedId], locale);
+
             return (
-              <article className="panel stack-12" key={normalizedId}>
-                <h3>{localizeText(service.label || service.baseLabel, locale, service.label || service.baseLabel)}</h3>
-                <p className="muted">
-                  {service.product?.name ? localizeText(service.product.name, locale, service.product.name) : '-'}
-                </p>
-                <div className="detail-grid">
-                  <div>
-                    <span>{text.common.status}</span>
-                    <strong>
-                      <span className={`status-pill ${serviceStatusClassName(service.status)}`}>
-                        {serviceStatusLabel(service.status, locale)}
-                      </span>
-                    </strong>
+              <article className="service-row-card" key={normalizedId}>
+                <div className="service-row-card__status">
+                  <div className="service-row-card__status-item">
+                    <span className="service-row-card__status-name">{locale.startsWith('zh') ? '服务' : 'Service'}</span>
+                    <span className={`status-dot ${statusClassName(lifecycleStatus)}`} />
+                    <span className={`status-pill ${statusClassName(lifecycleStatus)}`}>
+                      {effectiveLifecycleLabel(service, locale)}
+                    </span>
                   </div>
-                  <div>
-                    <span>{text.common.total}</span>
-                    <strong>{service.formattedPrice}</strong>
+                  {runtimeBadge ? (
+                    <div className="service-row-card__status-item">
+                      <span className="service-row-card__status-name">{locale.startsWith('zh') ? '运行态' : 'Runtime'}</span>
+                      <span className={`status-dot ${runtimeBadge.className}`} />
+                      <span className={`status-pill ${runtimeBadge.className}`}>
+                        {runtimeBadge.label}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+                <div>
+                  <h3>{serviceLabel}</h3>
+                  <p className="muted">{productName}</p>
+                  <div className="chip-row">
+                    <span className="chip">{productLineLabel(productLine, locale)}</span>
+                    {operatorOrigin ? (
+                      <span className="chip">
+                        {locale.startsWith('zh') ? 'AI 来源' : 'AI linked'}
+                      </span>
+                    ) : null}
+                    {countryCode ? (
+                      <span className="chip chip--visual">
+                        <CountryFlagIcon countryCode={countryCode} />
+                        <span>{locale.startsWith('zh') ? '节点' : 'Node'}</span>
+                      </span>
+                    ) : null}
+                    {osVisual.family ? (
+                      <span className="chip chip--visual">
+                        <VisualIcon glyph={osVisual.glyph} label={osVisual.family} size="sm" src={osVisual.src} tone={osVisual.tone} />
+                        <span>{osVisual.family}</span>
+                      </span>
+                    ) : null}
+                    {service.expiresAt ? <span className="chip">{ui.common.expires}: {formatDate(service.expiresAt)}</span> : null}
+                  </div>
+                  {operatorOrigin ? (
+                    <p className="muted">
+                      {operatorOrigin.capsuleName || (locale.startsWith('zh') ? 'AI 项目' : 'AI project')}
+                      {' · '}
+                      {operatorEntryLabel(operatorOrigin.entryKind, locale)}
+                      {' · '}
+                      {operatorBusinessLabel(operatorOrigin.businessPath, locale)}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="service-row-card__aside">
+                  <strong>{service.formattedPrice}</strong>
+                  <div className="stack-8">
+                    <Link className="button primary" to={`/services/${encodeURIComponent(normalizedId)}`}>
+                      {ui.services.viewRuntime}
+                    </Link>
+                    {operatorOrigin?.capsuleId ? (
+                      <Link className="button ghost" to={`/workspaces/${encodeURIComponent(operatorOrigin.capsuleId)}`}>
+                        {locale.startsWith('zh') ? '打开 AI 工作区' : 'Open AI workspace'}
+                      </Link>
+                    ) : null}
                   </div>
                 </div>
-                <Link className="button ghost" to={`/services/${encodeURIComponent(normalizedId)}`}>
-                  {text.common.inspect}
-                </Link>
               </article>
             );
           })}

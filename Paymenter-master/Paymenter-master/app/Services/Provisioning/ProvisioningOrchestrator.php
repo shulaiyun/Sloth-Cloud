@@ -8,6 +8,8 @@ use App\Jobs\Provisioning\ProcessProvisioningJob;
 use App\Models\ProvisioningJob;
 use App\Models\ProvisioningMapping;
 use App\Models\Service;
+use App\Models\ServiceOperationLog;
+use App\Services\VpsApps\VpsAppInstallService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Throwable;
@@ -29,16 +31,31 @@ class ProvisioningOrchestrator
      */
     protected array $managedMappingKeys = [
         'runtime_ref',
+        'k8s_cluster_ref',
         'k8s_namespace',
         'k8s_workload',
         'k8s_service',
+        'k8s_ingress_url',
+        'app_last_deploy_at',
+        'app_domain',
+        'app_tls_status',
+        'app_replicas',
+        'app_env_vars',
+        'app_image_ref',
+        'app_previous_image_ref',
+        'app_image_tag',
+        'app_domain_limit',
+        'app_env_var_limit',
+        'app_log_retention_lines',
+        'app_build_job_name',
         'app_endpoint',
         'app_status',
     ];
 
     public function __construct(
         protected ProvisioningMappingResolver $mappingResolver,
-        protected ManagedAppRuntimeClient $managedAppRuntimeClient
+        protected ManagedAppRuntimeClient $managedAppRuntimeClient,
+        protected VpsAppInstallService $vpsAppInstallService,
     ) {}
 
     public function isEnabled(): bool
@@ -134,7 +151,24 @@ class ProvisioningOrchestrator
             return $latest;
         }
 
-        if (!$forceReprovision && $this->hasMapping($service, $provider)) {
+        $shouldShortCircuitReady = !$forceReprovision && $this->hasMapping($service, $provider);
+        if ($shouldShortCircuitReady && $provider === ProvisioningMapping::PROVIDER_MANAGED_APP) {
+            $serviceProperties = ExtensionHelper::getServiceProperties($service);
+            $managedStatus = strtolower(trim((string) ($serviceProperties['app_status'] ?? '')));
+            $shouldShortCircuitReady = in_array($managedStatus, ['ready', 'running', 'active'], true);
+        }
+        if ($shouldShortCircuitReady && $provider === ProvisioningMapping::PROVIDER_CONVOY) {
+            try {
+                $serverRef = $this->resolveConvoyServerRef($service);
+                $response = $serverRef !== '' ? $this->fetchConvoyServer($service, $serverRef) : [];
+                $shouldShortCircuitReady = $this->resolveConvoyProvisioningStage($response) === ProvisioningJob::STATUS_READY;
+            } catch (Throwable $exception) {
+                report($exception);
+                $shouldShortCircuitReady = false;
+            }
+        }
+
+        if ($shouldShortCircuitReady) {
             $job = ProvisioningJob::query()->create([
                 'service_id' => $service->id,
                 'provider' => $provider,
@@ -227,6 +261,120 @@ class ProvisioningOrchestrator
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $context
+     * @return array<string, mixed>
+     */
+    public function deprovisionManagedApp(Service $service, array $context = []): array
+    {
+        $service->loadMissing([
+            'product.server.settings',
+            'product.category',
+            'plan',
+            'user',
+            'properties',
+            'configs.configOption',
+            'configs.configValue',
+        ]);
+
+        if (!$this->supports($service, ProvisioningMapping::PROVIDER_MANAGED_APP)) {
+            throw new \RuntimeException('Managed App deprovision is unavailable for this service.');
+        }
+
+        $mapping = $this->mappingResolver->resolve($service, ProvisioningMapping::PROVIDER_MANAGED_APP);
+        if (!$mapping) {
+            $mapping = new ProvisioningMapping([
+                'provider' => ProvisioningMapping::PROVIDER_MANAGED_APP,
+                'product_id' => $service->product_id,
+                'product_slug' => (string) ($service->product?->slug ?? ''),
+                'plan_id' => $service->plan_id,
+                'plan_name' => (string) ($service->plan?->name ?? ''),
+                'enabled' => true,
+                'config' => [],
+            ]);
+            $mapping->exists = false;
+        }
+
+        $productSettings = ExtensionHelper::settingsToArray($service->product?->settings ?? []);
+        $productSettings = is_array($productSettings) ? $productSettings : [];
+        $serviceProperties = ExtensionHelper::getServiceProperties($service);
+        $maxAttempts = max((int) ($context['max_attempts'] ?? 3), 1);
+
+        $lastError = null;
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $result = $this->managedAppRuntimeClient->deprovision(
+                    $service,
+                    $mapping,
+                    $productSettings,
+                    $serviceProperties,
+                );
+
+                $runtime = is_array($result['runtime'] ?? null) ? $result['runtime'] : [];
+                $properties = is_array($result['properties'] ?? null) ? $result['properties'] : [];
+                $stage = $this->normalizeStage((string) ($runtime['status'] ?? ($properties['app_status'] ?? ProvisioningJob::STATUS_DELETING)));
+                $message = trim((string) ($result['message'] ?? 'Managed app deprovision submitted.'));
+                if ($message === '') {
+                    $message = 'Managed app deprovision submitted.';
+                }
+
+                $properties['runtime_kind'] = 'managed-app';
+                $properties['app_status'] = $stage;
+                if ($stage !== ProvisioningJob::STATUS_FAILED) {
+                    $properties['app_status_reason'] = '';
+                }
+
+                $this->persistProperties($service, $properties);
+                $this->recordStandaloneOperationLog(
+                    $service,
+                    $stage === ProvisioningJob::STATUS_FAILED ? 'failed' : 'success',
+                    $message,
+                    [
+                        'runtime' => $runtime,
+                        'properties' => $properties,
+                        'context' => $context,
+                    ],
+                    $stage === ProvisioningJob::STATUS_FAILED ? 'MANAGED_APP_DEPROVISION_FAILED' : null,
+                    null,
+                    'runtime:deprovision',
+                );
+
+                if ($stage === ProvisioningJob::STATUS_FAILED) {
+                    throw new \RuntimeException($this->resolveManagedAppFailureMessage($message, $runtime, $properties));
+                }
+
+                return [
+                    'message' => $message,
+                    'runtime' => $runtime,
+                    'properties' => $properties,
+                ];
+            } catch (Throwable $exception) {
+                $lastError = $exception;
+                report($exception);
+
+                if ($attempt < $maxAttempts) {
+                    usleep($attempt * 250000);
+                    continue;
+                }
+            }
+        }
+
+        $errorMessage = $lastError ? $lastError->getMessage() : 'Managed app deprovision failed.';
+        $this->recordStandaloneOperationLog(
+            $service,
+            'failed',
+            'Managed app deprovision failed.',
+            [
+                'context' => $context,
+            ],
+            'MANAGED_APP_DEPROVISION_FAILED',
+            $errorMessage,
+            'runtime:deprovision',
+        );
+
+        throw new \RuntimeException($errorMessage);
+    }
+
     protected function processUnlocked(ProvisioningJob $job): ProvisioningJob
     {
         $service = Service::query()
@@ -246,16 +394,42 @@ class ProvisioningOrchestrator
             return $this->markFailure($job, 'No provisioning mapping found for this service.', 'PROVISIONING_MAPPING_NOT_FOUND', $service, true);
         }
 
-        $job->attempt_count = (int) $job->attempt_count + 1;
+        $currentStatus = (string) $job->status;
+        $managedAppPollingStatus = $job->provider === ProvisioningMapping::PROVIDER_MANAGED_APP
+            && in_array($currentStatus, [
+                ProvisioningJob::STATUS_QUEUED,
+                ProvisioningJob::STATUS_BUILDING,
+                ProvisioningJob::STATUS_PUSHING,
+                ProvisioningJob::STATUS_DEPLOYING,
+            ], true);
+        $convoyPollingStatus = $job->provider === ProvisioningMapping::PROVIDER_CONVOY
+            && $this->hasMapping($service, ProvisioningMapping::PROVIDER_CONVOY)
+            && in_array($currentStatus, [
+                ProvisioningJob::STATUS_QUEUED,
+                ProvisioningJob::STATUS_BUILDING,
+                ProvisioningJob::STATUS_DEPLOYING,
+            ], true);
+
+        if (!$managedAppPollingStatus && !$convoyPollingStatus) {
+            $job->attempt_count = (int) $job->attempt_count + 1;
+        }
+
         $job->last_attempt_at = now();
         $job->status = ProvisioningJob::STATUS_QUEUED;
         $job->error_message = null;
-        $job->response_payload = $this->buildProvisioningPayload($job->response_payload, ProvisioningJob::STATUS_QUEUED, sprintf('Provisioning attempt #%d started.', $job->attempt_count));
+        $attemptLabel = sprintf('Provisioning attempt #%d started.', max((int) $job->attempt_count, 1));
+        if ($managedAppPollingStatus || $convoyPollingStatus) {
+            $attemptLabel = sprintf('Provisioning poll resumed (attempt #%d).', max((int) $job->attempt_count, 1));
+        }
+        $job->response_payload = $this->buildProvisioningPayload($job->response_payload, ProvisioningJob::STATUS_QUEUED, $attemptLabel);
         $job->save();
 
         $context = is_array($job->request_payload['context'] ?? null) ? $job->request_payload['context'] : [];
         $forceReprovision = filter_var((string) ($context['force_reprovision'] ?? false), FILTER_VALIDATE_BOOL);
-        if ($forceReprovision) {
+        $forceReprovisionForAttempt = $forceReprovision
+            && (int) $job->attempt_count === 1
+            && $currentStatus === ProvisioningJob::STATUS_PENDING;
+        if ($forceReprovisionForAttempt) {
             $this->clearMapping($service, $job->provider);
         }
 
@@ -263,28 +437,55 @@ class ProvisioningOrchestrator
         $this->persistProperties($service, $overrides);
 
         return $job->provider === ProvisioningMapping::PROVIDER_MANAGED_APP
-            ? $this->processManagedApp($job, $service, $mapping, $forceReprovision)
+            ? $this->processManagedApp($job, $service, $mapping, $forceReprovisionForAttempt)
             : $this->processConvoy($job, $service, $forceReprovision);
     }
 
     protected function processConvoy(ProvisioningJob $job, Service $service, bool $forceReprovision): ProvisioningJob
     {
-        if (!$forceReprovision && $this->hasMapping($service, ProvisioningMapping::PROVIDER_CONVOY)) {
-            return $this->markReady($job, $service, 'VPS runtime mapping already exists.', ['runtime' => ['runtime_kind' => 'vps', 'server_mapping' => $this->readMapping($service, ProvisioningMapping::PROVIDER_CONVOY)]]);
+        $existingServerRef = $this->resolveConvoyServerRef($service);
+
+        if (!$forceReprovision && $existingServerRef !== '') {
+            try {
+                $response = $this->fetchConvoyServer($service, $existingServerRef);
+
+                return $this->syncConvoyProvisioningState(
+                    $job,
+                    $service,
+                    $response,
+                    'Convoy runtime synchronized.'
+                );
+            } catch (Throwable $exception) {
+                report($exception);
+
+                return $this->markFailure($job, $exception->getMessage(), 'PROVISIONING_CONVOY_SYNC_FAILED', $service);
+            }
         }
 
         try {
+            $this->vpsAppInstallService->prepareConvoyProvisioning($service);
             $response = ExtensionHelper::createServer($service);
             $mapping = $this->syncConvoyMapping($service, $response);
             if ($mapping === []) {
                 return $this->markFailure($job, 'Provisioned but no Convoy server mapping was returned.', 'PROVISIONING_MAPPING_WRITE_MISSING', $service, true);
             }
 
-            return $this->markReady($job, $service, 'VPS runtime is ready.', ['runtime' => ['runtime_kind' => 'vps', 'server_mapping' => $mapping, 'provider_response' => $response]]);
+            return $this->syncConvoyProvisioningState(
+                $job,
+                $service,
+                $response,
+                'Convoy provisioning started.'
+            );
         } catch (Throwable $exception) {
             report($exception);
 
-            return $this->markFailure($job, $exception->getMessage(), 'PROVISIONING_CONVOY_FAILED', $service);
+            return $this->markFailure(
+                $job,
+                $exception->getMessage(),
+                'PROVISIONING_CONVOY_FAILED',
+                $service,
+                $this->isConvoyTerminalFailure('PROVISIONING_CONVOY_FAILED', $exception->getMessage())
+            );
         }
     }
 
@@ -313,6 +514,9 @@ class ProvisioningOrchestrator
 
         $properties['runtime_kind'] = 'managed-app';
         $properties['app_status'] = $stage;
+        if ($stage !== ProvisioningJob::STATUS_FAILED) {
+            $properties['app_status_reason'] = '';
+        }
         $this->persistProperties($service, $properties);
 
         if ($stage === ProvisioningJob::STATUS_READY) {
@@ -320,7 +524,11 @@ class ProvisioningOrchestrator
         }
 
         if ($stage === ProvisioningJob::STATUS_FAILED) {
-            return $this->markFailure($job, $message, (string) ($result['error_code'] ?? 'PROVISIONING_MANAGED_APP_FAILED'), $service);
+            $failureMessage = $this->resolveManagedAppFailureMessage($message, $runtime, $properties);
+            $failureCode = $this->resolveManagedAppFailureCode((string) ($result['error_code'] ?? ''), $properties);
+            $terminal = $this->isManagedAppTerminalFailure($failureCode, $failureMessage);
+
+            return $this->markFailure($job, $failureMessage, $failureCode, $service, $terminal);
         }
 
         $job->status = $stage;
@@ -345,6 +553,14 @@ class ProvisioningOrchestrator
             $service->status = Service::STATUS_ACTIVE;
             $service->expires_at = $service->expires_at ?: $service->calculateNextDueDate();
             $service->save();
+        }
+
+        if ($job->provider === ProvisioningMapping::PROVIDER_CONVOY) {
+            try {
+                $this->vpsAppInstallService->queueCheckoutInstalls($service);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
         }
 
         $this->recordOperationLog($service, $job, 'success', $message, $payload);
@@ -446,7 +662,13 @@ class ProvisioningOrchestrator
             }
 
             $normalized = is_scalar($value) ? (string) $value : json_encode($value);
-            if (!is_string($normalized) || trim($normalized) === '') {
+            if (!is_string($normalized)) {
+                continue;
+            }
+
+            if (trim($normalized) === '') {
+                $service->properties()->where('key', $key)->delete();
+                $persisted = true;
                 continue;
             }
 
@@ -465,18 +687,186 @@ class ProvisioningOrchestrator
      */
     protected function syncConvoyMapping(Service $service, mixed $response): array
     {
-        $server = is_array($response) && is_array($response['server'] ?? null) ? $response['server'] : [];
+        $existing = $this->readMapping($service, ProvisioningMapping::PROVIDER_CONVOY);
+        $server = is_array($response) && is_array($response['server'] ?? null)
+            ? $response['server']
+            : (is_array($response['data'] ?? null) ? $response['data'] : []);
+        $password = is_array($response) ? trim((string) ($response['password'] ?? '')) : '';
         $mapping = [
             'runtime_kind' => 'vps',
-            'convoy_server_uuid' => (string) ($server['uuid'] ?? ''),
-            'convoy_server_id' => (string) ($server['id'] ?? ''),
-            'convoy_server_short_id' => (string) ($server['short_id'] ?? ($server['shortId'] ?? '')),
-            'server_uuid' => (string) ($server['uuid'] ?? ''),
+            'convoy_server_uuid' => (string) ($server['uuid'] ?? ($existing['convoy_server_uuid'] ?? '')),
+            'convoy_server_id' => (string) ($server['id'] ?? ($existing['convoy_server_id'] ?? '')),
+            'convoy_server_short_id' => (string) ($server['short_id'] ?? ($server['shortId'] ?? ($existing['convoy_server_short_id'] ?? ''))),
+            'server_uuid' => (string) ($server['uuid'] ?? ($existing['server_uuid'] ?? '')),
         ];
+
+        if ($password !== '') {
+            $mapping['password'] = $password;
+            $mapping['account_password'] = $password;
+            $mapping['server_password'] = $password;
+            $mapping['password_source'] = 'provisioning';
+            $mapping['password_updated_at'] = now()->toISOString();
+        }
 
         $this->persistProperties($service, $mapping);
 
         return $this->readMapping($service, ProvisioningMapping::PROVIDER_CONVOY);
+    }
+
+    protected function resolveConvoyFailureMessage(mixed $response, string $fallback): string
+    {
+        $server = is_array($response) && is_array($response['server'] ?? null)
+            ? $response['server']
+            : (is_array($response['data'] ?? null) ? $response['data'] : []);
+
+        $candidates = [
+            $server['status_message'] ?? null,
+            $server['failure_reason'] ?? null,
+            $server['error'] ?? null,
+            $server['message'] ?? null,
+            $fallback,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $message = trim((string) $candidate);
+            if ($message !== '') {
+                return $message;
+            }
+        }
+
+        return 'Convoy reported a VPS build failure.';
+    }
+
+    protected function isConvoyTerminalFailure(string $failureCode, string $failureMessage): bool
+    {
+        $combined = strtoupper(trim($failureCode.' '.$failureMessage));
+        if ($combined === '') {
+            return false;
+        }
+
+        foreach ([
+            'EXCEEDS THE NODE\'S LIMIT',
+            'MEMORY VALUE EXCEEDS',
+            'DISK VALUE EXCEEDS',
+            'CPU VALUE EXCEEDS',
+            'DOES NOT HAVE ENOUGH FREE',
+            'NO AVAILABLE ADDRESS',
+            'NO AVAILABLE IPV4',
+            'TEMPLATE UUID IS INVALID',
+            'SELECTED TEMPLATE UUID IS INVALID',
+            'RESOURCE EXHAUSTED',
+            'INSUFFICIENT',
+            'QUOTA',
+            'CAPACITY',
+        ] as $marker) {
+            if (str_contains($combined, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function resolveConvoyServerRef(Service $service): string
+    {
+        $mapping = $this->readMapping($service, ProvisioningMapping::PROVIDER_CONVOY);
+
+        foreach (['convoy_server_uuid', 'server_uuid', 'convoy_server_id', 'convoy_server_short_id'] as $key) {
+            $value = trim((string) ($mapping[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function fetchConvoyServer(Service $service, string $serverRef): array
+    {
+        $service->loadMissing('product.server');
+
+        $extension = ExtensionHelper::getExtension(
+            'server',
+            (string) ($service->product?->server?->extension ?? ''),
+            $service->product?->server?->settings ?? []
+        );
+
+        $payload = $extension->getServer($serverRef);
+
+        return is_array($payload) ? $payload : [];
+    }
+
+    protected function syncConvoyProvisioningState(ProvisioningJob $job, Service $service, mixed $response, string $fallbackMessage): ProvisioningJob
+    {
+        $mapping = $this->syncConvoyMapping($service, $response);
+        $server = is_array($response) && is_array($response['server'] ?? null)
+            ? $response['server']
+            : (is_array($response['data'] ?? null) ? $response['data'] : []);
+
+        $rawStatus = strtolower(trim((string) ($server['status'] ?? '')));
+        $stage = $this->resolveConvoyProvisioningStage($response);
+
+        $message = trim((string) ($fallbackMessage !== '' ? $fallbackMessage : 'Convoy runtime synchronized.'));
+        $message = match ($stage) {
+            ProvisioningJob::STATUS_READY => 'VPS runtime is ready.',
+            ProvisioningJob::STATUS_BUILDING => 'VPS is still provisioning in Convoy.',
+            ProvisioningJob::STATUS_DEPLOYING => 'VPS is still applying runtime changes in Convoy.',
+            ProvisioningJob::STATUS_FAILED => 'Convoy reported a VPS build failure.',
+            default => $message,
+        };
+
+        $payload = [
+            'runtime' => [
+                'runtime_kind' => 'vps',
+                'server_mapping' => $mapping,
+                'provider_response' => $response,
+            ],
+        ];
+
+        if ($stage === ProvisioningJob::STATUS_READY) {
+            return $this->markReady($job, $service, $message, $payload);
+        }
+
+        if ($stage === ProvisioningJob::STATUS_FAILED) {
+            $failureMessage = $this->resolveConvoyFailureMessage($response, $message);
+
+            return $this->markFailure(
+                $job,
+                $failureMessage,
+                'PROVISIONING_CONVOY_BUILD_FAILED',
+                $service,
+                $this->isConvoyTerminalFailure('PROVISIONING_CONVOY_BUILD_FAILED', $failureMessage)
+            );
+        }
+
+        $job->status = $stage;
+        $job->error_message = null;
+        $job->response_payload = $this->buildProvisioningPayload($job->response_payload, $stage, $message, $payload);
+        $job->save();
+        $this->recordOperationLog($service, $job, $stage, $message, $payload);
+        $this->scheduleRetry($job, $this->activePollDelayMs());
+
+        return $job->refresh();
+    }
+
+    protected function resolveConvoyProvisioningStage(mixed $response): string
+    {
+        $server = is_array($response) && is_array($response['server'] ?? null)
+            ? $response['server']
+            : (is_array($response['data'] ?? null) ? $response['data'] : []);
+
+        $rawStatus = strtolower(trim((string) ($server['status'] ?? '')));
+
+        return match ($rawStatus) {
+            '', 'running', 'ready', 'active', 'suspended' => ProvisioningJob::STATUS_READY,
+            'installing', 'building', 'provisioning' => ProvisioningJob::STATUS_BUILDING,
+            'restoring_backup', 'restoring_snapshot' => ProvisioningJob::STATUS_DEPLOYING,
+            'install_failed', 'deletion_failed', 'error', 'failed' => ProvisioningJob::STATUS_FAILED,
+            default => ProvisioningJob::STATUS_BUILDING,
+        };
     }
 
     protected function shouldAttemptNow(ProvisioningJob $job): bool
@@ -538,6 +928,81 @@ class ProvisioningOrchestrator
     }
 
     /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $properties
+     */
+    protected function resolveManagedAppFailureMessage(string $fallback, array $runtime, array $properties): string
+    {
+        $candidates = [
+            $properties['app_status_reason'] ?? null,
+            $properties['app_rollout_reason'] ?? null,
+            $runtime['status_reason'] ?? null,
+            $runtime['reason'] ?? null,
+            $fallback,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $message = trim((string) $candidate);
+            if ($message !== '') {
+                return $message;
+            }
+        }
+
+        return 'Managed app runtime failed.';
+    }
+
+    /**
+     * @param  array<string, mixed>  $properties
+     */
+    protected function resolveManagedAppFailureCode(string $fallback, array $properties): string
+    {
+        $fallback = trim($fallback);
+        if ($fallback !== '') {
+            return $fallback;
+        }
+
+        $reason = trim((string) ($properties['app_status_reason'] ?? $properties['app_rollout_reason'] ?? ''));
+        if ($reason === '') {
+            return 'PROVISIONING_MANAGED_APP_FAILED';
+        }
+
+        $normalized = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $reason));
+        $normalized = trim($normalized, '_');
+        if ($normalized === '') {
+            return 'PROVISIONING_MANAGED_APP_FAILED';
+        }
+
+        return 'PROVISIONING_MANAGED_APP_' . $normalized;
+    }
+
+    protected function isManagedAppTerminalFailure(string $failureCode, string $failureMessage): bool
+    {
+        $combined = strtoupper(trim($failureCode.' '.$failureMessage));
+        if ($combined === '') {
+            return false;
+        }
+
+        $terminalMarkers = [
+            'DOCKERFILE',
+            'GIT_REPO_INVALID',
+            'GIT_REPO',
+            'DOMAIN_REQUIRED',
+            'SCALE_LIMIT_EXCEEDED',
+            'TLS_DOMAIN_REQUIRED',
+            'KUBECONFIG_MISSING',
+            'KUBECONFIG_LOOPBACK',
+        ];
+
+        foreach ($terminalMarkers as $marker) {
+            if (str_contains($combined, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @return array<int, string>
      */
     protected function enabledProviders(): array
@@ -560,11 +1025,70 @@ class ProvisioningOrchestrator
         }
 
         try {
+            $service->loadMissing(['product', 'properties', 'configs.configOption', 'configs.configValue']);
+            $serviceProperties = ExtensionHelper::getServiceProperties($service);
+            $operationId = (string) data_get($job->response_payload, 'provisioning.operation_id');
+            $endpoint = $this->resolveNotificationValue([
+                data_get($payload, 'runtime.endpoint'),
+                data_get($payload, 'runtime.ingress_url'),
+                data_get($payload, 'properties.app_endpoint'),
+                data_get($payload, 'properties.k8s_ingress_url'),
+                $serviceProperties['app_endpoint'] ?? null,
+                $serviceProperties['k8s_ingress_url'] ?? null,
+            ]);
+            $serverIp = $this->resolveNotificationValue([
+                data_get($payload, 'runtime.primary_ip'),
+                data_get($payload, 'runtime.server_mapping.primary_ip'),
+                data_get($payload, 'runtime.server_mapping.ip'),
+                data_get($payload, 'runtime.provider_response.server.primary_ip'),
+                data_get($payload, 'runtime.provider_response.server.ip'),
+                $serviceProperties['server_ip'] ?? null,
+                $serviceProperties['primary_ip'] ?? null,
+                $serviceProperties['ip'] ?? null,
+            ]);
+            $password = $this->resolveNotificationValue([
+                $serviceProperties['password'] ?? null,
+                $serviceProperties['account_password'] ?? null,
+                $serviceProperties['root_password'] ?? null,
+            ]);
+            $serverUsername = $this->resolveNotificationValue([
+                $serviceProperties['password_login_username'] ?? null,
+                $serviceProperties['server_username'] ?? null,
+                $serviceProperties['username'] ?? null,
+            ]);
+            $passwordApplyMode = $this->resolveNotificationValue([
+                $serviceProperties['password_apply_mode'] ?? null,
+            ]);
+            $passwordNote = $this->resolveNotificationValue([
+                $serviceProperties['password_note'] ?? null,
+            ]);
+            $serviceRegion = $this->resolveNotificationValue([
+                $serviceProperties['region'] ?? null,
+                $serviceProperties['service_region'] ?? null,
+            ]);
+            $servicePanelUrl = $this->buildFrontendUrl('/services/'.$service->id);
+            $invoiceUrl = $this->buildFrontendUrl('/services');
+
             NotificationHelper::serverCreatedNotification($service->user, $service, [
                 'provider' => $job->provider,
                 'runtime_kind' => $job->provider === ProvisioningMapping::PROVIDER_MANAGED_APP ? 'managed-app' : 'vps',
-                'endpoint' => data_get($payload, 'runtime.endpoint'),
-                'operation_id' => data_get($job->response_payload, 'provisioning.operation_id'),
+                'endpoint' => $endpoint,
+                'app_endpoint' => $endpoint,
+                'service_name' => (string) $service->label,
+                'product_name' => (string) ($service->product?->name ?? $service->label),
+                'service_id' => $service->id,
+                'service_region' => $serviceRegion,
+                'server_ip' => $serverIp,
+                'ip' => $serverIp,
+                'server_username' => $serverUsername,
+                'username' => $serverUsername,
+                'password' => $password,
+                'password_apply_mode' => $passwordApplyMode,
+                'password_restart_required' => filter_var((string) ($serviceProperties['password_restart_required'] ?? false), FILTER_VALIDATE_BOOL),
+                'password_note' => $passwordNote,
+                'service_panel_url' => $servicePanelUrl,
+                'support_link' => $invoiceUrl,
+                'operation_id' => $operationId !== '' ? $operationId : null,
             ]);
         } catch (Throwable $exception) {
             report($exception);
@@ -704,7 +1228,7 @@ class ProvisioningOrchestrator
                 'action' => 'provisioning:'.$job->provider,
                 'status' => $status,
                 'message' => $normalizedMessage,
-                'error_code' => $errorCode,
+                'error_code' => $errorCode !== null ? Str::limit(trim($errorCode), 120, '') : null,
                 'error_detail' => $normalizedErrorDetail,
                 'request_payload' => is_array($job->request_payload) ? $job->request_payload : null,
                 'response_payload' => $responsePayload,
@@ -714,5 +1238,74 @@ class ProvisioningOrchestrator
         } catch (Throwable $exception) {
             report($exception);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $responsePayload
+     */
+    protected function recordStandaloneOperationLog(
+        Service $service,
+        string $status,
+        string $message,
+        array $responsePayload = [],
+        ?string $errorCode = null,
+        ?string $errorDetail = null,
+        string $action = 'provisioning:managed-app'
+    ): void {
+        try {
+            $normalizedMessage = trim($message);
+            $normalizedErrorDetail = $errorDetail;
+
+            if ($normalizedMessage !== '' && Str::length($normalizedMessage) > 255) {
+                $normalizedErrorDetail = trim(implode("\n\n", array_filter([
+                    $normalizedErrorDetail,
+                    $normalizedMessage,
+                ])));
+                $normalizedMessage = Str::limit($normalizedMessage, 252, '...');
+            }
+
+            ServiceOperationLog::query()->create([
+                'service_id' => $service->id,
+                'operation_id' => (string) Str::ulid(),
+                'user_id' => $service->user_id,
+                'source' => 'provisioning',
+                'action' => $action,
+                'status' => $status,
+                'message' => $normalizedMessage,
+                'error_code' => $errorCode !== null ? Str::limit(trim($errorCode), 120, '') : null,
+                'error_detail' => $normalizedErrorDetail,
+                'request_payload' => null,
+                'response_payload' => $responsePayload,
+                'actor_type' => 'system',
+                'actor_id' => null,
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    /**
+     * @param  array<int, mixed>  $candidates
+     */
+    protected function resolveNotificationValue(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            $normalized = trim((string) $candidate);
+            if ($normalized !== '') {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    protected function buildFrontendUrl(string $path): ?string
+    {
+        $base = trim((string) (env('SLOTH_FRONTEND_URL') ?: env('SLOTH_WEB_PUBLIC_URL') ?: ''));
+        if ($base === '') {
+            return null;
+        }
+
+        return rtrim($base, '/').'/'.ltrim($path, '/');
     }
 }

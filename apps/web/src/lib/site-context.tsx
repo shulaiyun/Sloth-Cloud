@@ -1,14 +1,48 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-import { content, localeMeta, type Locale } from './content';
+import { content, localeMeta, supportedFrontendLocales, type Locale } from './content';
 
 type Theme = 'dark' | 'light';
+export type ThemeDomain = 'commerce' | 'console';
+
+const themeStorageKeys: Record<ThemeDomain, string> = {
+  commerce: 'sloth-cloud-theme-commerce',
+  console: 'sloth-cloud-theme-console',
+};
+
+function safeLocalStorageGet(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures (private mode / quota / blocked storage).
+  }
+}
+
+function defaultThemeForDomain(domain: ThemeDomain): Theme {
+  return domain === 'console' ? 'dark' : 'light';
+}
+
+export function resolveThemeDomain(pathname: string): ThemeDomain {
+  return pathname.startsWith('/services') || pathname.startsWith('/affiliate')
+    ? 'console'
+    : 'commerce';
+}
 
 interface SiteContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
   theme: Theme;
   setTheme: (theme: Theme) => void;
+  themeDomain: ThemeDomain;
+  setThemeDomain: (domain: ThemeDomain) => void;
   text: (typeof content)[Locale];
   formatMoney: (value: number | null, currency: string) => string;
   formatDate: (value: string | null) => string;
@@ -18,23 +52,32 @@ const SiteContext = createContext<SiteContextValue | null>(null);
 
 export function SiteProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocale] = useState<Locale>(() => {
-    const value = window.localStorage.getItem('sloth-cloud-locale');
-    return value && value in localeMeta ? (value as Locale) : 'zh-CN';
+    const value = safeLocalStorageGet('sloth-cloud-locale');
+    if (!value || !(value in localeMeta)) {
+      return 'zh-CN';
+    }
+
+    const parsed = value as Locale;
+    return supportedFrontendLocales.includes(parsed) ? parsed : 'zh-CN';
   });
-  const [theme, setTheme] = useState<Theme>(() => {
-    const value = window.localStorage.getItem('sloth-cloud-theme');
-    return value === 'light' ? 'light' : 'dark';
-  });
+  const [themeDomain, setThemeDomain] = useState<ThemeDomain>('commerce');
+  const [themePreferences, setThemePreferences] = useState<Record<ThemeDomain, Theme>>(() => ({
+    commerce: safeLocalStorageGet(themeStorageKeys.commerce) === 'dark' ? 'dark' : 'light',
+    console: safeLocalStorageGet(themeStorageKeys.console) === 'light' ? 'light' : 'dark',
+  }));
+  const theme = themePreferences[themeDomain] ?? defaultThemeForDomain(themeDomain);
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    window.localStorage.setItem('sloth-cloud-locale', locale);
+    safeLocalStorageSet('sloth-cloud-locale', locale);
   }, [locale]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem('sloth-cloud-theme', theme);
-  }, [theme]);
+    document.documentElement.dataset.themeDomain = themeDomain;
+    safeLocalStorageSet(themeStorageKeys.commerce, themePreferences.commerce);
+    safeLocalStorageSet(themeStorageKeys.console, themePreferences.console);
+  }, [theme, themeDomain, themePreferences]);
 
   const text = content[locale];
 
@@ -42,7 +85,14 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
     locale,
     setLocale,
     theme,
-    setTheme,
+    setTheme(nextTheme) {
+      setThemePreferences((state) => ({
+        ...state,
+        [themeDomain]: nextTheme,
+      }));
+    },
+    themeDomain,
+    setThemeDomain,
     text,
     formatMoney(number, currency) {
       if (number === null) {
@@ -66,7 +116,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         day: 'numeric',
       }).format(new Date(dateString));
     },
-  }), [locale, text, theme]);
+  }), [locale, text, theme, themeDomain]);
 
   return <SiteContext.Provider value={value}>{children}</SiteContext.Provider>;
 }

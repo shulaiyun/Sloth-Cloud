@@ -2,10 +2,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { ApiError, requestJson, useApiData } from '../lib/api';
+import { useAuth } from '../lib/auth-context';
 import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import { useSite } from '../lib/site-context';
+import { getUiText, invoiceStatusLabel } from '../lib/ui-text';
 import type { InvoicePayResponse, InvoiceResponse } from '../lib/types';
+
+type LocaleLanguage = 'zh' | 'en' | 'ja' | 'ko';
+type LocalizedMessage = {
+  zh: string;
+  en: string;
+  ja: string;
+  ko: string;
+};
 
 function isInvoicePaid(status: string, remaining: number) {
   const normalized = status.trim().toLowerCase();
@@ -32,30 +42,78 @@ function hasPaymentReturnHint(search: string) {
   });
 }
 
-function invoiceStatusLabel(status: string, locale: string) {
-  const normalized = status.trim().toLowerCase();
-  const zh = locale.startsWith('zh');
-
-  if (normalized === 'paid' || normalized === 'success' || normalized === 'completed') {
-    return zh ? '\u5df2\u652f\u4ed8' : 'Paid';
-  }
-  if (normalized === 'pending' || normalized === 'unpaid') {
-    return zh ? '\u5f85\u652f\u4ed8' : 'Pending';
-  }
-  if (normalized === 'cancelled' || normalized === 'canceled' || normalized === 'void') {
-    return zh ? '\u5df2\u53d6\u6d88' : 'Cancelled';
-  }
-  if (normalized === 'overdue') {
-    return zh ? '\u5df2\u903e\u671f' : 'Overdue';
+function openPaymentDocument(paymentHtml: string) {
+  const popup = window.open('', '_blank');
+  if (!popup) {
+    return false;
   }
 
-  return zh ? '\u672a\u77e5' : 'Unknown';
+  try {
+    popup.opener = null;
+  } catch {
+    // Ignore browser restrictions; writing the payment form is the priority.
+  }
+
+  popup.document.open();
+  popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><base target="_self"></head><body>${paymentHtml}</body></html>`);
+  popup.document.close();
+  return true;
+}
+
+function localeLanguage(locale: string): LocaleLanguage {
+  const language = locale.toLowerCase().split('-')[0];
+  if (language === 'zh' || language === 'ja' || language === 'ko') {
+    return language;
+  }
+
+  return 'en';
+}
+
+function localizeMessage(locale: string, message: LocalizedMessage) {
+  const language = localeLanguage(locale);
+  if (language === 'zh') return message.zh;
+  if (language === 'ja') return message.ja;
+  if (language === 'ko') return message.ko;
+  return message.en;
+}
+
+function localizeInvoiceBackendMessage(rawMessage: string | null | undefined, locale: string, ui: ReturnType<typeof getUiText>) {
+  if (!rawMessage || rawMessage.trim() === '') {
+    return null;
+  }
+
+  const normalized = rawMessage.toLowerCase().trim();
+
+  if (/(payment|gateway).*(initialized|created|started)/.test(normalized)) {
+    return ui.invoices.waitingPayment;
+  }
+
+  if (/waiting.*callback|awaiting.*callback|payment pending/.test(normalized)) {
+    return ui.invoices.waitingPayment;
+  }
+
+  if (/(invoice|payment).*(already paid|already settled)/.test(normalized)) {
+    return localizeMessage(locale, {
+      zh: '账单已支付，无需重复付款。',
+      en: 'This invoice is already paid.',
+      ja: 'この請求書は既に支払い済みです。',
+      ko: '이 청구서는 이미 결제가 완료되었습니다.',
+    });
+  }
+
+  if (/(payment|invoice).*(success|confirmed|completed|paid)/.test(normalized)) {
+    return ui.invoices.paymentConfirmed;
+  }
+
+  return rawMessage;
 }
 
 export function InvoiceDetailPage() {
   const { invoiceId } = useParams();
   const location = useLocation();
   const { text, locale } = useSite();
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const ui = getUiText(locale);
   const { data, error, loading } = useApiData<InvoiceResponse>(
     invoiceId ? `/api/v1/invoices/${invoiceId}` : null,
   );
@@ -67,9 +125,10 @@ export function InvoiceDetailPage() {
   const [payResult, setPayResult] = useState<InvoicePayResponse | null>(null);
   const [invoiceState, setInvoiceState] = useState<InvoiceResponse['data']['invoice'] | null>(null);
   const [pollingForPayment, setPollingForPayment] = useState(false);
+  const [refreshingInvoiceStatus, setRefreshingInvoiceStatus] = useState(false);
 
-  const zh = locale.startsWith('zh');
   const invoice = invoiceState ?? data?.data.invoice ?? null;
+  const loginHref = `/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
 
   const gateways = useMemo(() => {
     if (!Array.isArray(data?.data.gateways)) {
@@ -117,19 +176,28 @@ export function InvoiceDetailPage() {
       return;
     }
 
-    const shouldStartPolling = Boolean(payResult) || hasPaymentReturnHint(location.search);
-    if (!shouldStartPolling || isInvoicePaid(invoiceState.status, invoiceState.remaining)) {
+    const invoicePending = !isInvoicePaid(invoiceState.status, invoiceState.remaining);
+    const shouldStartPolling = invoicePending;
+    if (!shouldStartPolling) {
       setPollingForPayment(false);
       return;
     }
 
     let cancelled = false;
     let attempts = 0;
-    const maxAttempts = 18;
+    const maxAttempts = 60;
     setPollingForPayment(true);
-    setMessage((current) => current ?? (zh
-      ? '\u6b63\u5728\u7b49\u5f85\u652f\u4ed8\u56de\u8c03\u786e\u8ba4\uff0c\u8d26\u5355\u72b6\u6001\u4f1a\u81ea\u52a8\u5237\u65b0\u3002'
-      : 'Waiting for payment confirmation. Invoice status will refresh automatically.'));
+    setMessage((current) => {
+      if (current) {
+        return current;
+      }
+
+      if (Boolean(payResult) || hasPaymentReturnHint(location.search)) {
+        return ui.invoices.waitingPayment;
+      }
+
+      return ui.invoices.invoiceStillPending;
+    });
 
     const timer = window.setInterval(async () => {
       attempts += 1;
@@ -141,7 +209,7 @@ export function InvoiceDetailPage() {
 
         setInvoiceState(refreshed.data.invoice);
         if (isInvoicePaid(refreshed.data.invoice.status, refreshed.data.invoice.remaining)) {
-          setMessage(zh ? '\u652f\u4ed8\u5df2\u786e\u8ba4\uff0c\u8d26\u5355\u72b6\u6001\u5df2\u66f4\u65b0\u3002' : 'Payment confirmed. Invoice status updated.');
+          setMessage(ui.invoices.paymentConfirmed);
           setPollingForPayment(false);
           window.clearInterval(timer);
           return;
@@ -152,9 +220,7 @@ export function InvoiceDetailPage() {
 
       if (attempts >= maxAttempts) {
         setPollingForPayment(false);
-        setMessage(zh
-          ? '\u6682\u672a\u786e\u8ba4\u5230\u652f\u4ed8\u7ed3\u679c\uff0c\u8bf7\u7a0d\u540e\u624b\u52a8\u5237\u65b0\u8d26\u5355\u9875\u6216\u8054\u7cfb\u652f\u6301\u5e76\u63d0\u4f9b\u652f\u4ed8\u5355\u53f7\u3002'
-          : 'Payment has not been confirmed yet. Refresh this invoice shortly or contact support with the payment reference.');
+        setMessage(ui.invoices.paymentNotConfirmed);
         window.clearInterval(timer);
       }
     }, 3500);
@@ -163,7 +229,31 @@ export function InvoiceDetailPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [invoiceId, invoiceState, location.search, payResult, zh]);
+  }, [invoiceId, invoiceState, location.search, payResult, ui.invoices.invoiceStillPending, ui.invoices.paymentConfirmed, ui.invoices.paymentNotConfirmed, ui.invoices.waitingPayment]);
+
+  async function refreshInvoiceStatus() {
+    if (!invoiceId || refreshingInvoiceStatus) {
+      return;
+    }
+
+    setRefreshingInvoiceStatus(true);
+    setActionError(null);
+
+    try {
+      const refreshed = await requestJson<InvoiceResponse>(`/api/v1/invoices/${invoiceId}`);
+      setInvoiceState(refreshed.data.invoice);
+
+      if (isInvoicePaid(refreshed.data.invoice.status, refreshed.data.invoice.remaining)) {
+        setMessage(ui.invoices.paymentConfirmed);
+      } else {
+        setMessage(ui.invoices.refreshLater);
+      }
+    } catch (caughtError) {
+      setActionError(toFriendlyError(caughtError as ApiError, locale));
+    } finally {
+      setRefreshingInvoiceStatus(false);
+    }
+  }
 
   async function payWithCredit() {
     if (!invoiceId || pending) return;
@@ -177,7 +267,7 @@ export function InvoiceDetailPage() {
         body: { method: 'credit' },
       });
 
-      setMessage(response.message);
+      setMessage(localizeInvoiceBackendMessage(response.message, locale, ui) ?? response.message);
       setPayResult(response);
     } catch (caughtError) {
       setActionError(toFriendlyError(caughtError as ApiError, locale));
@@ -196,18 +286,14 @@ export function InvoiceDetailPage() {
 
     if (payResult?.data.paymentHtml) {
       setMessage(
-        zh
-          ? '\u5df2\u83b7\u53d6\u7f51\u5173\u5185\u5d4c\u6536\u94f6\u53f0\uff0c\u8bf7\u5728\u4e0b\u65b9\u5b8c\u6210\u652f\u4ed8\u3002'
-          : 'Embedded checkout is ready. Complete payment below.',
+        ui.invoices.paymentOpened,
       );
       return;
     }
 
     if (gateways.length === 0) {
       setActionError(
-        zh
-          ? '\u5f53\u524d\u8d26\u5355\u6ca1\u6709\u53ef\u7528\u652f\u4ed8\u7f51\u5173\uff0c\u8bf7\u5728 Paymenter \u540e\u53f0\u542f\u7528\u5e76\u7ed1\u5b9a\u7f51\u5173\u3002'
-          : 'No gateway is available for this invoice. Enable and bind one in Paymenter admin.',
+        ui.invoices.noGateway,
       );
       return;
     }
@@ -227,23 +313,22 @@ export function InvoiceDetailPage() {
         body: { method: 'gateway', gatewayId: Number(gatewayId) },
       });
 
-      setMessage(response.message);
+      setMessage(localizeInvoiceBackendMessage(response.message, locale, ui) ?? response.message);
       setPayResult(response);
 
       if (response.data.redirectUrl) {
         redirected = true;
         window.location.assign(response.data.redirectUrl);
       } else if (response.data.paymentHtml) {
+        const opened = openPaymentDocument(response.data.paymentHtml);
         setMessage(
-          zh
-            ? '\u5df2\u83b7\u53d6\u7f51\u5173\u5185\u5d4c\u6536\u94f6\u53f0\uff0c\u8bf7\u5728\u4e0b\u65b9\u5b8c\u6210\u652f\u4ed8\u3002'
-            : 'Embedded checkout is ready. Complete payment below.',
+          opened
+            ? ui.invoices.paymentOpened
+            : ui.invoices.paymentPopupBlocked,
         );
       } else {
         setActionError(
-          zh
-            ? '\u7f51\u5173\u672a\u8fd4\u56de\u53ef\u7528\u652f\u4ed8\u9875\u9762\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u8054\u7cfb\u652f\u6301\u3002'
-            : 'Gateway did not return a usable checkout page. Please retry or contact support.',
+          ui.invoices.gatewayMissingPage,
         );
       }
     } catch (caughtError) {
@@ -255,12 +340,12 @@ export function InvoiceDetailPage() {
     }
   }
 
-  const relatedServiceNames = useMemo(() => {
+  const relatedServices = useMemo(() => {
     if (!data || !invoice) {
       return [];
     }
 
-    const candidates = new Set<string>();
+    const candidates = new Map<string, { id: string | null; name: string }>();
 
     recurringServices.forEach((service) => {
       const raw = typeof service.label === 'string' && service.label.trim() !== ''
@@ -270,7 +355,8 @@ export function InvoiceDetailPage() {
           : '';
       const name = localizeText(raw, locale, raw).trim();
       if (name) {
-        candidates.add(name);
+        const id = typeof service.id === 'string' && service.id.trim() !== '' ? service.id.trim() : null;
+        candidates.set(id ? `service:${id}` : `name:${name}`, { id, name });
       }
     });
 
@@ -278,18 +364,77 @@ export function InvoiceDetailPage() {
       const description = typeof item.description === 'string' ? item.description : '';
       const normalized = normalizeItemName(localizeText(description, locale, description));
       if (normalized) {
-        candidates.add(normalized);
+        const id = typeof item.referenceId === 'string' && item.referenceId.trim() !== '' ? item.referenceId.trim() : null;
+        const key = id ? `service:${id}` : `name:${normalized}`;
+        if (!candidates.has(key)) {
+          candidates.set(key, { id, name: normalized });
+        }
       }
     });
 
-    return Array.from(candidates);
+    return Array.from(candidates.values());
   }, [data, invoice, recurringServices, invoiceItems, locale]);
+  const primaryRelatedServiceHref = relatedServices.length === 1 && relatedServices[0]?.id
+    ? `/services/${encodeURIComponent(relatedServices[0].id)}`
+    : '/services';
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
   }
 
   if (error || !data || !invoice) {
+    if (!authLoading && !isAuthenticated) {
+      const returnedFromGateway = hasPaymentReturnHint(location.search);
+      const authMessage = returnedFromGateway
+        ? localizeMessage(locale, {
+            zh: '支付结果已经返回，但当前这个访问入口没有登录会话。请先登录，再继续查看这张账单和支付状态。',
+            en: 'The payment gateway has already returned, but this browser entry does not have an active session. Sign in first to continue viewing the invoice and payment status.',
+            ja: '決済結果の戻りは完了していますが、このアクセス入口には有効なログインセッションがありません。先にログインしてから請求書と支払い状態を確認してください。',
+            ko: '결제 결과는 이미 돌아왔지만 현재 접속한 이 주소에는 로그인 세션이 없습니다. 먼저 로그인한 뒤 청구서와 결제 상태를 확인해 주세요.',
+          })
+        : localizeMessage(locale, {
+            zh: '这张账单需要登录后才能查看。',
+            en: 'You need to sign in to view this invoice.',
+            ja: 'この請求書を表示するにはログインが必要です。',
+            ko: '이 청구서를 보려면 로그인해야 합니다.',
+          });
+
+      return (
+        <div className="stack-24">
+          <section className="section-heading">
+            <div>
+              <p className="eyebrow">{text.nav.invoices}</p>
+              <h1>#{invoiceId ?? '-'}</h1>
+              <p className="muted">{ui.invoices.invoiceStillPending}</p>
+            </div>
+          </section>
+
+          <div className="panel stack-16">
+            <div className="callout compact">
+              <strong>{authMessage}</strong>
+              {returnedFromGateway ? (
+                <p>{localizeMessage(locale, {
+                  zh: '如果你是从一个地址发起支付、又从另一个地址返回，浏览器会把它当成不同入口，所以可能需要重新登录一次。',
+                  en: 'If payment started from one address and returned to another, the browser may treat that as a different site entry and ask you to sign in again.',
+                  ja: '支払いを開始したアドレスと戻ってきたアドレスが異なる場合、ブラウザは別入口として扱うことがあり、再ログインが必要になることがあります。',
+                  ko: '결제를 시작한 주소와 돌아온 주소가 다르면 브라우저가 다른 접속入口로 취급해 다시 로그인해야 할 수 있습니다.',
+                })}</p>
+              ) : null}
+            </div>
+
+            <div className="button-row">
+              <Link className="button primary" to={loginHref}>
+                {text.nav.login}
+              </Link>
+              <Link className="button ghost" to="/invoices">
+                {text.nav.invoices}
+              </Link>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="error-card">
         {text.common.error}: {toFriendlyError(new Error(error ?? ''), locale)}
@@ -314,12 +459,20 @@ export function InvoiceDetailPage() {
 
       <section className="two-column">
         <article className="panel stack-16">
-          {relatedServiceNames.length > 0 ? (
+          {relatedServices.length > 0 ? (
             <div className="callout compact">
-              <strong>{zh ? '\u5173\u8054\u4ea7\u54c1\u6216\u670d\u52a1' : 'Related product or service'}</strong>
+              <strong>{ui.invoices.relatedServices}</strong>
               <ul className="invoice-related-list">
-                {relatedServiceNames.map((name) => (
-                  <li key={name}>{name}</li>
+                {relatedServices.map((service) => (
+                  <li key={`${service.id ?? 'name'}:${service.name}`}>
+                    {service.id ? (
+                      <Link className="text-link" to={`/services/${encodeURIComponent(service.id)}`}>
+                        {service.name}
+                      </Link>
+                    ) : (
+                      service.name
+                    )}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -337,21 +490,21 @@ export function InvoiceDetailPage() {
         <article className="summary-card">
           {paid ? (
             <div className="callout callout-success">
-              <strong>{zh ? '\u652f\u4ed8\u6210\u529f\uff0c\u8d26\u5355\u5df2\u7ed3\u6e05\u3002' : 'Payment successful. Invoice settled.'}</strong>
+              <strong>{ui.invoices.settledTitle}</strong>
               <p>
-                {zh
-                  ? '\u4f60\u53ef\u4ee5\u524d\u5f80\u670d\u52a1\u9875\u9762\u67e5\u770b\u8fd9\u7b14\u8d26\u5355\u5bf9\u5e94\u7684\u5f00\u901a\u548c\u8fd0\u884c\u72b6\u6001\u3002'
-                  : 'Open the services page to review provisioning and runtime status.'}
+                {ui.invoices.settledBody}
               </p>
-              <Link className="button ghost" to="/services">
-                {text.nav.services}
+              <Link className="button ghost" to={primaryRelatedServiceHref}>
+                {relatedServices.length === 1
+                  ? (locale.startsWith('zh') ? '打开对应服务' : 'Open related service')
+                  : text.nav.services}
               </Link>
             </div>
           ) : (
             <>
               {gateways.length > 0 ? (
                 <label className="field">
-                  <span>{zh ? '\u652f\u4ed8\u65b9\u5f0f' : 'Payment method'}</span>
+                  <span>{ui.invoices.paymentMethod}</span>
                   <select
                     className="text-input select-input"
                     value={selectedGatewayId}
@@ -366,9 +519,7 @@ export function InvoiceDetailPage() {
                 </label>
               ) : (
                 <div className="callout compact">
-                  {zh
-                    ? '\u5f53\u524d\u8d26\u5355\u6ca1\u6709\u53ef\u7528\u652f\u4ed8\u65b9\u5f0f\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u6216\u8054\u7cfb\u652f\u6301\u3002'
-                    : 'No payment method is available for this invoice. Please retry or contact support.'}
+                  {ui.invoices.noGateway}
                 </div>
               )}
 
@@ -382,29 +533,39 @@ export function InvoiceDetailPage() {
                 type="button"
                 onClick={() => void payWithGateway()}
               >
-                {payResult?.data.redirectUrl ? (zh ? '\u7ee7\u7eed\u652f\u4ed8' : 'Continue payment') : text.invoices.payWithGateway}
+                {payResult?.data.redirectUrl ? ui.invoices.continuePayment : text.invoices.payWithGateway}
               </button>
 
               {payResult?.data.redirectUrl ? (
                 <a className="button ghost" href={payResult.data.redirectUrl} rel="noreferrer" target="_blank">
-                  {zh ? '\u6253\u5f00\u652f\u4ed8\u9875\u9762\uff08\u65b0\u6807\u7b7e\uff09' : 'Open payment page (new tab)'}
+                  {ui.invoices.openPaymentNewTab}
                 </a>
               ) : null}
 
+              <button
+                className="button ghost"
+                disabled={refreshingInvoiceStatus}
+                type="button"
+                onClick={() => void refreshInvoiceStatus()}
+              >
+                {refreshingInvoiceStatus
+                  ? ui.common.refreshing
+                  : ui.invoices.paidRefresh}
+              </button>
+
               {payResult?.data.paymentHtml && !payResult?.data.redirectUrl ? (
-                <div className="payment-embed stack-12">
-                  <p className="muted">
-                    {zh
-                      ? '\u8bf7\u5728\u4e0b\u65b9\u6536\u94f6\u53f0\u5b8c\u6210\u652f\u4ed8\uff0c\u6210\u529f\u540e\u8d26\u5355\u72b6\u6001\u4f1a\u81ea\u52a8\u5237\u65b0\u3002'
-                      : 'Finish payment below. Invoice status will refresh automatically.'}
-                  </p>
-                  <iframe
-                    className="payment-embed-frame"
-                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-top-navigation"
-                    srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_top"></head><body>${payResult.data.paymentHtml}</body></html>`}
-                    title={zh ? '\u652f\u4ed8\u9875\u9762' : 'Payment page'}
-                  />
-                </div>
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={() => {
+                    const opened = openPaymentDocument(payResult.data.paymentHtml ?? '');
+                    if (!opened) {
+                      setActionError(ui.invoices.paymentPopupBlocked);
+                    }
+                  }}
+                >
+                  {ui.invoices.openPaymentAgain}
+                </button>
               ) : null}
             </>
           )}
@@ -413,7 +574,7 @@ export function InvoiceDetailPage() {
 
       {pollingForPayment && !paid ? (
         <div className="callout">
-          {zh ? '\u6b63\u5728\u786e\u8ba4\u652f\u4ed8\u7ed3\u679c\uff0c\u8bf7\u7a0d\u5019...' : 'Confirming payment status, please wait...'}
+          {ui.invoices.confirmingPayment}
         </div>
       ) : null}
       {message ? <div className="callout">{message}</div> : null}

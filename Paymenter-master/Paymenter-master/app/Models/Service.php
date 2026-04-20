@@ -7,6 +7,7 @@ use App\Classes\Settings;
 use App\Models\Traits\HasProperties;
 use App\Models\ProvisioningJob;
 use App\Models\ServiceOperationLog;
+use App\Models\VpsAppInstall;
 use App\Observers\ServiceObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -197,8 +198,32 @@ class Service extends Model implements Auditable
     public function upgradable(): Attribute
     {
         return Attribute::make(
-            get: fn () => ($this->productUpgrades()->count() > 0 || $this->product->upgradableConfigOptions()->count() > 0) && $this->status == 'active' && $this->upgrade->where('status', ServiceUpgrade::STATUS_PENDING)->count() == 0
+            get: fn () => (
+                $this->productUpgrades()->count() > 0
+                || $this->product->upgradableConfigOptions()->count() > 0
+                || $this->hasSameCategoryResizeCandidates()
+            ) && $this->status == 'active' && $this->upgrade->where('status', ServiceUpgrade::STATUS_PENDING)->count() == 0
         );
+    }
+
+    protected function hasSameCategoryResizeCandidates(): bool
+    {
+        if (!$this->product || !$this->plan || !$this->product->category_id) {
+            return false;
+        }
+
+        return Product::query()
+            ->where('category_id', $this->product->category_id)
+            ->whereKeyNot($this->product_id)
+            ->where(function ($query) {
+                $query->whereNull('stock')
+                    ->orWhere('stock', '>=', $this->quantity);
+            })
+            ->whereHas('plans', function ($query) {
+                $query->where('billing_unit', $this->plan->billing_unit)
+                    ->where('billing_period', $this->plan->billing_period);
+            })
+            ->exists();
     }
 
     public function productUpgrades()
@@ -258,6 +283,11 @@ class Service extends Model implements Auditable
     public function billingAgreement()
     {
         return $this->belongsTo(BillingAgreement::class, 'billing_agreement_id');
+    }
+
+    public function vpsAppInstalls()
+    {
+        return $this->hasMany(VpsAppInstall::class)->orderByDesc('is_primary')->orderBy('id');
     }
 
     public function operationLogs()

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { requestJson } from './api';
 import type { AuthResponse, AuthUser, LoginInput, LogoutResponse, MeResponse, RegisterInput } from './types';
@@ -18,20 +18,50 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
 
   async function refresh() {
+    if (refreshInFlightRef.current) {
+      return refreshInFlightRef.current;
+    }
+
+    const task = (async () => {
+      try {
+        const response = await requestJson<MeResponse>('/api/v1/auth/me');
+        setUser(response.data.user);
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
+        refreshInFlightRef.current = null;
+      }
+    })();
+
+    refreshInFlightRef.current = task;
+
     try {
-      const response = await requestJson<MeResponse>('/api/v1/auth/me');
-      setUser(response.data.user);
-    } catch {
-      setUser(null);
+      await task;
     } finally {
-      setLoading(false);
+      refreshInFlightRef.current = null;
     }
   }
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    const refreshOnFocus = () => {
+      void refresh();
+    };
+
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnFocus);
+
+    return () => {
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
   }, []);
 
   const value = useMemo<AuthContextValue>(() => ({

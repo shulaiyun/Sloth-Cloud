@@ -38,11 +38,65 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN pnpm --filter @sloth-cloud/web build
 
-FROM nginx:1.27-alpine AS runtime
+FROM node:22-alpine AS runtime
 
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /workspace/apps/web/dist /usr/share/nginx/html
+WORKDIR /app
+
+COPY --from=builder /workspace/apps/web/dist ./dist
+
+RUN cat > /app/server.mjs <<'EOF'
+import { createServer } from 'node:http';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { extname, join, normalize } from 'node:path';
+
+const port = Number(process.env.PORT || 80);
+const root = '/app/dist';
+
+const mime = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+function resolvePath(urlPath) {
+  const safePath = normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
+  return join(root, safePath);
+}
+
+function sendFile(reply, path) {
+  const ext = extname(path).toLowerCase();
+  reply.statusCode = 200;
+  reply.setHeader('Content-Type', mime[ext] || 'application/octet-stream');
+  createReadStream(path).pipe(reply);
+}
+
+createServer((req, res) => {
+  const requestPath = req.url ? req.url.split('?')[0] : '/';
+  const filePath = resolvePath(requestPath === '/' ? '/index.html' : requestPath);
+
+  if (existsSync(filePath) && statSync(filePath).isFile()) {
+    sendFile(res, filePath);
+    return;
+  }
+
+  // SPA fallback
+  sendFile(res, join(root, 'index.html'));
+}).listen(port, () => {
+  console.log(`sloth-web listening on :${port}`);
+});
+EOF
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "/app/server.mjs"]

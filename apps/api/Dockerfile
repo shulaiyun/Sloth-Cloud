@@ -63,6 +63,7 @@ RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
     && npm config set maxsockets 5 \
     && npm install -g pnpm@9
 RUN apk add --no-cache kubectl
+RUN apk add --no-cache git curl unzip tar
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/tsconfig.json ./apps/api/

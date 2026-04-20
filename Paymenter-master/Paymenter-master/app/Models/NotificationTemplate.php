@@ -22,6 +22,7 @@ class NotificationTemplate extends Model implements Auditable
         'in_app_enabled',
         'in_app_title',
         'in_app_body',
+        'in_app_url',
         'edit_preference_message',
     ];
 

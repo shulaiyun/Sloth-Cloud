@@ -122,10 +122,18 @@ Route::prefix('/servers')->group(function () {
             Route::get('/', [Admin\ServerController::class, 'show'])->withoutMiddleware(
                 ValidateServerStatusMiddleware::class,
             );
+            Route::get('/state', [Admin\ServerController::class, 'state'])->withoutMiddleware(
+                ValidateServerStatusMiddleware::class,
+            );
+            Route::get('/metrics', [Admin\ServerController::class, 'metrics'])->withoutMiddleware(
+                ValidateServerStatusMiddleware::class,
+            );
             Route::patch('/', [Admin\ServerController::class, 'update'])->withoutMiddleware(
                 ValidateServerStatusMiddleware::class,
             );
             Route::delete('/', [Admin\ServerController::class, 'destroy']);
+            Route::post('/console', [Admin\ServerController::class, 'createConsoleSession'])
+                ->withoutMiddleware(ValidateServerStatusMiddleware::class);
 
             Route::prefix('/settings')->group(function () {
                 Route::patch('/build', [Admin\ServerController::class, 'updateBuild']);

@@ -84,13 +84,27 @@ class EmailTemplateSeeder extends Seeder
                 		View Invoice
                 	</a>
                 </div>
+                @if(!empty($service_url))
+                <div class="action">
+                	<a class="button button-blue" href="{{ $service_url }}">
+                		Open Service
+                	</a>
+                </div>
+                @endif
+                @if(!empty($operator_capsule_url))
+                <div class="action">
+                	<a class="button button-blue" href="{{ $operator_capsule_url }}">
+                		Open AI Capsule
+                	</a>
+                </div>
+                @endif
                 HTML,
             'in_app_title' => 'Invoice paid',
-            'in_app_body' => 'Your invoice #{{ $invoice->id }} has been successfully paid with total amount: {{ $invoice->formattedTotal }}.',
+            'in_app_body' => 'Your invoice #{{ $invoice->id }} has been successfully paid with total amount: {{ $invoice->formattedTotal }}.@if(!empty($operator_capsule_name)) Related AI project: {{ $operator_capsule_name }}.@endif',
             'mail_enabled' => 'choice_on',
             'in_app_enabled' => 'choice_on',
             'edit_preference_message' => 'Notify me about successful payments',
-            'in_app_url' => '{{ route("invoices.show", $invoice) }}',
+            'in_app_url' => '{{ $service_url ?? $operator_capsule_url ?? route("invoices.show", $invoice) }}',
         ],
         'invoice_payment_failed' => [
             'subject' => 'Invoice payment failed',
@@ -149,17 +163,104 @@ class EmailTemplateSeeder extends Seeder
 
                 **Service details**
                 - Name: {{ $service->product->name }}
+                - Runtime: {{ $runtime_kind ?? $provider ?? 'service' }}
+                @if(!empty($endpoint))
+                - Endpoint: {{ $endpoint }}
+                @endif
+                @if(!empty($server_ip))
+                - IP: {{ $server_ip }}
+                @endif
+                @if(!empty($operation_id))
+                - Operation ID: {{ $operation_id }}
+                @endif
+
+                @if(!empty($service_panel_url))
+                <div class="action">
+                	<a class="button button-blue" href="{{ $service_panel_url }}">
+                		Open service panel
+                	</a>
+                </div>
+                @endif
+                @if(!empty($operator_capsule_url))
+                <div class="action">
+                	<a class="button button-blue" href="{{ $operator_capsule_url }}">
+                		Open AI capsule
+                	</a>
+                </div>
+                @endif
+                @if(!empty($operator_source_bundle_url))
+                <div class="action">
+                	<a class="button button-blue" href="{{ $operator_source_bundle_url }}">
+                		Download source bundle
+                	</a>
+                </div>
+                @endif
 
                 @isset($service->product->email_template)
                 **Service information**  
                 {!! Str::markdown(Illuminate\View\Compilers\BladeCompiler::render($service->product->email_template, get_defined_vars()['__data'])) !!}
                 @endisset
+
+                @if(!empty($password_note))
+                **Password note**
+                {{ $password_note }}
+                @endif
+
+                If connection details are missing, unavailable, or recently rotated, please open the Sloth Cloud frontend service panel to view the latest runtime state and logs.
                 HTML,
             'in_app_title' => 'Service activated',
-            'in_app_body' => 'Your service {{ $service->product->name }} has been activated.',
+            'in_app_body' => 'Your service {{ $service->product->name }} has been activated.@if(!empty($operator_capsule_name)) Related AI project: {{ $operator_capsule_name }}.@endif',
             'mail_enabled' => 'force',
             'in_app_enabled' => 'choice_on',
             'edit_preference_message' => 'Notify me about new service activations',
+            'in_app_url' => '{{ $service_url ?? $operator_capsule_url ?? route("services.show", $service) }}',
+        ],
+        'vps_app_install_ready' => [
+            'subject' => 'VPS app ready',
+            'body' => <<<'HTML'
+                # VPS app ready
+
+                Your selected VPS application has finished installing successfully.
+
+                **Install details**
+                - Service: {{ $service->product->name }}
+                - Application: {{ $app_name ?? 'VPS app' }}
+                @if(!empty($requested_os))
+                - Operating system: {{ $requested_os }}
+                @endif
+                @if(!empty($server_ip))
+                - Server IP: {{ $server_ip }}
+                @endif
+                @if(!empty($panel_username))
+                - Panel username: {{ $panel_username }}
+                @endif
+                @if(!empty($panel_password))
+                - Panel password: {{ $panel_password }}
+                @endif
+
+                @if(!empty($panel_url))
+                - Panel URL: {{ $panel_url }}
+
+                <div class="action">
+                	<a class="button button-blue" href="{{ $panel_url }}">
+                		Open {{ $panel_label ?? ($app_name ?? 'panel') }}
+                	</a>
+                </div>
+                @else
+                <div class="action">
+                	<a class="button button-blue" href="{{ route('services.show', $service) }}">
+                		Open service page
+                	</a>
+                </div>
+                @endif
+
+                You can always return to the Sloth Cloud service page to view the latest panel address, install logs, and runtime password information.
+                HTML,
+            'in_app_title' => 'VPS app ready',
+            'in_app_body' => 'Your VPS app {{ $app_name ?? "VPS app" }} is ready on {{ $service->product->name }}.',
+            'mail_enabled' => 'force',
+            'in_app_enabled' => 'choice_on',
+            'edit_preference_message' => 'Notify me when selected VPS apps finish installing',
             'in_app_url' => '{{ route("services.show", $service) }}',
         ],
         'server_suspended' => [

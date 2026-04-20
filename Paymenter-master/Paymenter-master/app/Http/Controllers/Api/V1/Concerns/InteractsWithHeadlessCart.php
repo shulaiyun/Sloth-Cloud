@@ -203,6 +203,17 @@ trait InteractsWithHeadlessCart
                 case 'checkbox':
                     $fieldRules[] = 'boolean';
                     break;
+                case 'multiselect':
+                case 'json-array':
+                    $fieldRules[] = 'array';
+                    if (!empty($field['options']) && is_array($field['options'])) {
+                        $rules["checkoutConfig.{$field['name']}.*"] = [
+                            Rule::in(array_map('strval', array_keys($field['options'] ?? []))),
+                        ];
+                    } else {
+                        $rules["checkoutConfig.{$field['name']}.*"] = ['string'];
+                    }
+                    break;
                 case 'select':
                 case 'radio':
                     $fieldRules[] = Rule::in(array_map('strval', array_keys($field['options'] ?? [])));

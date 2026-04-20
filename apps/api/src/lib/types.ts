@@ -30,12 +30,16 @@ export interface CategorySummary {
   parentId: string | null;
   sort: number | null;
   productCount: number;
+  countryCode?: string | null;
+  regionCode?: string | null;
 }
 
 export interface ProductCategoryRef {
   id: string;
   slug: string;
   name: string;
+  countryCode?: string | null;
+  regionCode?: string | null;
 }
 
 export interface ProductPricing {
@@ -60,6 +64,12 @@ export interface ProductSummary {
   allowQuantityMode: string | null;
   category: ProductCategoryRef | null;
   pricing: ProductPricing | null;
+  countryCode?: string | null;
+  regionCode?: string | null;
+  selectedOs?: string | null;
+  primaryAppSlug?: string | null;
+  addonAppSlugs?: string[];
+  runtimeKind?: RuntimeKind | null;
 }
 
 export interface ProductPlanPrice {
@@ -96,6 +106,10 @@ export interface ConfigOptionChoice {
   name: string;
   description: string;
   envVariable: string | null;
+  countryCode?: string | null;
+  icon?: string | null;
+  badge?: string | null;
+  hint?: string | null;
   pricing: ConfigOptionPrice[];
 }
 
@@ -113,6 +127,10 @@ export interface ConfigOption {
 export interface CheckoutFieldOption {
   value: string;
   label: string;
+  countryCode?: string | null;
+  icon?: string | null;
+  badge?: string | null;
+  hint?: string | null;
 }
 
 export interface CheckoutField {
@@ -125,6 +143,98 @@ export interface CheckoutField {
   placeholder: string | null;
   options: CheckoutFieldOption[];
   validation: string | string[] | null;
+}
+
+export interface VpsMarketplaceOsOption {
+  value: string;
+  label: string;
+  icon?: string | null;
+  family?: string | null;
+  templateRef: string | null;
+  templateUuid: string | null;
+}
+
+export interface VpsAppMarketplaceCapability {
+  enabled: boolean;
+  osFieldName: string;
+  hostnameFieldName: string;
+  primaryAppFieldName: string;
+  addonAppFieldName: string;
+  supportedOs: VpsMarketplaceOsOption[];
+}
+
+export interface VpsMarketplaceCategory {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  sort: number | null;
+  searchKeywords: string[];
+}
+
+export interface VpsMarketplaceAppCategoryRef {
+  id: string;
+  slug: string;
+  name: string;
+  icon: string | null;
+}
+
+export interface VpsMarketplaceRecipe {
+  id: string;
+  osVersion: string | null;
+  installStrategy: string | null;
+  effectiveInstallStrategy: string | null;
+  templateRef: string | null;
+  templateAvailable: boolean;
+  dependencies: string[];
+  conflicts: string[];
+  defaultLoginUsername: string | null;
+  panelPort: number | null;
+  panelPath: string | null;
+  panelScheme: string | null;
+  panelLabel: string | null;
+  allowOnExistingService: boolean;
+}
+
+export interface VpsMarketplaceApp {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  icon: string | null;
+  type: string;
+  tagline: string | null;
+  featured: boolean;
+  allowOnExistingService: boolean;
+  category: VpsMarketplaceAppCategoryRef | null;
+  recipe: VpsMarketplaceRecipe | null;
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export interface VpsAppMarketplace {
+  enabled: boolean;
+  selectedOs: string | null;
+  supportedOs: VpsMarketplaceOsOption[];
+  categories: VpsMarketplaceCategory[];
+  primaryApps: VpsMarketplaceApp[];
+  addonApps: VpsMarketplaceApp[];
+  rules: {
+    primaryRequired: boolean;
+    maxPrimary: number;
+    allowAddons: boolean;
+  };
+  currentSelection: {
+    primaryAppSlug: string | null;
+    addonAppSlugs: string[];
+  };
+  compatibility?: {
+    mode: 'native' | 'fallback';
+    requestedOs: string | null;
+    fallbackOs: string | null;
+    note: string | null;
+  } | null;
 }
 
 export interface ProductDetail {
@@ -141,6 +251,13 @@ export interface ProductDetail {
   configOptions: ConfigOption[];
   operatingSystemOptions: ConfigOption[];
   checkoutFields: CheckoutField[];
+  vpsAppMarketplace: VpsAppMarketplaceCapability | null;
+  countryCode?: string | null;
+  regionCode?: string | null;
+  selectedOs?: string | null;
+  primaryAppSlug?: string | null;
+  addonAppSlugs?: string[];
+  runtimeKind?: RuntimeKind | null;
 }
 
 export interface PriceBreakdown {
@@ -223,40 +340,64 @@ export interface CartSummary {
   gateways: GatewaySummary[];
 }
 
-export interface ServiceProperty {
-  key: string;
-  name: string;
-  value: string;
+export interface OperatorOriginSummary {
+  capsuleId: string | null;
+  capsuleName: string;
+  entryKind: string | null;
+  stack: string | null;
+  businessPath: string | null;
+  source: string | null;
+  planSummary: string | null;
+  previewUrl: string | null;
+  productionUrl: string | null;
+  repoUrl: string | null;
+  bundleUrl: string | null;
+  manifestUrl: string | null;
 }
 
-export interface ServiceConfigEntry {
+export interface ServiceSummary {
   id: string;
-  option: {
+  label: string;
+  baseLabel: string;
+  status: string;
+  price: number;
+  quantity: number;
+  currencyCode: string;
+  currency: CurrencyInfo | null;
+  formattedPrice: string;
+  expiresAt: string | null;
+  product: ProductSummary | null;
+  plan: {
     id: string;
     name: string;
-    envVariable: string | null;
+    type: string | null;
+    billingPeriod: number | null;
+    billingUnit: string | null;
   } | null;
-  value: {
+  cancellable: boolean;
+  upgradable: boolean;
+  cancellation?: {
     id: string;
-    name: string;
-    envVariable: string | null;
+    type: string;
+    reason: string;
+    createdAt: string | null;
   } | null;
-}
-
-export interface BillingAgreementSummary {
-  id: string;
-  ulid: string;
-  name: string;
-  type: string | null;
-  expiry: string | null;
-  gateway: GatewaySummary | null;
-}
-
-export interface ServiceCancellationSummary {
-  id: string;
-  type: string;
-  reason: string;
-  createdAt: string | null;
+  countryCode?: string | null;
+  regionCode?: string | null;
+  selectedOs?: string | null;
+  primaryAppSlug?: string | null;
+  addonAppSlugs?: string[];
+  runtimeKind?: RuntimeKind | null;
+  operatorOrigin?: OperatorOriginSummary | null;
+  provisioning?: {
+    status: string;
+    provider: string;
+    attemptCount: number;
+    errorMessage: string | null;
+    errorCode?: string | null;
+    lastAttemptAt: string | null;
+    completedAt: string | null;
+  } | null;
 }
 
 export interface ProvisioningStatus {
@@ -267,11 +408,6 @@ export interface ProvisioningStatus {
   errorCode: string | null;
   lastAttemptAt: string | null;
   completedAt: string | null;
-}
-
-export interface ProvisioningJobSummary extends ProvisioningStatus {
-  id: string;
-  createdAt: string | null;
 }
 
 export interface ActionResult {
@@ -328,6 +464,43 @@ export interface ServiceRuntimeSnapshot {
   } | null;
 }
 
+export interface RuntimeOverview {
+  status: 'ready' | 'unmapped' | 'provisioning' | 'upstream_unavailable' | 'archived' | 'failed';
+  reason: string | null;
+  mapped: boolean;
+  runtimeKind: RuntimeKind;
+  overview: {
+    powerState: string | null;
+    cpuUsed: number | null;
+    memoryUsed: number | null;
+    memoryTotal: number | null;
+    uptime: number | null;
+    node: string | null;
+    hostname: string | null;
+    primaryIp: string | null;
+    operatingSystem: string | null;
+  } | null;
+  provisioning: ServiceSummary['provisioning'] | null;
+  capabilities: RuntimeCapabilities;
+}
+
+export interface RuntimeMetrics {
+  status: 'ready' | 'unmapped' | 'provisioning' | 'upstream_unavailable' | 'archived' | 'failed';
+  reason: string | null;
+  mapped: boolean;
+  runtimeKind: RuntimeKind;
+  metrics: {
+    diskUsed: number | null;
+    diskTotal: number | null;
+    rxBytes: number | null;
+    txBytes: number | null;
+    bandwidthUsage: number | null;
+    bandwidthLimit: number | null;
+    sampledAt: string | null;
+  } | null;
+  provisioning: ServiceSummary['provisioning'] | null;
+}
+
 export interface ServiceOperationLogSummary {
   id: string;
   operationId: string;
@@ -348,57 +521,84 @@ export interface ServiceOperationLogSummary {
   updatedAt: string | null;
 }
 
-export interface ServiceSummary {
-  id: string;
-  label: string;
-  baseLabel: string;
-  status: string;
-  price: number;
-  quantity: number;
-  currencyCode: string;
-  currency: CurrencyInfo | null;
-  formattedPrice: string;
-  expiresAt: string | null;
-  product: ProductSummary | null;
-  plan: {
+export interface ServiceDetail extends ServiceSummary {
+  properties: Array<{
+    key: string;
+    name: string;
+    value: string;
+  }>;
+  configs: Array<{
     id: string;
+    option: {
+      id: string;
+      name: string;
+      envVariable: string | null;
+    } | null;
+    value: {
+      id: string;
+      name: string;
+      envVariable: string | null;
+    } | null;
+  }>;
+  billingAgreement: {
+    id: string;
+    ulid: string;
     name: string;
     type: string | null;
-    billingPeriod: number | null;
-    billingUnit: string | null;
+    expiry: string | null;
+    gateway: GatewaySummary | null;
   } | null;
-  cancellable: boolean;
-  upgradable: boolean;
-  provisioning: ProvisioningStatus | null;
+  cancellation: {
+    id: string;
+    type: string;
+    reason: string;
+    createdAt: string | null;
+  } | null;
 }
 
-export interface ServiceDetail extends ServiceSummary {
-  properties: ServiceProperty[];
-  configs: ServiceConfigEntry[];
-  billingAgreement: BillingAgreementSummary | null;
-  cancellation: ServiceCancellationSummary | null;
-}
-
-export interface InvoiceItemSummary {
+export interface ServiceAppInstall {
   id: string;
-  description: string;
-  price: number;
-  quantity: number;
-  total: number;
-  formattedPrice: string;
-  formattedTotal: string;
-  referenceType: string | null;
-  referenceId: string | null;
-}
-
-export interface InvoiceTransactionSummary {
-  id: string;
+  source: string;
   status: string;
-  amount: number;
-  fee: number;
-  transactionId: string | null;
-  gateway: GatewaySummary | null;
-  isCreditTransaction: boolean;
+  isPrimary: boolean;
+  installStrategy: string | null;
+  requestedOs: string | null;
+  attemptCount: number;
+  lastError: string | null;
+  logs: string[];
+  app: {
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    icon: string | null;
+    type: string;
+    tagline: string | null;
+    category: VpsMarketplaceAppCategoryRef | null;
+  } | null;
+  recipe: {
+    id: string;
+    osVersion: string | null;
+    installStrategy: string | null;
+    templateRef: string | null;
+    panelPort: number | null;
+    panelPath: string | null;
+    panelScheme: string | null;
+    panelLabel: string | null;
+    dependencies: string[];
+    conflicts: string[];
+  } | null;
+  requestedBy: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+  responsePayload: Record<string, unknown> | null;
+  requestPayload: Record<string, unknown> | null;
+  startedAt: string | null;
+  lastAttemptAt: string | null;
+  completedAt: string | null;
+  installedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -419,12 +619,38 @@ export interface InvoiceSummary {
 }
 
 export interface InvoiceDetail extends InvoiceSummary {
-  items: InvoiceItemSummary[];
-  transactions: InvoiceTransactionSummary[];
+  items: Array<{
+    id: string;
+    description: string;
+    price: number;
+    quantity: number;
+    total: number;
+    formattedPrice: string;
+    formattedTotal: string;
+    referenceType: string | null;
+    referenceId: string | null;
+  }>;
+  transactions: Array<{
+    id: string;
+    status: string;
+    amount: number;
+    fee: number;
+    transactionId: string | null;
+    gateway: GatewaySummary | null;
+    isCreditTransaction: boolean;
+    createdAt: string | null;
+    updatedAt: string | null;
+  }>;
 }
 
 export interface CatalogCategoriesResponse {
   data: CategorySummary[];
+  meta: ApiMeta;
+}
+
+export interface CatalogProductsResponse {
+  data: ProductSummary[];
+  pagination: PaginationMeta | null;
   meta: ApiMeta;
 }
 
@@ -437,36 +663,22 @@ export interface CatalogCategoryResponse {
   meta: ApiMeta;
 }
 
-export interface CatalogProductsResponse {
-  data: ProductSummary[];
-  pagination: PaginationMeta | null;
-  meta: ApiMeta;
-}
-
 export interface ProductDetailResponse {
   data: ProductDetail;
   meta: ApiMeta;
 }
 
-export interface HomeStat {
-  label: string;
-  value: string;
-  hint: string;
-}
-
 export interface HomeResponse {
   data: {
-    stats: HomeStat[];
+    stats: Array<{
+      label: string;
+      value: string;
+      hint: string;
+    }>;
     featuredProducts: ProductSummary[];
     categories: CategorySummary[];
   };
   meta: ApiMeta;
-}
-
-export interface AuthUserProperty {
-  key: string;
-  name: string;
-  value: string;
 }
 
 export interface AuthUser {
@@ -477,7 +689,11 @@ export interface AuthUser {
   email: string;
   emailVerifiedAt: string | null;
   avatar: string | null;
-  properties: AuthUserProperty[];
+  properties: Array<{
+    key: string;
+    name: string;
+    value: string;
+  }>;
 }
 
 export interface AuthResponse {
@@ -511,6 +727,7 @@ export interface RegisterInput {
   password: string;
   passwordConfirmation: string;
   deviceName?: string;
+  referralCode?: string;
 }
 
 export interface CartResponse {
@@ -537,6 +754,43 @@ export interface CheckoutResponse {
   meta: ApiMeta;
 }
 
+export interface AffiliateOrderSummary {
+  id: string;
+  orderId: string | null;
+  serviceId: string | null;
+  serviceLabel: string | null;
+  productName: string | null;
+  earnings: Record<string, number>;
+  paidInvoicesCount: number;
+  lastPaidAt: string | null;
+}
+
+export interface AffiliateProfile {
+  program: {
+    defaultReward: number;
+    codeType: string;
+  };
+  affiliate: {
+    id: string;
+    code: string;
+    enabled: boolean;
+    visitors: number;
+    signups: number;
+    validOrders: number;
+    reward: number;
+    customReward: number | null;
+    discount: number | null;
+    earnings: Record<string, number>;
+    credits: Array<{
+      currencyCode: string;
+      currencyName: string | null;
+      amount: number;
+    }>;
+    createdAt: string | null;
+    updatedAt: string | null;
+  } | null;
+}
+
 export interface ServicesResponse {
   data: ServiceSummary[];
   pagination: PaginationMeta | null;
@@ -554,6 +808,23 @@ export interface ServiceResponse {
     };
   };
   meta: ApiMeta;
+}
+
+export interface VpsAppMarketplaceResponse {
+  data: VpsAppMarketplace;
+  meta: ApiMeta;
+}
+
+export interface ProvisioningJobSummary {
+  id: string;
+  status: string;
+  provider: string;
+  attemptCount: number;
+  errorMessage: string | null;
+  errorCode?: string | null;
+  lastAttemptAt: string | null;
+  completedAt: string | null;
+  createdAt: string | null;
 }
 
 export interface ServiceProvisioningResponse {
@@ -576,11 +847,50 @@ export interface ServiceProvisioningRetryResponse {
   meta: ApiMeta;
 }
 
+export interface ServiceAppsResponse {
+  data: {
+    serviceId: string;
+    selectedOs: string | null;
+    primaryAppSlug: string | null;
+    addonAppSlugs: string[];
+    panelUrl: string | null;
+    panelLabel: string | null;
+    panelHost: string | null;
+    panelPort: number | null;
+    panelPath: string | null;
+    panelUsername: string | null;
+    panelPassword: string | null;
+    installs: ServiceAppInstall[];
+    catalog: VpsAppMarketplace | null;
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceAppsInstallResponse {
+  message: string;
+  data: {
+    serviceId: string | null;
+    queued: ServiceAppInstall[];
+    install: ServiceAppInstall | null;
+    apps: ServiceAppsResponse['data'];
+  };
+  meta: ApiMeta;
+}
+
+export interface ServiceAppInstallLogsResponse {
+  data: {
+    serviceId: string;
+    installId: string;
+    logs: string[];
+  };
+  meta: ApiMeta;
+}
+
 export interface ServiceRuntimeResponse {
   data: {
     serviceId: string;
     runtime: ServiceRuntimeSnapshot;
-    provisioning: ProvisioningStatus | null;
+    provisioning: ServiceSummary['provisioning'] | null;
     capabilities: RuntimeCapabilities;
     actions: {
       buttons: Array<Record<string, unknown>>;
@@ -594,7 +904,7 @@ export interface ServiceRuntimeCapabilitiesResponse {
     serviceId: string;
     runtimeKind: RuntimeKind;
     runtimeRef: string | null;
-    provisioning: ProvisioningStatus | null;
+    provisioning: ServiceSummary['provisioning'] | null;
     capabilities: RuntimeCapabilities;
     actions: {
       buttons: Array<Record<string, unknown>>;
@@ -608,7 +918,7 @@ export interface ServiceOperationLogsResponse {
     serviceId: string;
     logs: ServiceOperationLogSummary[];
   };
-  meta: ApiMeta;
+  meta?: ApiMeta;
 }
 
 export interface ActionResponse<TData = Record<string, unknown> | null> {
@@ -628,7 +938,14 @@ export interface InvoiceResponse {
   data: {
     invoice: InvoiceDetail;
     gateways: GatewaySummary[];
-    paymentMethods: BillingAgreementSummary[];
+    paymentMethods: Array<{
+      id: string;
+      ulid: string;
+      name: string;
+      type: string | null;
+      expiry: string | null;
+      gateway: GatewaySummary | null;
+    }>;
     recurringServices: ServiceSummary[];
     credits: CreditBalance | null;
   };
@@ -643,4 +960,194 @@ export interface InvoicePayResponse {
     invoice: InvoiceDetail | null;
   };
   meta: ApiMeta;
+}
+
+export type AssistantActionKind =
+  | 'retry-provisioning'
+  | 'restart-runtime'
+  | 'stop-runtime'
+  | 'sync-runtime'
+  | 'check-service-app-status'
+  | 'execute-service-playbook'
+  | 'install-service-app'
+  | 'reveal-server-access'
+  | 'cancel-service'
+  | 'renew-service'
+  | 'delete-runtime'
+  | 'handoff-support';
+
+export interface AssistantContext {
+  serviceId: string | null;
+  invoiceId: string | null;
+  path: string | null;
+  locale: string | null;
+}
+
+export interface AssistantMessage {
+  id: string;
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface AssistantActionRequest {
+  kind: AssistantActionKind;
+  serviceId: string | null;
+  invoiceId: string | null;
+  playbookId?: string | null;
+  playbookName?: string | null;
+  playbookScript?: string | null;
+  appSlug?: string | null;
+  appName?: string | null;
+  cancellationType?: 'end_of_period' | 'immediate';
+  reason?: string | null;
+}
+
+export interface AssistantActionProposal {
+  id: string;
+  title: string;
+  description: string;
+  risk: 'low' | 'high';
+  requiresConfirmation: boolean;
+  action: AssistantActionRequest;
+}
+
+export interface AssistantPendingConfirmation {
+  token: string;
+  expiresAt: string;
+  proposal: AssistantActionProposal;
+}
+
+export type AssistantQuotaTier = 'guest' | 'free' | 'paid' | 'unlimited';
+
+export type AssistantModelCostTier = 'lite' | 'standard' | 'premium' | 'ultra';
+
+export interface AssistantQuotaSnapshot {
+  tier: AssistantQuotaTier;
+  dailyLimit: number | null;
+  dailyTokenLimit: number | null;
+  usedPoints: number;
+  usedTokens: number;
+  remainingPoints: number | null;
+  remainingTokens: number | null;
+  resetAt: string;
+  unlimited: boolean;
+}
+
+export interface AssistantUpgradeCta {
+  kind: 'login' | 'catalog' | 'unlimited';
+  href: string;
+  label: string;
+  description: string;
+}
+
+export interface AssistantSessionPayload {
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  context: AssistantContext;
+  messages: AssistantMessage[];
+}
+
+export interface AssistantCapabilitiesResponse {
+  message: string;
+  data: {
+    enabled: boolean;
+    primaryProvider: string;
+    providers: string[];
+    configuredProviders: string[];
+    selectableModels: Array<{
+      id: string;
+      provider: string;
+      model: string;
+      resolvedModelId: string;
+      label: string;
+      isPrimary: boolean;
+      costPoints: number;
+      routingWeight: number;
+      costTier: AssistantModelCostTier;
+    }>;
+    models: Array<{
+      id: string;
+      provider: string;
+      model: string;
+      resolvedModelId: string;
+      label: string;
+      isPrimary: boolean;
+      costPoints: number;
+      routingWeight: number;
+      costTier: AssistantModelCostTier;
+    }>;
+    defaultModelId: string | null;
+    responseMode: 'llm' | 'fallback';
+    mode: string;
+    quota: AssistantQuotaSnapshot;
+    upgradeCta: AssistantUpgradeCta | null;
+    policies: {
+      lowRiskAuto: boolean;
+      highRiskRequireConfirmation: boolean;
+    };
+    tools: {
+      readOnly: string[];
+      lowRisk: string[];
+      highRisk: string[];
+    };
+  };
+}
+
+export interface AssistantSessionResponse {
+  message: string;
+  data: {
+    session: AssistantSessionPayload;
+    authenticated: boolean;
+    user: {
+      id: string;
+      name: string;
+      email: string;
+    } | null;
+    capabilities: AssistantCapabilitiesResponse['data'];
+    quota: AssistantQuotaSnapshot;
+    upgradeCta: AssistantUpgradeCta | null;
+  };
+}
+
+export interface AssistantMessagesResponse {
+  message: string;
+  data: {
+    session: AssistantSessionPayload;
+    reply: AssistantMessage;
+    proposals: AssistantActionProposal[];
+    pendingConfirmation: AssistantPendingConfirmation | null;
+    actionResult: {
+      message: string;
+      code: string;
+      detail: string | null;
+      operationId: string | null;
+      data: Record<string, unknown> | null;
+    } | null;
+    quota: AssistantQuotaSnapshot;
+    upgradeCta: AssistantUpgradeCta | null;
+    chargedTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    resolvedModelId: string;
+  };
+}
+
+export interface AssistantConfirmResponse {
+  message: string;
+  data: {
+    session: AssistantSessionPayload;
+    reply: AssistantMessage;
+    actionResult: {
+      message: string;
+      code: string;
+      detail: string | null;
+      operationId: string | null;
+      data: Record<string, unknown> | null;
+    } | null;
+    quota: AssistantQuotaSnapshot;
+    upgradeCta: AssistantUpgradeCta | null;
+  };
 }

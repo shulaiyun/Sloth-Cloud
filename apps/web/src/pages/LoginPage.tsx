@@ -5,9 +5,11 @@ import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth-context';
 import { toFriendlyError } from '../lib/friendly-error';
 import { useSite } from '../lib/site-context';
+import { getUiText } from '../lib/ui-text';
 
 export function LoginPage() {
   const { text, locale } = useSite();
+  const ui = getUiText(locale);
   const { login } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -51,12 +53,12 @@ export function LoginPage() {
   }
 
   return (
-    <section className="auth-shell">
+    <section className="auth-shell auth-shell--split">
       <article className="auth-card">
         <div className="stack-12">
           <span className="eyebrow">{text.nav.login}</span>
           <h1>{text.auth.loginTitle}</h1>
-          <p className="muted">{text.auth.loginSubtitle}</p>
+          <p className="muted">{ui.auth.loginHint}</p>
         </div>
 
         <form className="stack-16" onSubmit={handleSubmit}>
@@ -104,6 +106,9 @@ export function LoginPage() {
 
         <Link className="text-link" to="/register">
           {text.auth.needAccount}
+        </Link>
+        <Link className="text-link" to="/operator">
+          {locale.startsWith('zh') ? '先看看 AI 工作台' : 'Preview the AI workspace first'}
         </Link>
       </article>
     </section>
