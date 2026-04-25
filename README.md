@@ -39,7 +39,7 @@ pnpm dev
 
 Default local ports:
 
-- Web: `http://localhost:3300`
+- Web: `http://localhost:3000`
 - API: `http://localhost:4000`
 
 ## Configuration
