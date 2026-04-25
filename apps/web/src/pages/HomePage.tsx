@@ -9,7 +9,7 @@ import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import { getUiText, productLineFor } from '../lib/ui-text';
 import { useSite } from '../lib/site-context';
-import { getCountryMeta, inferCountryCode } from '../lib/visual-metadata';
+import { getCountryMeta, getCountryName, inferCountryCode } from '../lib/visual-metadata';
 import type { CatalogProductsResponse, CategorySummary, HomeResponse, ProductSummary } from '../lib/types';
 
 function productTitle(product: ProductSummary, locale: ReturnType<typeof useSite>['locale'], fallback: string) {
@@ -47,7 +47,7 @@ function deriveNodeHighlights(
 
     const existing = map.get(countryCode) ?? {
       code: countryCode,
-      countryName: country.name,
+      countryName: getCountryName(countryCode, locale),
       count: 0,
       productSlug: null,
       sampleTitles: [] as string[],
@@ -74,7 +74,7 @@ function deriveNodeHighlights(
 
     const existing = map.get(countryCode) ?? {
       code: countryCode,
-      countryName: country.name,
+      countryName: getCountryName(countryCode, locale),
       count: 0,
       productSlug: null,
       sampleTitles: [] as string[],
@@ -84,7 +84,7 @@ function deriveNodeHighlights(
       existing.count = category.productCount;
     }
     if (existing.countryName.trim() === '') {
-      existing.countryName = country.name;
+      existing.countryName = getCountryName(countryCode, locale);
     }
 
     map.set(countryCode, existing);
@@ -132,7 +132,7 @@ export function HomePage() {
       body: locale.startsWith('zh')
         ? '普通用户先描述目标，AI 负责计划、生成可交互第一版、共享预览和后续上线建议。'
         : 'Describe the goal first, then let AI handle the plan, interactive first version, shared preview, and next launch steps.',
-      href: '/operator',
+      href: '/operator-lab',
       count: null,
     },
     {
@@ -160,7 +160,7 @@ export function HomePage() {
           <h1>{heroTitle}</h1>
           <p>{heroSubtitle}</p>
           <div className="action-row">
-            <Link className="button primary" to="/operator">{locale.startsWith('zh') ? '进入 AI 工作台' : 'Open AI workspace'}</Link>
+            <Link className="button primary" to="/operator-lab">{locale.startsWith('zh') ? '进入 AI 工作台' : 'Open AI workspace'}</Link>
             <Link className="button secondary" to={isAuthenticated ? '/services' : '/login'}>
               {isAuthenticated
                 ? (locale.startsWith('zh') ? '查看运行中的服务' : 'Open my running services')

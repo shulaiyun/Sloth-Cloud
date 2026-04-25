@@ -1,3 +1,5 @@
+import type { OperatorWorkflowState } from './operator-types';
+
 export type SourceMode = 'mock' | 'live';
 
 export interface ApiMeta {
@@ -979,6 +981,7 @@ export interface InvoicePayResponse {
 
 export type AssistantActionKind =
   | 'create-launch-capsule'
+  | 'create-repo-workspace'
   | 'retry-provisioning'
   | 'restart-runtime'
   | 'stop-runtime'
@@ -995,6 +998,7 @@ export type AssistantActionKind =
 export interface AssistantContext {
   serviceId: string | null;
   invoiceId: string | null;
+  capsuleId: string | null;
   path: string | null;
   locale: string | null;
 }
@@ -1010,10 +1014,15 @@ export interface AssistantActionRequest {
   kind: AssistantActionKind;
   serviceId: string | null;
   invoiceId: string | null;
+  capsuleId?: string | null;
   projectName?: string | null;
+  repoUrl?: string | null;
+  notes?: string | null;
   idea?: string | null;
   audience?: string | null;
   businessGoal?: string | null;
+  planningMode?: 'on' | 'off';
+  taskMode?: 'continue' | 'new_turn';
   playbookId?: string | null;
   playbookName?: string | null;
   playbookScript?: string | null;
@@ -1132,12 +1141,57 @@ export interface AssistantSessionResponse {
   };
 }
 
+export interface AssistantProviderStatusResponse {
+  message: string;
+  data: {
+    enabled: boolean;
+    checkedAt: string;
+    primaryProvider: string;
+    activeProvider: string | null;
+    activeModel: string | null;
+    providerConfigured: boolean;
+    credentialsPresent: boolean;
+    networkReachable: boolean;
+    modelReachable: boolean;
+    responseMode: 'llm' | 'fallback';
+    canRun: boolean;
+    reason: string;
+    providerResults: Array<{
+      provider: string;
+      model: string | null;
+      baseUrl: string | null;
+      providerConfigured: boolean;
+      credentialsPresent: boolean;
+      networkReachable: boolean;
+      modelReachable: boolean;
+      canRun: boolean;
+      httpStatus: number | null;
+      reason: string;
+    }>;
+  };
+}
+
 export interface AssistantMessagesResponse {
   message: string;
   data: {
     session: AssistantSessionPayload;
     authenticated: boolean;
     reply: AssistantMessage;
+    runState:
+      | 'draft'
+      | 'parsing'
+      | 'preflight'
+      | 'llm_planning'
+      | 'awaiting_confirmation'
+      | 'queued'
+      | 'running'
+      | 'verifying'
+      | 'partial_success'
+      | 'success'
+      | 'blocked'
+      | 'failed'
+      | 'rolled_back';
+    source: 'llm' | 'system' | 'preflight' | 'mock';
     proposals: AssistantActionProposal[];
     pendingConfirmation: AssistantPendingConfirmation | null;
     actionResult: {
@@ -1147,12 +1201,25 @@ export interface AssistantMessagesResponse {
       operationId: string | null;
       data: Record<string, unknown> | null;
     } | null;
+    workflow: OperatorWorkflowState | null;
+    workspace: {
+      capsuleId: string;
+      capsulePath: string | null;
+      capsuleUrl: string | null;
+      workflowStage: string | null;
+    } | null;
     quota: AssistantQuotaSnapshot;
     upgradeCta: AssistantUpgradeCta | null;
     chargedTokens: number;
     inputTokens: number;
     outputTokens: number;
     resolvedModelId: string;
+    routing: {
+      route: string;
+      lane: string | null;
+      source: string | null;
+      reason: string;
+    } | null;
   };
 }
 
@@ -1162,6 +1229,21 @@ export interface AssistantConfirmResponse {
     session: AssistantSessionPayload;
     authenticated: boolean;
     reply: AssistantMessage;
+    runState:
+      | 'draft'
+      | 'parsing'
+      | 'preflight'
+      | 'llm_planning'
+      | 'awaiting_confirmation'
+      | 'queued'
+      | 'running'
+      | 'verifying'
+      | 'partial_success'
+      | 'success'
+      | 'blocked'
+      | 'failed'
+      | 'rolled_back';
+    source: 'llm' | 'system' | 'preflight' | 'mock';
     actionResult: {
       message: string;
       code: string;
@@ -1169,7 +1251,20 @@ export interface AssistantConfirmResponse {
       operationId: string | null;
       data: Record<string, unknown> | null;
     } | null;
+    workflow: OperatorWorkflowState | null;
+    workspace: {
+      capsuleId: string;
+      capsulePath: string | null;
+      capsuleUrl: string | null;
+      workflowStage: string | null;
+    } | null;
     quota: AssistantQuotaSnapshot;
     upgradeCta: AssistantUpgradeCta | null;
+    routing: {
+      route: string;
+      lane: string | null;
+      source: string | null;
+      reason: string;
+    } | null;
   };
 }

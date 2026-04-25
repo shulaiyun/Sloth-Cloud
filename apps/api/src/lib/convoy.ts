@@ -125,6 +125,9 @@ export function createConvoyClient(config: ConvoyConfig) {
     getServerMetrics(serverRef: string) {
       return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}/metrics`);
     },
+    getServerFirewall(serverRef: string) {
+      return requestConvoy<{ data: Record<string, unknown> }>(config, `/servers/${encodeURIComponent(serverRef)}/firewall`);
+    },
     getNodeTemplateGroups(nodeRef: string | number) {
       return requestConvoy<{ data: Array<Record<string, unknown>> }>(
         config,
@@ -144,6 +147,35 @@ export function createConvoyClient(config: ConvoyConfig) {
         {
           method: 'PATCH',
           body,
+        },
+      );
+    },
+    patchFirewallOptions(serverRef: string, body: Record<string, unknown>) {
+      return requestConvoy<{ data: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/firewall/options`,
+        {
+          method: 'PATCH',
+          body,
+        },
+      );
+    },
+    createFirewallRule(serverRef: string, body: Record<string, unknown>) {
+      return requestConvoy<{ data: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/firewall/rules`,
+        {
+          method: 'POST',
+          body,
+        },
+      );
+    },
+    deleteFirewallRule(serverRef: string, position: number) {
+      return requestConvoy<{ data: Record<string, unknown> }>(
+        config,
+        `/servers/${encodeURIComponent(serverRef)}/firewall/rules/${encodeURIComponent(String(position))}`,
+        {
+          method: 'DELETE',
         },
       );
     },

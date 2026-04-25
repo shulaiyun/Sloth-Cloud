@@ -24,7 +24,7 @@ RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set fetch-timeout 600000 \
     && npm config set maxsockets 5 \
-    && npm install -g pnpm@9
+    && npm install -g pnpm@10.33.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/tsconfig.json apps/api/README.md ./apps/api/
@@ -61,9 +61,9 @@ RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set fetch-timeout 600000 \
     && npm config set maxsockets 5 \
-    && npm install -g pnpm@9
+    && npm install -g pnpm@10.33.0
 RUN apk add --no-cache kubectl
-RUN apk add --no-cache git curl unzip tar
+RUN apk add --no-cache git curl unzip tar chromium nss freetype harfbuzz ttf-freefont
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/tsconfig.json ./apps/api/

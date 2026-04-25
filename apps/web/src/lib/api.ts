@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react';
 
-export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000').replace(/\/+$/, '');
+export function resolveApiBaseUrl(rawBaseUrl?: string | null) {
+  return String(rawBaseUrl ?? '').trim().replace(/\/+$/, '');
+}
+
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
+
+export function buildApiUrl(path: string, baseUrl = apiBaseUrl) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  const normalizedBaseUrl = resolveApiBaseUrl(baseUrl);
+  return normalizedBaseUrl ? `${normalizedBaseUrl}${path}` : path;
+}
 
 export class ApiError extends Error {
   statusCode: number;
@@ -20,6 +33,7 @@ export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   preserveData?: boolean;
   preserveDataOnError?: boolean;
+  timeoutMs?: number;
 }
 
 export interface RemoteState<T> {
@@ -95,12 +109,33 @@ export async function requestJson<T>(path: string, options: ApiRequestOptions = 
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method: options.method ?? 'GET',
-    headers,
-    credentials: 'include',
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  const timeoutMs = Number.isFinite(options.timeoutMs) && Number(options.timeoutMs) > 0
+    ? Math.round(Number(options.timeoutMs))
+    : null;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeoutHandle = timeoutMs
+    ? globalThis.setTimeout(() => controller?.abort(), timeoutMs)
+    : null;
+
+  let response: Response;
+  try {
+    response = await fetch(buildApiUrl(path), {
+      method: options.method ?? 'GET',
+      headers,
+      credentials: 'include',
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller?.signal,
+    });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError' && timeoutMs) {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeoutHandle !== null) {
+      globalThis.clearTimeout(timeoutHandle);
+    }
+  }
 
   const contentType = response.headers.get('content-type') ?? '';
   const payload = contentType.includes('application/json')

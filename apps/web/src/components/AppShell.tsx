@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -19,7 +20,12 @@ export function AppShell() {
   const ui = getUiText(locale);
   const operatorNavLabel = locale.startsWith('zh') ? 'AI 工作台' : 'AI Workspace';
   const currentThemeDomain = resolveThemeDomain(location.pathname);
-  const hideAssistantWidget = /^\/(?:operator|workspaces\/|capsules\/)/.test(location.pathname);
+  const hideAssistantWidget = location.pathname === '/operator'
+    || location.pathname.startsWith('/operator/')
+    || location.pathname === '/operator-lab'
+    || location.pathname.startsWith('/operator-lab/')
+    || location.pathname.startsWith('/workspaces/')
+    || location.pathname.startsWith('/capsules/');
 
   useEffect(() => {
     setThemeDomain(currentThemeDomain);
@@ -66,7 +72,7 @@ export function AppShell() {
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/">
             {text.nav.home}
           </NavLink>
-          <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/operator">
+          <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/operator-lab">
             {operatorNavLabel}
           </NavLink>
           <NavLink className={({ isActive }) => (isActive ? 'active' : '')} to="/catalog">

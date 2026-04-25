@@ -979,6 +979,7 @@ export type AssistantActionKind =
 export interface AssistantContext {
   serviceId: string | null;
   invoiceId: string | null;
+  capsuleId: string | null;
   path: string | null;
   locale: string | null;
 }
@@ -994,6 +995,12 @@ export interface AssistantActionRequest {
   kind: AssistantActionKind;
   serviceId: string | null;
   invoiceId: string | null;
+  projectName?: string | null;
+  repoUrl?: string | null;
+  notes?: string | null;
+  idea?: string | null;
+  audience?: string | null;
+  businessGoal?: string | null;
   playbookId?: string | null;
   playbookName?: string | null;
   playbookScript?: string | null;
@@ -1117,6 +1124,19 @@ export interface AssistantMessagesResponse {
   data: {
     session: AssistantSessionPayload;
     reply: AssistantMessage;
+    runState:
+      | 'draft'
+      | 'parsing'
+      | 'llm_planning'
+      | 'awaiting_confirmation'
+      | 'queued'
+      | 'running'
+      | 'partial_success'
+      | 'success'
+      | 'blocked'
+      | 'failed'
+      | 'rolled_back';
+    source: 'llm' | 'system' | 'preflight' | 'mock';
     proposals: AssistantActionProposal[];
     pendingConfirmation: AssistantPendingConfirmation | null;
     actionResult: {
@@ -1140,6 +1160,19 @@ export interface AssistantConfirmResponse {
   data: {
     session: AssistantSessionPayload;
     reply: AssistantMessage;
+    runState:
+      | 'draft'
+      | 'parsing'
+      | 'llm_planning'
+      | 'awaiting_confirmation'
+      | 'queued'
+      | 'running'
+      | 'partial_success'
+      | 'success'
+      | 'blocked'
+      | 'failed'
+      | 'rolled_back';
+    source: 'llm' | 'system' | 'preflight' | 'mock';
     actionResult: {
       message: string;
       code: string;

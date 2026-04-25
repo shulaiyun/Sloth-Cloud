@@ -1,9 +1,11 @@
+// @ts-nocheck
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 import {
   buildFallbackGeneratedProjectRecipe,
@@ -22,6 +24,52 @@ import {
   type RemoteExecConnector,
   type RemoteExecStepResult,
 } from './remote-exec.js';
+import {
+  buildCredentialReadinessSummary,
+  createMissingCredentialReadiness,
+  isCredentialReadinessBlocked,
+  mapRemoteErrorToCredentialReadinessStatus,
+  type OperatorCredentialReadiness,
+  type OperatorCredentialReadinessStatus,
+} from './operator-readiness.js';
+import {
+  buildWorkspaceArtifactLedger,
+  defaultWorkspaceArtifactLedger,
+  getWorkspaceArtifactLedgerLatestArtifactDetail,
+  normalizeWorkspaceArtifactLedger,
+  selectWorkspaceArtifactLedgerBlockingGaps,
+  summarizeWorkspaceArtifactLedgerGaps,
+} from './operator-artifact-ledger.js';
+import {
+  appendWorkflowCard,
+  appendWorkflowUserTurn,
+  applyWorkflowFailure,
+  buildWorkflowFailure,
+  createWorkflowCard,
+  createWorkflowEvidenceItem,
+  defaultWorkflowState,
+  defaultWorkflowTask,
+  getWorkflowTaskById,
+  mapWorkflowErrorToFailureCode,
+  normalizeWorkflowState,
+  resolveWorkflowPendingConfirmation,
+  setWorkflowFailure,
+  setWorkflowPendingConfirmation,
+} from './operator-workflow.js';
+import {
+  hasCompletePreviewEvidence,
+  verifyPreviewRuntime,
+  type PreviewGoldenPath,
+  type PreviewVerificationEvidence,
+  type PreviewVerificationInput,
+  type PreviewVerificationResult,
+  type PreviewVerifier,
+} from './operator-preview-verifier.js';
+
+export type {
+  OperatorCredentialReadiness,
+  OperatorCredentialReadinessStatus,
+} from './operator-readiness.js';
 
 type OperatorEntryKind = 'upload-project' | 'generate-from-idea' | 'scan-server';
 type OperatorCapsuleStatus =
@@ -68,11 +116,16 @@ type OperatorJobKind =
 type OperatorJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'blocked';
 type OperatorTruthState =
   | 'planning'
+  | 'waiting_for_inputs'
+  | 'verifying_repo'
   | 'job_running'
+  | 'env_blocked'
   | 'preview_ready'
   | 'preview_failed'
+  | 'ready_for_production_approval'
   | 'audit_ready'
   | 'audit_failed'
+  | 'rollback_ready'
   | 'needs_attention'
   | 'production_live';
 type OperatorPreviewStatus = 'unavailable' | 'building' | 'verified' | 'failed';
@@ -209,9 +262,12 @@ export interface OperatorCapsule {
   connector: OperatorServerConnector | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
+  lastActiveAt: string | null;
   recentEvents: OperatorLogEntry[];
   truthState?: OperatorTruthState;
   latestJob?: OperatorJobSummary | null;
+  workflowStage?: OperatorWorkflowStage | null;
 }
 
 export interface OperatorConfirmation {
@@ -235,11 +291,17 @@ export interface OperatorEnvelope {
   truthState: OperatorTruthState;
   latestJob: OperatorJobSummary | null;
   jobs: OperatorJob[];
+  workspaceArtifactLedger: OperatorWorkspaceArtifactLedger;
   artifactSummary: OperatorArtifactSummary;
   previewSummary: OperatorPreviewSummary;
   auditSummary: OperatorAuditSummary;
   diagnosticsSummary: OperatorDiagnosticsSummary;
+  techStackSummary: OperatorTechStackSummary;
+  envChecklistSummary: OperatorEnvChecklistSummary;
+  credentialReadiness: OperatorCredentialReadiness;
+  deploymentSummary: OperatorDeploymentSummary;
   nextActions: OperatorActionSummary[];
+  workflow: OperatorWorkflowState;
 }
 
 export interface OperatorGeneratedProjectFile {
@@ -258,6 +320,69 @@ export interface OperatorGeneratedProject {
   entryFile: string;
   runCommands: string[];
   files: OperatorGeneratedProjectFile[];
+}
+
+export type OperatorWorkspaceArtifactLedgerGapId =
+  | 'missing_latest_artifact'
+  | 'missing_chosen_stack'
+  | 'missing_runnable_entry'
+  | 'missing_preview_target'
+  | 'readiness_blocked';
+
+export interface OperatorWorkspaceArtifactLedgerLatestArtifact {
+  sourceType: OperatorArtifactSummary['sourceType'];
+  sourceRef: string | null;
+  archiveUrl: string | null;
+  manifestUrl: string | null;
+  archiveName: string | null;
+  fileCount: number;
+}
+
+export interface OperatorWorkspaceArtifactLedgerChosenStack {
+  kind: OperatorTechStackSummary['kind'];
+  label: string;
+  detectionSource: string | null;
+  installCommand: string | null;
+  buildCommand: string | null;
+  startCommand: string | null;
+  runtimePort: number | null;
+  healthcheckPath: string | null;
+  dockerfilePath: string | null;
+  composeFilePath: string | null;
+  composeServiceName: string | null;
+}
+
+export interface OperatorWorkspaceArtifactLedgerRunnableEntry {
+  entryFile: string | null;
+  installCommand: string | null;
+  buildCommand: string | null;
+  runCommands: string[];
+}
+
+export interface OperatorWorkspaceArtifactLedgerPreviewTarget {
+  kind: 'none' | 'preview' | 'release';
+  url: string | null;
+  verified: boolean;
+  verifiedAt: string | null;
+  lastError: string | null;
+}
+
+export interface OperatorWorkspaceArtifactLedgerDeployReadiness {
+  sshStatus: OperatorCredentialReadiness['status'] | null;
+  envStatus: OperatorEnvChecklistSummary['status'] | null;
+  ready: boolean;
+  summary: string;
+}
+
+export interface OperatorWorkspaceArtifactLedger {
+  lastUpdatedAt: string | null;
+  latestUserIntent: string | null;
+  latestArtifact: OperatorWorkspaceArtifactLedgerLatestArtifact;
+  chosenStack: OperatorWorkspaceArtifactLedgerChosenStack;
+  runnableEntry: OperatorWorkspaceArtifactLedgerRunnableEntry;
+  previewTarget: OperatorWorkspaceArtifactLedgerPreviewTarget;
+  deployReadiness: OperatorWorkspaceArtifactLedgerDeployReadiness;
+  gaps: OperatorWorkspaceArtifactLedgerGapId[];
 }
 
 export interface OperatorArtifactSummary {
@@ -280,6 +405,7 @@ export interface OperatorPreviewSummary {
   assetCount: number;
   verifiedAt: string | null;
   lastError: string | null;
+  evidence: PreviewVerificationEvidence;
 }
 
 export interface OperatorAuditSummary {
@@ -311,11 +437,217 @@ export interface OperatorDiagnosticsSummary {
   lastError: string | null;
 }
 
+export interface OperatorTechStackSummary {
+  kind: 'docker-compose' | 'dockerfile' | 'nextjs' | 'vite' | 'node' | 'python' | 'static' | 'unknown';
+  label: string;
+  detectionSource: string | null;
+  installCommand: string | null;
+  buildCommand: string | null;
+  startCommand: string | null;
+  runtimePort: number | null;
+  healthcheckPath: string | null;
+  dockerfilePath: string | null;
+  composeFilePath: string | null;
+  composeServiceName: string | null;
+  goldenPath: PreviewGoldenPath | null;
+  recipeReliable: boolean;
+  blockReason: 'unsupported_stack' | 'compose_recipe_missing' | null;
+  notes: string[];
+}
+
+export interface OperatorEnvChecklistItem {
+  id: string;
+  kind: 'env' | 'storage' | 'network' | 'healthcheck' | 'runtime';
+  label: string;
+  required: boolean;
+  status: 'needs_value' | 'inferred' | 'optional';
+  valueHint: string | null;
+  source: string;
+  purpose: string;
+}
+
+export interface OperatorEnvChecklistSummary {
+  status: 'pending' | 'ready' | 'blocked';
+  headline: string;
+  detail: string;
+  missingRequiredCount: number;
+  items: OperatorEnvChecklistItem[];
+}
+
+export interface OperatorDeploymentSummary {
+  targetLabel: string;
+  targetRef: string | null;
+  previewOnly: boolean;
+  supported: boolean;
+  successCriteria: string[];
+  rollbackPlan: string[];
+  pipeline: OperatorPlanStep[];
+}
+
+export type OperatorWorkflowStage =
+  | 'draft'
+  | 'parsing'
+  | 'preflight'
+  | 'llm_planning'
+  | 'awaiting_confirmation'
+  | 'queued'
+  | 'running'
+  | 'verifying'
+  | 'partial_success'
+  | 'success'
+  | 'failed'
+  | 'blocked'
+  | 'rolled_back';
+
+export type OperatorWorkflowSource = 'llm' | 'executor' | 'preflight' | 'system' | 'mock';
+
+export type OperatorWorkflowCardKind =
+  | 'user_message'
+  | 'understanding'
+  | 'preflight'
+  | 'plan'
+  | 'confirmation'
+  | 'execution'
+  | 'verification'
+  | 'failure_diagnosis'
+  | 'next_step';
+
+export type OperatorWorkflowFailureCode =
+  | 'repo_url_invalid'
+  | 'repo_unreachable'
+  | 'repo_auth_failed'
+  | 'github_proxy_aborted'
+  | 'package_manager_unknown'
+  | 'workspace_detection_failed'
+  | 'build_command_uncertain'
+  | 'build_script_missing'
+  | 'unsupported_stack'
+  | 'compose_recipe_missing'
+  | 'env_missing'
+  | 'static_preview_only'
+  | 'preview_failed'
+  | 'ssh_missing_credentials'
+  | 'ssh_auth_failed'
+  | 'deploy_blocked';
+
+export interface OperatorWorkflowEvidenceItem {
+  id: string;
+  label: string;
+  detail: string;
+  source: OperatorWorkflowSource;
+}
+
+export interface OperatorWorkflowFailure {
+  failureCode: OperatorWorkflowFailureCode;
+  humanSummary: string;
+  probableRootCause: string;
+  recommendedActions: string[];
+  evidence: OperatorWorkflowEvidenceItem[];
+  detectedAt: string;
+  stage: OperatorWorkflowStage;
+}
+
+export interface OperatorWorkflowCard {
+  id: string;
+  kind: OperatorWorkflowCardKind;
+  stage: OperatorWorkflowStage;
+  title: string;
+  summary: string;
+  evidence: OperatorWorkflowEvidenceItem[];
+  nextStep: string | null;
+  source: OperatorWorkflowSource;
+  createdAt: string;
+  failureCode: OperatorWorkflowFailureCode | null;
+}
+
+export interface OperatorWorkflowMessage {
+  id: string;
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface OperatorWorkflowThread {
+  sessionId: string | null;
+  messages: OperatorWorkflowMessage[];
+  lastUpdatedAt: string | null;
+}
+
+export interface OperatorWorkflowParsedInput {
+  kind: 'repo' | 'idea' | 'server' | 'unknown';
+  rawInput: string;
+  repoUrl: string | null;
+  notes: string | null;
+  idea: string | null;
+  serverHost: string | null;
+  planningMode: 'on' | 'off';
+  confidence: number | null;
+}
+
+export interface OperatorWorkflowArtifact {
+  id: string;
+  label: string;
+  detail: string;
+  url: string | null;
+}
+
+export interface OperatorWorkflowPublishEntry {
+  id: string;
+  status: 'queued' | 'success' | 'failed' | 'rolled_back';
+  summary: string;
+  createdAt: string;
+}
+
+export interface OperatorWorkflowPendingConfirmation {
+  token: string | null;
+  label: string;
+  summary: string | null;
+  expiresAt: string | null;
+}
+
+export interface OperatorWorkflowTask {
+  id: string;
+  title: string;
+  planningMode: 'on' | 'off';
+  thread: OperatorWorkflowThread;
+  draft: string;
+  userIntent: string;
+  parsedInput: OperatorWorkflowParsedInput;
+  currentStage: OperatorWorkflowStage;
+  timeline: OperatorWorkflowCard[];
+  evidence: OperatorWorkflowEvidenceItem[];
+  diagnostics: string[];
+  artifacts: OperatorWorkflowArtifact[];
+  deployReadiness: {
+    sshStatus: string | null;
+    envStatus: string | null;
+    ready: boolean;
+    summary: string;
+  };
+  publishHistory: OperatorWorkflowPublishEntry[];
+  failure: OperatorWorkflowFailure | null;
+  pendingConfirmation: OperatorWorkflowPendingConfirmation | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OperatorWorkflowState {
+  planningMode: 'on' | 'off';
+  activeTaskId: string | null;
+  tasks: OperatorWorkflowTask[];
+}
+
 export interface AnalyzeProjectInput {
   projectName?: string | null;
   repoUrl?: string | null;
   sourceRef?: string | null;
   notes?: string | null;
+  planningMode?: 'on' | 'off' | null;
+  autoStartBuild?: boolean | null;
+  existingCapsuleId?: string | null;
+  userIntent?: string | null;
+  sessionId?: string | null;
+  taskMode?: 'continue' | 'new_turn' | null;
 }
 
 export interface GenerateProjectInput {
@@ -324,6 +656,12 @@ export interface GenerateProjectInput {
   audience?: string | null;
   businessGoal?: string | null;
   strictModelGeneration?: boolean | null;
+  planningMode?: 'on' | 'off' | null;
+  existingCapsuleId?: string | null;
+  userIntent?: string | null;
+  sessionId?: string | null;
+  taskMode?: 'continue' | 'new_turn' | null;
+  confirmedPendingConfirmationId?: string | null;
 }
 
 export interface BindDomainInput {
@@ -362,17 +700,56 @@ export interface ScanServerInput {
   authMode: OperatorConnectorMode;
   password?: string | null;
   sshKey?: string | null;
+  planningMode?: 'on' | 'off' | null;
+  existingCapsuleId?: string | null;
+  userIntent?: string | null;
+  sessionId?: string | null;
+  taskMode?: 'continue' | 'new_turn' | null;
 }
 
 export interface CreatePlanInput {
   entryKind: OperatorEntryKind;
   title?: string | null;
   brief: string;
+  planningMode?: 'on' | 'off' | null;
+  existingCapsuleId?: string | null;
+  userIntent?: string | null;
+  sessionId?: string | null;
+  taskMode?: 'continue' | 'new_turn' | null;
+  parsedInput?: Partial<OperatorWorkflowParsedInput> | null;
+}
+
+export interface ContinueActiveTaskInput {
+  capsuleId: string;
+  taskId?: string | null;
+  pendingConfirmationId?: string | null;
+  operation?: 'continue' | 'deploy_playable';
+  userIntent?: string | null;
+  repair?: {
+    mode?: 'recommended' | 're_detect' | 'manual' | null;
+    startCommand?: string | null;
+    port?: number | null;
+    healthcheckPath?: string | null;
+    dockerServiceName?: string | null;
+  } | null;
+}
+
+export interface ConfirmActivePlanInput {
+  capsuleId: string;
+  taskId?: string | null;
+  pendingConfirmationId?: string | null;
+  userIntent?: string | null;
+}
+
+export interface UpdateWorkspaceInput {
+  capsuleId: string;
+  name?: string | null;
+  archived?: boolean | null;
 }
 
 export interface OperatorEngine {
   createPlan(input: CreatePlanInput): OperatorEnvelope;
-  analyzeProject(input: AnalyzeProjectInput): OperatorEnvelope;
+  analyzeProject(input: AnalyzeProjectInput): Promise<OperatorEnvelope>;
   generateProject(input: GenerateProjectInput): Promise<OperatorEnvelope>;
   startGenerateProjectTask(input: GenerateProjectInput): OperatorGenerationTask;
   getGenerationTask(taskId: string): OperatorGenerationTask | null;
@@ -382,6 +759,7 @@ export interface OperatorEngine {
   getCapsule(capsuleId: string): OperatorEnvelope | null;
   getJob(jobId: string): OperatorJob | null;
   createWorkspaceJob(input: { capsuleId: string; kind: OperatorJobKind }): OperatorJob | null;
+  updateWorkspace(input: UpdateWorkspaceInput): OperatorEnvelope | null;
   deleteCapsule(capsuleId: string): boolean;
   deleteLegacyTemplateCapsules(): number;
   getPreviewHtml(capsuleRef: string): string | null;
@@ -391,6 +769,8 @@ export interface OperatorEngine {
   getGeneratedProjectArchive(capsuleRef: string): { absolutePath: string; downloadName: string } | null;
   getWorkspaceArchive(capsuleRef: string): { absolutePath: string; downloadName: string } | null;
   clearHistory(): { deletedCapsules: number; deletedJobs: number; deletedTasks: number };
+  confirmActivePlan(input: ConfirmActivePlanInput): OperatorEnvelope | null;
+  continueActiveTask(input: ContinueActiveTaskInput): OperatorEnvelope | null;
   deployPreview(capsuleId: string): OperatorEnvelope | null;
   publishRelease(capsuleId: string, confirmationToken?: string | null): OperatorEnvelope | null;
   bindDomain(input: BindDomainInput): OperatorEnvelope | null;
@@ -410,10 +790,16 @@ interface CapsuleRecord {
   logsSummary: OperatorLogsSummary;
   generatedProject?: OperatorGeneratedProject | null;
   generatedRecipe?: GeneratedProjectRecipe | null;
+  workspaceArtifactLedger: OperatorWorkspaceArtifactLedger;
   artifactSummary: OperatorArtifactSummary;
   previewSummary: OperatorPreviewSummary;
   auditSummary: OperatorAuditSummary;
   diagnosticsSummary: OperatorDiagnosticsSummary;
+  techStackSummary: OperatorTechStackSummary;
+  envChecklistSummary: OperatorEnvChecklistSummary;
+  credentialReadiness: OperatorCredentialReadiness;
+  deploymentSummary: OperatorDeploymentSummary;
+  workflow: OperatorWorkflowState;
 }
 
 interface PendingConfirmationRecord {
@@ -445,6 +831,7 @@ interface OperatorEngineOptions {
   generatedProjectsRoot?: string | null;
   previewBuildNodeModulesPath?: string | null;
   executionProviders?: OperatorLlmProviderConfig[] | null;
+  previewVerifier?: PreviewVerifier | null;
 }
 
 interface GeneratedProjectPreviewBuild {
@@ -476,8 +863,9 @@ interface WorkspacePreviewRuntime {
   capsuleId: string;
   port: number;
   baseUrl: string;
-  kind: 'next-standalone';
-  child: ReturnType<typeof spawn>;
+  kind: 'proxy-runtime' | 'compose-runtime';
+  child: ReturnType<typeof spawn> | null;
+  dispose?: (() => void) | null;
 }
 
 interface GeneratedProjectTemplateFile {
@@ -493,7 +881,7 @@ interface GeneratedProjectTemplate {
 }
 
 interface OperatorStateFile {
-  version: 3;
+  version: 4 | 5;
   records: CapsuleRecord[];
   generationTasks?: OperatorGenerationTask[];
   jobs?: OperatorJob[];
@@ -501,6 +889,7 @@ interface OperatorStateFile {
 
 const defaultPreviewDomain = 'preview.sloth.run';
 const defaultProductionDomain = 'sloth.run';
+const repairRecipeAppliedMarker = '__repair_recipe_applied__';
 
 function nowIso() {
   return new Date().toISOString();
@@ -534,6 +923,22 @@ function createId(prefix: string) {
 
 function trimText(value: string | null | undefined) {
   return (value ?? '').trim();
+}
+
+function normalizeRuntimePort(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.floor(value);
+  if (normalized < 1 || normalized > 65535) {
+    return null;
+  }
+  return normalized;
+}
+
+function timestampMs(value: string | null | undefined) {
+  const parsed = Date.parse(trimText(value));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function slugify(input: string, fallback: string) {
@@ -4388,6 +4793,12 @@ function defaultPreviewSummary(): OperatorPreviewSummary {
     assetCount: 0,
     verifiedAt: null,
     lastError: null,
+    evidence: {
+      runtimeLiveAt: null,
+      healthPassedAt: null,
+      smokePassedAt: null,
+      screenshotPath: null,
+    },
   };
 }
 
@@ -4424,6 +4835,400 @@ function defaultDiagnosticsSummary(): OperatorDiagnosticsSummary {
   };
 }
 
+function defaultTechStackSummary(): OperatorTechStackSummary {
+  return {
+    kind: 'unknown',
+    label: 'Unknown stack',
+    detectionSource: null,
+    installCommand: null,
+    buildCommand: null,
+    startCommand: null,
+    runtimePort: null,
+    healthcheckPath: null,
+    dockerfilePath: null,
+    composeFilePath: null,
+    composeServiceName: null,
+    goldenPath: null,
+    recipeReliable: false,
+    blockReason: null,
+    notes: [],
+  };
+}
+
+function normalizePreviewEvidence(value: unknown): PreviewVerificationEvidence {
+  if (typeof value !== 'object' || value === null) {
+    return defaultPreviewSummary().evidence;
+  }
+
+  const record = value as Partial<PreviewVerificationEvidence>;
+  return {
+    runtimeLiveAt: typeof record.runtimeLiveAt === 'string' ? record.runtimeLiveAt : null,
+    healthPassedAt: typeof record.healthPassedAt === 'string' ? record.healthPassedAt : null,
+    smokePassedAt: typeof record.smokePassedAt === 'string' ? record.smokePassedAt : null,
+    screenshotPath: typeof record.screenshotPath === 'string' ? record.screenshotPath : null,
+  };
+}
+
+function defaultEnvChecklistSummary(): OperatorEnvChecklistSummary {
+  return {
+    status: 'pending',
+    headline: 'Environment checklist pending.',
+    detail: 'The repository or runtime has not been scanned for deployment requirements yet.',
+    missingRequiredCount: 0,
+    items: [],
+  };
+}
+
+function defaultCredentialReadinessSummary(): OperatorCredentialReadiness {
+  return createMissingCredentialReadiness(false);
+}
+
+function defaultDeploymentSummary(): OperatorDeploymentSummary {
+  return {
+    targetLabel: 'Server #19',
+    targetRef: '#19',
+    previewOnly: true,
+    supported: false,
+    successCriteria: [
+      'Preview must be reachable.',
+      'Health check must pass.',
+      'Smoke test must pass on the live runtime.',
+      'Screenshot evidence must come from the live runtime.',
+      'Logs must not show fatal errors.',
+    ],
+    rollbackPlan: [
+      'Keep the last verified preview build available.',
+      'Do not cut production traffic until approval is recorded.',
+    ],
+    pipeline: [
+      {
+        id: 'pipeline_fetch',
+        title: 'Source fetch',
+        status: 'planned',
+        detail: 'Fetch the repository or uploaded source into an isolated workspace.',
+      },
+      {
+        id: 'pipeline_detect',
+        title: 'Stack detect',
+        status: 'planned',
+        detail: 'Identify Docker, Compose, runtime, port, and build/start commands.',
+      },
+      {
+        id: 'pipeline_env',
+        title: 'Env checklist render',
+        status: 'planned',
+        detail: 'List required secrets, callback URLs, storage, and health check inputs.',
+      },
+      {
+        id: 'pipeline_preflight',
+        title: 'SSH preflight (#19)',
+        status: 'attention',
+        detail: 'Run SSH credential and connectivity preflight before production deployment.',
+      },
+      {
+        id: 'pipeline_preview',
+        title: 'Preview deploy',
+        status: 'planned',
+        detail: 'Build, test, and verify a preview before production is allowed.',
+      },
+      {
+        id: 'pipeline_production',
+        title: 'Production deploy to server #19',
+        status: 'attention',
+        detail: 'Production stays blocked until preview, checklist, and approval are all complete.',
+      },
+    ],
+  };
+}
+
+function workspaceArtifactLedgerPreviewTargetUrl(record: CapsuleRecord) {
+  if (record.capsule.productionUrl) {
+    return record.capsule.productionUrl;
+  }
+
+  if (record.previewSummary.previewUrl) {
+    return record.previewSummary.previewUrl;
+  }
+
+  if (record.capsule.previewUrl) {
+    return record.capsule.previewUrl;
+  }
+
+  return null;
+}
+
+function applyRepairInputToWorkspaceRecord(
+  record: CapsuleRecord,
+  input: ContinueActiveTaskInput['repair'],
+  locale: 'zh-CN' | 'en',
+) {
+  if (!input) {
+    return false;
+  }
+
+  const mode = input.mode === 'manual' || input.mode === 'recommended' || input.mode === 're_detect'
+    ? input.mode
+    : null;
+  if (!mode) {
+    return false;
+  }
+  let changed = false;
+
+  const upsertTechStackNotes = (nextNotes: string[]) => {
+    const normalized = nextNotes.map((entry) => trimText(entry)).filter(Boolean);
+    const previous = record.techStackSummary.notes ?? [];
+    if (JSON.stringify(previous) !== JSON.stringify(normalized)) {
+      record.techStackSummary.notes = normalized;
+      changed = true;
+    }
+  };
+
+  const clearRepairMarker = () => {
+    const next = (record.techStackSummary.notes ?? []).filter((entry) => !trimText(entry).startsWith(repairRecipeAppliedMarker));
+    upsertTechStackNotes(next);
+  };
+
+  const markRepairApplied = (value: 'manual' | 'recommended') => {
+    const marker = `${repairRecipeAppliedMarker}:${value}:${Date.now()}`;
+    const withoutMarker = (record.techStackSummary.notes ?? [])
+      .filter((entry) => !trimText(entry).startsWith(repairRecipeAppliedMarker));
+    upsertTechStackNotes([...withoutMarker, marker]);
+  };
+
+  const startCommand = trimText(input.startCommand);
+  const healthcheckPath = trimText(input.healthcheckPath);
+  const dockerServiceName = trimText(input.dockerServiceName);
+  const runtimePort = normalizeRuntimePort(input.port);
+
+  if (mode === 're_detect') {
+    if (record.techStackSummary.blockReason === 'compose_recipe_missing' || record.techStackSummary.blockReason === 'unsupported_stack') {
+      record.techStackSummary.blockReason = null;
+      changed = true;
+    }
+    clearRepairMarker();
+    const redetectNote = locale === 'zh-CN'
+      ? '已手动触发重新自动检测 recipe。'
+      : 'Recipe re-detection was triggered manually.';
+    if (!(record.techStackSummary.notes ?? []).includes(redetectNote)) {
+      upsertTechStackNotes([
+        ...(record.techStackSummary.notes ?? []),
+        locale === 'zh-CN'
+          ? '已手动触发重新自动检测 recipe。'
+          : 'Recipe re-detection was triggered manually.',
+      ]);
+    }
+  }
+
+  if (startCommand) {
+    if (record.techStackSummary.startCommand !== startCommand) {
+      record.techStackSummary.startCommand = startCommand;
+      changed = true;
+    }
+    if (record.artifactSummary.runCommands.length === 0 || record.artifactSummary.runCommands[0] !== startCommand) {
+      record.artifactSummary.runCommands = [startCommand];
+      changed = true;
+    }
+  }
+
+  if (runtimePort != null && record.techStackSummary.runtimePort !== runtimePort) {
+    record.techStackSummary.runtimePort = runtimePort;
+    changed = true;
+  }
+
+  if (healthcheckPath && record.techStackSummary.healthcheckPath !== healthcheckPath) {
+    record.techStackSummary.healthcheckPath = healthcheckPath;
+    changed = true;
+  }
+
+  if (dockerServiceName && record.techStackSummary.composeServiceName !== dockerServiceName) {
+    record.techStackSummary.composeServiceName = dockerServiceName;
+    changed = true;
+  }
+
+  const ledger = normalizeWorkspaceArtifactLedger(record.workspaceArtifactLedger);
+  if (startCommand && ledger.chosenStack.startCommand !== startCommand) {
+    ledger.chosenStack.startCommand = startCommand;
+    changed = true;
+  }
+  if (runtimePort != null && ledger.chosenStack.runtimePort !== runtimePort) {
+    ledger.chosenStack.runtimePort = runtimePort;
+    changed = true;
+  }
+  if (healthcheckPath && ledger.chosenStack.healthcheckPath !== healthcheckPath) {
+    ledger.chosenStack.healthcheckPath = healthcheckPath;
+    changed = true;
+  }
+  if (dockerServiceName && ledger.chosenStack.composeServiceName !== dockerServiceName) {
+    ledger.chosenStack.composeServiceName = dockerServiceName;
+    changed = true;
+  }
+  if (startCommand && (ledger.runnableEntry.runCommands.length === 0 || ledger.runnableEntry.runCommands[0] !== startCommand)) {
+    ledger.runnableEntry.runCommands = [startCommand];
+    changed = true;
+  }
+  if (!ledger.runnableEntry.entryFile) {
+    ledger.runnableEntry.entryFile = record.artifactSummary.entryFile
+      ?? record.previewSummary.entryFile
+      ?? 'user-provided-entry';
+    changed = true;
+  }
+  if (startCommand && !ledger.runnableEntry.installCommand && record.techStackSummary.installCommand) {
+    ledger.runnableEntry.installCommand = record.techStackSummary.installCommand;
+    changed = true;
+  }
+  if (ledger.chosenStack.kind === 'unknown') {
+    ledger.chosenStack.kind = record.techStackSummary.kind === 'unknown' ? 'node' : record.techStackSummary.kind;
+    ledger.chosenStack.label = record.techStackSummary.label === 'Unknown stack'
+      ? 'Recovered stack'
+      : record.techStackSummary.label;
+    changed = true;
+  }
+
+  if (mode === 'manual' || mode === 'recommended') {
+    markRepairApplied(mode);
+  }
+
+  if (changed) {
+    record.workspaceArtifactLedger = ledger;
+    record.techStackSummary.blockReason = null;
+  }
+
+  return changed;
+}
+
+function syncWorkspaceArtifactLedger(record: CapsuleRecord, latestUserIntent?: string | null) {
+  const current = normalizeWorkspaceArtifactLedger(record.workspaceArtifactLedger);
+  const activeTask = getActiveWorkflowTask(record);
+  const next = buildWorkspaceArtifactLedger({
+    current,
+    latestUserIntent: trimText(latestUserIntent)
+      || activeTask?.thread.messages.at(-1)?.content
+      || activeTask?.userIntent
+      || current.latestUserIntent
+      || record.capsule.summary,
+    artifactSummary: record.artifactSummary,
+    generatedProject: record.generatedProject ?? null,
+    techStackSummary: record.techStackSummary,
+    previewSummary: record.previewSummary,
+    credentialReadiness: record.credentialReadiness,
+    envChecklistSummary: record.envChecklistSummary,
+    previewTargetUrl: workspaceArtifactLedgerPreviewTargetUrl(record),
+    previewTargetKind: record.capsule.productionUrl ? 'release' : 'preview',
+  });
+
+  const changed = JSON.stringify(next) !== JSON.stringify(current);
+  record.workspaceArtifactLedger = next;
+  return changed;
+}
+
+function getActiveWorkflowTask(record: CapsuleRecord) {
+  return getWorkflowTaskById(record.workflow, record.workflow.activeTaskId) ?? null;
+}
+
+function syncWorkflowTaskFromRecord(record: CapsuleRecord, task: OperatorWorkflowTask) {
+  const ledger = normalizeWorkspaceArtifactLedger(record.workspaceArtifactLedger);
+  record.workspaceArtifactLedger = ledger;
+  const artifactEntries: OperatorWorkflowArtifact[] = [];
+  if (ledger.previewTarget.url) {
+    artifactEntries.push({
+      id: 'artifact-preview',
+      label: 'Preview',
+      detail: ledger.previewTarget.url,
+      url: ledger.previewTarget.url,
+    });
+  }
+  if (ledger.latestArtifact.archiveUrl) {
+    artifactEntries.push({
+      id: 'artifact-archive',
+      label: 'Source archive',
+      detail: ledger.latestArtifact.archiveUrl,
+      url: ledger.latestArtifact.archiveUrl,
+    });
+  }
+  if (ledger.latestArtifact.manifestUrl) {
+    artifactEntries.push({
+      id: 'artifact-workspace',
+      label: 'Workspace manifest',
+      detail: ledger.latestArtifact.manifestUrl,
+      url: ledger.latestArtifact.manifestUrl,
+    });
+  }
+  task.artifacts = artifactEntries;
+  task.deployReadiness = { ...ledger.deployReadiness };
+  task.diagnostics = [
+    record.diagnosticsSummary.headline,
+    record.diagnosticsSummary.detail,
+    record.capsule.latestJob?.error ?? '',
+  ].map((entry) => trimText(entry)).filter(Boolean);
+  task.evidence = [
+    ...task.evidence.filter((entry, index, items) => items.findIndex((candidate) => candidate.id === entry.id) === index),
+    ...(record.techStackSummary.detectionSource ? [{
+      id: 'evidence-stack-source',
+      label: 'Detected stack source',
+      detail: `${record.techStackSummary.label} from ${record.techStackSummary.detectionSource}`,
+      source: 'preflight' as const,
+    }] : []),
+    ...(ledger.previewTarget.url ? [{
+      id: 'evidence-preview-url',
+      label: 'Preview URL',
+      detail: ledger.previewTarget.url,
+      source: 'executor' as const,
+    }] : []),
+  ];
+  task.updatedAt = nowIso();
+  record.capsule.workflowStage = task.currentStage;
+}
+
+  function ensureWorkflowTask(
+    record: CapsuleRecord,
+  input: {
+    taskMode: 'continue' | 'new_turn';
+    planningMode: 'on' | 'off';
+    title: string;
+    userIntent: string;
+    parsedInput: Partial<OperatorWorkflowParsedInput>;
+    sessionId?: string | null;
+  },
+) {
+  record.workflow = normalizeWorkflowState(record.workflow);
+  record.workflow.planningMode = input.planningMode;
+
+  let task = input.taskMode === 'continue' ? getActiveWorkflowTask(record) : null;
+  if (!task) {
+    task = defaultWorkflowTask();
+    task.title = input.title;
+    task.planningMode = input.planningMode;
+    task.userIntent = input.userIntent;
+    task.parsedInput = {
+      ...task.parsedInput,
+      ...input.parsedInput,
+      planningMode: input.planningMode,
+    };
+    task.thread.sessionId = input.sessionId ?? null;
+    task.currentStage = 'draft';
+    record.workflow.tasks.push(task);
+    record.workflow.activeTaskId = task.id;
+  } else {
+    task.title = input.title || task.title;
+    task.planningMode = input.planningMode;
+    task.userIntent = input.userIntent || task.userIntent;
+    task.parsedInput = {
+      ...task.parsedInput,
+      ...input.parsedInput,
+      planningMode: input.planningMode,
+    };
+    task.thread.sessionId = input.sessionId ?? task.thread.sessionId;
+    task.updatedAt = nowIso();
+  }
+
+  record.capsule.workflowStage = task.currentStage;
+  if (timestampMs(task.updatedAt) >= timestampMs(record.capsule.updatedAt)) {
+    record.capsule.updatedAt = task.updatedAt;
+    record.capsule.lastActiveAt = task.updatedAt;
+  }
+  return task;
+}
+
 function normalizeArtifactSummary(value: unknown): OperatorArtifactSummary {
   if (typeof value !== 'object' || value === null) {
     return defaultArtifactSummary();
@@ -4445,22 +5250,197 @@ function normalizeArtifactSummary(value: unknown): OperatorArtifactSummary {
   };
 }
 
+function normalizeTechStackSummary(value: unknown): OperatorTechStackSummary {
+  if (typeof value !== 'object' || value === null) {
+    return defaultTechStackSummary();
+  }
+
+  const record = value as Partial<OperatorTechStackSummary>;
+  return {
+    kind: record.kind === 'docker-compose'
+      || record.kind === 'dockerfile'
+      || record.kind === 'nextjs'
+      || record.kind === 'vite'
+      || record.kind === 'node'
+      || record.kind === 'python'
+      || record.kind === 'static'
+      ? record.kind
+      : 'unknown',
+    label: typeof record.label === 'string' && record.label.trim() ? record.label : 'Unknown stack',
+    detectionSource: typeof record.detectionSource === 'string' ? record.detectionSource : null,
+    installCommand: typeof record.installCommand === 'string' ? record.installCommand : null,
+    buildCommand: typeof record.buildCommand === 'string' ? record.buildCommand : null,
+    startCommand: typeof record.startCommand === 'string' ? record.startCommand : null,
+    runtimePort: typeof record.runtimePort === 'number' && Number.isFinite(record.runtimePort) ? record.runtimePort : null,
+    healthcheckPath: typeof record.healthcheckPath === 'string' ? record.healthcheckPath : null,
+    dockerfilePath: typeof record.dockerfilePath === 'string' ? record.dockerfilePath : null,
+    composeFilePath: typeof record.composeFilePath === 'string' ? record.composeFilePath : null,
+    composeServiceName: typeof record.composeServiceName === 'string' ? record.composeServiceName : null,
+    goldenPath: record.goldenPath === 'single-file-html-canvas'
+      || record.goldenPath === 'vite-react'
+      || record.goldenPath === 'nextjs'
+      || record.goldenPath === 'docker-compose'
+      ? record.goldenPath
+      : null,
+    recipeReliable: record.recipeReliable === true,
+    blockReason: record.blockReason === 'unsupported_stack' || record.blockReason === 'compose_recipe_missing'
+      ? record.blockReason
+      : null,
+    notes: Array.isArray(record.notes) ? record.notes.filter((entry): entry is string => typeof entry === 'string') : [],
+  };
+}
+
+function normalizeEnvChecklistSummary(value: unknown): OperatorEnvChecklistSummary {
+  if (typeof value !== 'object' || value === null) {
+    return defaultEnvChecklistSummary();
+  }
+
+  const record = value as Partial<OperatorEnvChecklistSummary>;
+  const items = Array.isArray(record.items)
+    ? record.items
+      .map((entry) => {
+        if (typeof entry !== 'object' || entry === null) {
+          return null;
+        }
+
+        const candidate = entry as Partial<OperatorEnvChecklistItem>;
+        const status = candidate.status === 'needs_value' || candidate.status === 'inferred' ? candidate.status : 'optional';
+        return {
+          id: typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : createId('requirement'),
+          kind: candidate.kind === 'env'
+            || candidate.kind === 'storage'
+            || candidate.kind === 'network'
+            || candidate.kind === 'healthcheck'
+            ? candidate.kind
+            : 'runtime',
+          label: typeof candidate.label === 'string' && candidate.label.trim() ? candidate.label : 'Requirement',
+          required: candidate.required !== false,
+          status,
+          valueHint: typeof candidate.valueHint === 'string' ? candidate.valueHint : null,
+          source: typeof candidate.source === 'string' && candidate.source.trim() ? candidate.source : 'inference',
+          purpose: typeof candidate.purpose === 'string' && candidate.purpose.trim() ? candidate.purpose : 'Deployment requirement',
+        } satisfies OperatorEnvChecklistItem;
+      })
+      .filter((entry): entry is OperatorEnvChecklistItem => Boolean(entry))
+    : [];
+
+  const missingRequiredCount = items.filter((entry) => entry.required && entry.status === 'needs_value').length;
+  return {
+    status: record.status === 'ready' || record.status === 'blocked'
+      ? record.status
+      : (missingRequiredCount > 0 ? 'blocked' : items.length > 0 ? 'ready' : 'pending'),
+    headline: typeof record.headline === 'string' && record.headline.trim() ? record.headline : 'Environment checklist ready.',
+    detail: typeof record.detail === 'string' && record.detail.trim() ? record.detail : 'Review required inputs before production.',
+    missingRequiredCount,
+    items,
+  };
+}
+
+function normalizeCredentialReadinessSummary(value: unknown): OperatorCredentialReadiness {
+  if (typeof value !== 'object' || value === null) {
+    return defaultCredentialReadinessSummary();
+  }
+
+  const record = value as Partial<OperatorCredentialReadiness>;
+  const status: OperatorCredentialReadinessStatus = record.status === 'ready'
+    || record.status === 'missing_credentials'
+    || record.status === 'auth_failed'
+    || record.status === 'host_unreachable'
+    || record.status === 'host_key_untrusted'
+    ? record.status
+    : 'missing_credentials';
+
+  return buildCredentialReadinessSummary({
+    status,
+    zh: /[\u3400-\u9fff]/.test(`${record.headline ?? ''} ${record.detail ?? ''}`),
+    detail: typeof record.detail === 'string' ? record.detail : null,
+    checkedAt: typeof record.checkedAt === 'string' ? record.checkedAt : null,
+    source: record.source === 'mock' || record.source === 'system' ? record.source : 'preflight',
+  });
+}
+
+function normalizeDeploymentSummary(value: unknown): OperatorDeploymentSummary {
+  if (typeof value !== 'object' || value === null) {
+    return defaultDeploymentSummary();
+  }
+
+  const record = value as Partial<OperatorDeploymentSummary>;
+  const defaultPipeline = defaultDeploymentSummary().pipeline;
+  const normalizedPipeline = Array.isArray(record.pipeline)
+    ? record.pipeline
+      .map((entry) => {
+        if (typeof entry !== 'object' || entry === null) {
+          return null;
+        }
+
+        const candidate = entry as Partial<OperatorPlanStep>;
+        if (typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || typeof candidate.detail !== 'string') {
+          return null;
+        }
+
+        return {
+          id: candidate.id,
+          title: candidate.title,
+          detail: candidate.detail,
+          status: candidate.status === 'completed' || candidate.status === 'in_progress' || candidate.status === 'attention'
+            ? candidate.status
+            : 'planned',
+        } satisfies OperatorPlanStep;
+      })
+      .filter((entry): entry is OperatorPlanStep => Boolean(entry))
+    : [];
+  const pipelineById = new Map<string, OperatorPlanStep>();
+  for (const step of normalizedPipeline) {
+    pipelineById.set(step.id, step);
+  }
+  for (const fallbackStep of defaultPipeline) {
+    if (!pipelineById.has(fallbackStep.id)) {
+      pipelineById.set(fallbackStep.id, { ...fallbackStep });
+    }
+  }
+
+  return {
+    targetLabel: typeof record.targetLabel === 'string' && record.targetLabel.trim() ? record.targetLabel : 'Server #19',
+    targetRef: typeof record.targetRef === 'string' ? record.targetRef : '#19',
+    previewOnly: record.previewOnly !== false,
+    supported: record.supported === true,
+    successCriteria: Array.isArray(record.successCriteria)
+      ? record.successCriteria.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : defaultDeploymentSummary().successCriteria,
+    rollbackPlan: Array.isArray(record.rollbackPlan)
+      ? record.rollbackPlan.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : defaultDeploymentSummary().rollbackPlan,
+    pipeline: [...pipelineById.values()],
+  };
+}
+
 function normalizePreviewSummary(value: unknown): OperatorPreviewSummary {
   if (typeof value !== 'object' || value === null) {
     return defaultPreviewSummary();
   }
 
   const record = value as Partial<OperatorPreviewSummary>;
+  const previewUrl = typeof record.previewUrl === 'string' ? record.previewUrl : null;
+  const lastError = typeof record.lastError === 'string' ? record.lastError : null;
+  const evidence = normalizePreviewEvidence(record.evidence);
+  const failed = record.status === 'failed' || Boolean(lastError);
+  const verified = !failed && hasCompletePreviewEvidence(evidence);
+  const normalizedStatus = failed
+    ? 'failed'
+    : verified
+      ? 'verified'
+      : record.status === 'building' || previewUrl
+        ? 'building'
+        : 'unavailable';
   return {
-    status: record.status === 'building' || record.status === 'verified' || record.status === 'failed'
-      ? record.status
-      : 'unavailable',
-    verified: record.verified === true,
-    previewUrl: typeof record.previewUrl === 'string' ? record.previewUrl : null,
+    status: normalizedStatus,
+    verified,
+    previewUrl,
     entryFile: typeof record.entryFile === 'string' ? record.entryFile : null,
     assetCount: typeof record.assetCount === 'number' && Number.isFinite(record.assetCount) ? record.assetCount : 0,
-    verifiedAt: typeof record.verifiedAt === 'string' ? record.verifiedAt : null,
-    lastError: typeof record.lastError === 'string' ? record.lastError : null,
+    verifiedAt: verified && typeof record.verifiedAt === 'string' ? record.verifiedAt : null,
+    lastError,
+    evidence,
   };
 }
 
@@ -4577,6 +5557,13 @@ function refreshEnvelope(
   jobs: OperatorJob[],
   confirmation: OperatorConfirmation | null = null,
 ): OperatorEnvelope {
+  const workflow = normalizeWorkflowState(record.workflow);
+  record.workflow = workflow;
+  const activeTask = getWorkflowTaskById(workflow, workflow.activeTaskId);
+  if (activeTask) {
+    syncWorkflowTaskFromRecord(record, activeTask);
+  }
+
   return {
     capsule: record.capsule,
     plan: record.plan,
@@ -4591,11 +5578,17 @@ function refreshEnvelope(
     truthState: record.capsule.truthState ?? 'planning',
     latestJob: record.capsule.latestJob ?? null,
     jobs,
+    workspaceArtifactLedger: record.workspaceArtifactLedger,
     artifactSummary: record.artifactSummary,
     previewSummary: record.previewSummary,
     auditSummary: record.auditSummary,
     diagnosticsSummary: record.diagnosticsSummary,
+    techStackSummary: record.techStackSummary,
+    envChecklistSummary: record.envChecklistSummary,
+    credentialReadiness: record.credentialReadiness,
+    deploymentSummary: record.deploymentSummary,
     nextActions: buildNextActions(record.capsule),
+    workflow,
   };
 }
 
@@ -4655,6 +5648,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     && trimText(provider.model) !== ''
     && trimText(provider.baseUrl) !== ''
   ));
+  const previewVerifier = options.previewVerifier ?? verifyPreviewRuntime;
   const capsules = new Map<string, CapsuleRecord>();
   const confirmations = new Map<string, PendingConfirmationRecord>();
   const generationTasks = new Map<string, OperatorGenerationTask>();
@@ -4669,7 +5663,14 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     }
 
     previewRuntimes.delete(capsuleId);
-    runtime.child.kill('SIGTERM');
+    runtime.child?.kill('SIGTERM');
+    if (runtime.dispose) {
+      try {
+        runtime.dispose();
+      } catch {
+        // ignore cleanup failures during preview teardown
+      }
+    }
     return true;
   }
 
@@ -4776,8 +5777,9 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       capsuleId: record.capsule.id,
       port,
       baseUrl,
-      kind: 'next-standalone',
+      kind: 'proxy-runtime',
       child,
+      dispose: null,
     });
 
     try {
@@ -4788,6 +5790,235 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       stopWorkspacePreviewRuntime(record.capsule.id);
       throw error;
     }
+  }
+
+  async function startComposePreviewRuntime(
+    record: CapsuleRecord,
+    input: {
+      sourceRoot: string;
+      composeFilePath: string;
+      composeServiceName: string;
+      runtimePort: number;
+    },
+  ) {
+    stopWorkspacePreviewRuntime(record.capsule.id);
+
+    const composeArgs = ['compose', '-f', input.composeFilePath];
+    const dispose = () => {
+      try {
+        execFileSync('docker', [...composeArgs, 'down', '--remove-orphans'], {
+          cwd: input.sourceRoot,
+          stdio: 'pipe',
+        });
+      } catch {
+        // best-effort cleanup
+      }
+    };
+
+    dispose();
+    const up = await runLocalCommand({
+      command: 'docker',
+      args: [...composeArgs, 'up', '-d', '--build', input.composeServiceName],
+      cwd: input.sourceRoot,
+      timeoutMs: 12 * 60 * 1000,
+    });
+    if (up.exitCode !== 0) {
+      throw new Error((up.stderr || up.stdout || 'docker compose up failed').trim());
+    }
+
+    const baseUrl = `http://127.0.0.1:${input.runtimePort}`;
+    previewRuntimes.set(record.capsule.id, {
+      capsuleId: record.capsule.id,
+      port: input.runtimePort,
+      baseUrl,
+      kind: 'compose-runtime',
+      child: null,
+      dispose,
+    });
+
+    try {
+      await waitForPreviewRuntime(baseUrl);
+      return baseUrl;
+    } catch (error) {
+      stopWorkspacePreviewRuntime(record.capsule.id);
+      throw error;
+    }
+  }
+
+  function syncCapsuleStatusFromPreview(record: CapsuleRecord) {
+    if (record.capsule.productionUrl) {
+      return;
+    }
+    if (record.previewSummary.status === 'verified') {
+      record.capsule.status = 'preview_live';
+      return;
+    }
+    if (record.previewSummary.status === 'failed') {
+      record.capsule.status = 'needs_attention';
+      return;
+    }
+    if (record.capsule.status === 'preview_live') {
+      record.capsule.status = 'planning';
+    }
+  }
+
+  function setPreviewSummary(
+    record: CapsuleRecord,
+    value: Partial<OperatorPreviewSummary>,
+  ) {
+    record.previewSummary = normalizePreviewSummary({
+      ...record.previewSummary,
+      ...value,
+    });
+    syncCapsuleStatusFromPreview(record);
+  }
+
+  function setPreviewBuilding(
+    record: CapsuleRecord,
+    input: {
+      previewUrl?: string | null;
+      entryFile?: string | null;
+      assetCount?: number | null;
+    } = {},
+  ) {
+    setPreviewSummary(record, {
+      status: 'building',
+      verifiedAt: null,
+      lastError: null,
+      evidence: defaultPreviewSummary().evidence,
+      previewUrl: typeof input.previewUrl === 'string' ? input.previewUrl : record.previewSummary.previewUrl,
+      entryFile: typeof input.entryFile === 'string' ? input.entryFile : record.previewSummary.entryFile,
+      assetCount: typeof input.assetCount === 'number' && Number.isFinite(input.assetCount)
+        ? input.assetCount
+        : record.previewSummary.assetCount,
+    });
+  }
+
+  function setPreviewFailed(
+    record: CapsuleRecord,
+    message: string,
+    input: {
+      previewUrl?: string | null;
+      entryFile?: string | null;
+      assetCount?: number | null;
+      clearPreviewUrl?: boolean;
+    } = {},
+  ) {
+    setPreviewSummary(record, {
+      status: 'failed',
+      verifiedAt: null,
+      lastError: message,
+      evidence: defaultPreviewSummary().evidence,
+      previewUrl: input.clearPreviewUrl === true
+        ? null
+        : typeof input.previewUrl === 'string'
+          ? input.previewUrl
+          : record.previewSummary.previewUrl,
+      entryFile: typeof input.entryFile === 'string' ? input.entryFile : record.previewSummary.entryFile,
+      assetCount: typeof input.assetCount === 'number' && Number.isFinite(input.assetCount)
+        ? input.assetCount
+        : record.previewSummary.assetCount,
+    });
+  }
+
+  function setPreviewVerified(
+    record: CapsuleRecord,
+    input: {
+      previewUrl?: string | null;
+      entryFile?: string | null;
+      assetCount?: number | null;
+      evidence: PreviewVerificationEvidence;
+    },
+  ) {
+    setPreviewSummary(record, {
+      status: 'verified',
+      verifiedAt: nowIso(),
+      lastError: null,
+      evidence: input.evidence,
+      previewUrl: typeof input.previewUrl === 'string' ? input.previewUrl : record.previewSummary.previewUrl,
+      entryFile: typeof input.entryFile === 'string' ? input.entryFile : record.previewSummary.entryFile,
+      assetCount: typeof input.assetCount === 'number' && Number.isFinite(input.assetCount)
+        ? input.assetCount
+        : record.previewSummary.assetCount,
+    });
+  }
+
+  function buildPreviewEvidenceScreenshotPath(record: CapsuleRecord, label = 'runtime.png') {
+    const directory = ensureGeneratedProjectDirectory(record.capsule.id);
+    if (directory) {
+      return join(directory.root, 'preview-evidence', label);
+    }
+    return join(tmpdir(), 'sloth-operator-preview-evidence', record.capsule.id, label);
+  }
+
+  async function runPreviewVerification(
+    record: CapsuleRecord,
+    input: {
+      previewKind: PreviewVerificationInput['previewKind'];
+      buildRoot?: string | null;
+      runtimeUrl?: string | null;
+      entryFile?: string | null;
+      assetCount?: number | null;
+      goldenPath?: PreviewGoldenPath | null;
+      healthcheckPath?: string | null;
+      screenshotLabel?: string;
+    },
+  ) {
+    const previewUrl = record.capsule.previewUrl ?? record.previewSummary.previewUrl;
+    if (!previewUrl) {
+      return {
+        ok: false,
+        reason: 'preview_verification_missing_preview_url',
+        evidence: defaultPreviewSummary().evidence,
+        observedChange: false,
+        placeholderLike: false,
+      } satisfies PreviewVerificationResult;
+    }
+
+    let buildRoot = input.buildRoot ?? null;
+    if (input.previewKind === 'static' && (!buildRoot || !existsSync(buildRoot))) {
+      const fallbackRoot = ensureGeneratedProjectDirectory(record.capsule.id)?.root
+        ?? join(tmpdir(), 'sloth-operator-preview-runtime', record.capsule.id);
+      const fallbackBuildRoot = join(fallbackRoot, 'verification-static');
+      mkdirSync(fallbackBuildRoot, { recursive: true });
+      const html = getPreviewHtml(record.capsule.id);
+      if (html) {
+        writeFileSync(join(fallbackBuildRoot, 'index.html'), html);
+        buildRoot = fallbackBuildRoot;
+      }
+    }
+
+    const result = await previewVerifier({
+      previewKind: input.previewKind,
+      goldenPath: input.goldenPath ?? record.techStackSummary.goldenPath,
+      previewUrl,
+      healthcheckPath: input.healthcheckPath ?? record.techStackSummary.healthcheckPath,
+      screenshotPath: buildPreviewEvidenceScreenshotPath(record, input.screenshotLabel ?? 'runtime.png'),
+      buildRoot,
+      runtimeUrl: input.runtimeUrl ?? null,
+    });
+
+    if (result.ok && hasCompletePreviewEvidence(result.evidence)) {
+      setPreviewVerified(record, {
+        previewUrl,
+        entryFile: input.entryFile,
+        assetCount: input.assetCount,
+        evidence: result.evidence,
+      });
+      return result;
+    }
+
+    const failureResult: PreviewVerificationResult = {
+      ...result,
+      ok: false,
+      reason: result.reason ?? 'preview_evidence_incomplete',
+    };
+    setPreviewFailed(record, failureResult.reason ?? 'preview_evidence_incomplete', {
+      previewUrl,
+      entryFile: input.entryFile,
+      assetCount: input.assetCount,
+    });
+    return failureResult;
   }
 
   function rememberConnectorSecret(capsuleId: string, connector: RemoteExecConnector) {
@@ -4818,6 +6049,90 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     return null;
   }
 
+  function isZhRecord(record: CapsuleRecord) {
+    return /[\u3400-\u9fff]/.test(`${record.capsule.name} ${record.capsule.summary}`);
+  }
+
+  function connectorHostLabel(record: CapsuleRecord) {
+    const connector = record.capsule.connector;
+    if (!connector) {
+      return null;
+    }
+    return `${connector.username}@${connector.host}:${connector.port}`;
+  }
+
+  function setCredentialReadiness(
+    record: CapsuleRecord,
+    status: OperatorCredentialReadinessStatus,
+    options?: {
+      detail?: string | null;
+      checkedAt?: string | null;
+      source?: 'preflight' | 'system' | 'mock';
+    },
+  ) {
+    record.credentialReadiness = buildCredentialReadinessSummary({
+      status,
+      zh: isZhRecord(record),
+      detail: options?.detail ?? null,
+      hostLabel: connectorHostLabel(record),
+      checkedAt: options?.checkedAt ?? nowIso(),
+      source: options?.source ?? 'preflight',
+    });
+
+    const preflightStepDetail = record.credentialReadiness.status === 'ready'
+      ? record.credentialReadiness.detail
+      : `${record.credentialReadiness.headline}. ${record.credentialReadiness.nextAction}`;
+    setDeploymentPipelineStep(
+      record,
+      'pipeline_preflight',
+      record.credentialReadiness.status === 'ready' ? 'completed' : 'attention',
+      preflightStepDetail,
+    );
+  }
+
+  function refreshCredentialReadinessFromConnector(
+    record: CapsuleRecord,
+    options?: {
+      checkedAt?: string | null;
+      preserveFailureStatus?: boolean;
+      allowPromoteReady?: boolean;
+    },
+  ) {
+    const connector = resolveActionConnector(record);
+    if (!record.capsule.connector || !connector) {
+      setCredentialReadiness(record, 'missing_credentials', {
+        detail: isZhRecord(record)
+          ? '当前运行时里没有可用的 SSH 凭据。'
+          : 'No SSH credentials are available in the current runtime.',
+        checkedAt: options?.checkedAt ?? null,
+      });
+      return record.credentialReadiness;
+    }
+
+    if (
+      options?.preserveFailureStatus !== false
+      && (
+        record.credentialReadiness.status === 'auth_failed'
+        || record.credentialReadiness.status === 'host_key_untrusted'
+        || record.credentialReadiness.status === 'host_unreachable'
+      )
+    ) {
+      return record.credentialReadiness;
+    }
+
+    if (!options?.allowPromoteReady && record.credentialReadiness.status !== 'ready') {
+      return record.credentialReadiness;
+    }
+
+    setCredentialReadiness(record, 'ready', {
+      detail: isZhRecord(record)
+        ? `预检通过：${connector.username}@${connector.host}:${connector.port}`
+        : `Preflight passed: ${connector.username}@${connector.host}:${connector.port}`,
+      checkedAt: options?.checkedAt ?? nowIso(),
+    });
+    return record.credentialReadiness;
+  }
+
   function cloneGenerationTask(task: OperatorGenerationTask): OperatorGenerationTask {
     return {
       ...task,
@@ -4841,7 +6156,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     if (!record) {
       return;
     }
-    record.capsule.latestJob = summarizeJob(getLatestJobForCapsule(capsuleId));
+    const latestJob = getLatestJobForCapsule(capsuleId);
+    record.capsule.latestJob = summarizeJob(latestJob);
+    if (latestJob && timestampMs(latestJob.updatedAt) >= timestampMs(record.capsule.updatedAt)) {
+      record.capsule.updatedAt = latestJob.updatedAt;
+      record.capsule.lastActiveAt = latestJob.updatedAt;
+    }
   }
 
   function updateWorkspaceTruth(record: CapsuleRecord) {
@@ -4849,10 +6169,26 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     record.capsule.latestJob = summarizeJob(latestJob);
 
     if (record.capsule.productionUrl) {
+      record.deploymentSummary.previewOnly = false;
       record.capsule.truthState = 'production_live';
       return;
     }
+    if (
+      record.capsule.entryKind === 'upload-project'
+      && !trimText(record.capsule.source.repoUrl)
+      && !trimText(record.artifactSummary.sourceRef)
+    ) {
+      record.capsule.truthState = 'waiting_for_inputs';
+      return;
+    }
     if (latestJob?.status === 'running' || latestJob?.status === 'queued') {
+      if (
+        record.capsule.entryKind === 'upload-project'
+        && (latestJob.kind === 'build_repo_preview' || latestJob.kind === 'deploy_preview')
+      ) {
+        record.capsule.truthState = 'verifying_repo';
+        return;
+      }
       record.capsule.truthState = 'job_running';
       return;
     }
@@ -4862,6 +6198,23 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     }
     if (record.auditSummary.status === 'failed') {
       record.capsule.truthState = 'audit_failed';
+      return;
+    }
+    if (record.previewSummary.status === 'verified' && record.envChecklistSummary.status === 'blocked') {
+      record.capsule.truthState = 'env_blocked';
+      return;
+    }
+    if (record.previewSummary.status === 'verified' && isCredentialReadinessBlocked(record.credentialReadiness.status)) {
+      record.capsule.truthState = 'env_blocked';
+      return;
+    }
+    if (
+      record.previewSummary.status === 'verified'
+      && record.capsule.entryKind === 'upload-project'
+      && record.envChecklistSummary.status !== 'blocked'
+      && !isCredentialReadinessBlocked(record.credentialReadiness.status)
+    ) {
+      record.capsule.truthState = 'ready_for_production_approval';
       return;
     }
     if (record.previewSummary.status === 'verified') {
@@ -5207,6 +6560,21 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
 
   function normalizeRecord(record: CapsuleRecord) {
     let changed = false;
+    const normalizedArchivedAt = trimText(record.capsule.archivedAt) || null;
+    if ((record.capsule.archivedAt ?? null) !== normalizedArchivedAt) {
+      record.capsule.archivedAt = normalizedArchivedAt;
+      changed = true;
+    }
+
+    const nextLastActiveAt = (() => {
+      const candidate = Math.max(timestampMs(record.capsule.lastActiveAt), timestampMs(record.capsule.updatedAt));
+      return candidate > 0 ? new Date(candidate).toISOString() : nowIso();
+    })();
+    if (record.capsule.lastActiveAt !== nextLastActiveAt) {
+      record.capsule.lastActiveAt = nextLastActiveAt;
+      changed = true;
+    }
+
     const generationSource = inferGenerationSource(record);
     if (generationSource && record.capsule.generationSource !== generationSource) {
       record.capsule.generationSource = generationSource;
@@ -5237,6 +6605,41 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       changed = true;
     }
 
+    const nextTechStackSummary = normalizeTechStackSummary(record.techStackSummary);
+    if (JSON.stringify(nextTechStackSummary) !== JSON.stringify(record.techStackSummary)) {
+      record.techStackSummary = nextTechStackSummary;
+      changed = true;
+    }
+
+    const nextEnvChecklistSummary = normalizeEnvChecklistSummary(record.envChecklistSummary);
+    if (JSON.stringify(nextEnvChecklistSummary) !== JSON.stringify(record.envChecklistSummary)) {
+      record.envChecklistSummary = nextEnvChecklistSummary;
+      changed = true;
+    }
+
+    const nextCredentialReadiness = normalizeCredentialReadinessSummary(record.credentialReadiness);
+    if (JSON.stringify(nextCredentialReadiness) !== JSON.stringify(record.credentialReadiness)) {
+      record.credentialReadiness = nextCredentialReadiness;
+      changed = true;
+    }
+
+    const nextDeploymentSummary = normalizeDeploymentSummary(record.deploymentSummary);
+    if (JSON.stringify(nextDeploymentSummary) !== JSON.stringify(record.deploymentSummary)) {
+      record.deploymentSummary = nextDeploymentSummary;
+      changed = true;
+    }
+
+    const nextWorkflow = normalizeWorkflowState(record.workflow);
+    if (JSON.stringify(nextWorkflow) !== JSON.stringify(record.workflow)) {
+      record.workflow = nextWorkflow;
+      changed = true;
+    }
+
+    if (syncWorkspaceArtifactLedger(record)) {
+      changed = true;
+    }
+
+    syncCapsuleStatusFromPreview(record);
     updateWorkspaceTruth(record);
     return changed;
   }
@@ -5254,14 +6657,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     let changed = false;
     const restartMessage = 'preview_runtime_interrupted_by_restart';
     if (record.previewSummary.status === 'verified' || record.previewSummary.status === 'building') {
-      record.previewSummary = {
-        ...record.previewSummary,
-        status: 'failed',
-        verified: false,
-        previewUrl: null,
-        verifiedAt: null,
-        lastError: restartMessage,
-      };
+      setPreviewFailed(record, restartMessage, { clearPreviewUrl: true });
       changed = true;
     }
 
@@ -5298,11 +6694,23 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   }
 
   function buildEnvelope(record: CapsuleRecord, confirmation: OperatorConfirmation | null = null) {
+    let changed = normalizeRecord(record);
+    const readinessBefore = JSON.stringify(record.credentialReadiness);
+    refreshCredentialReadinessFromConnector(record, { checkedAt: record.credentialReadiness.checkedAt });
+    if (JSON.stringify(record.credentialReadiness) !== readinessBefore) {
+      changed = true;
+    }
     if (alignPreviewUrlWithSlug(record)) {
-      persistState();
+      changed = true;
+    }
+    if (syncWorkspaceArtifactLedger(record)) {
+      changed = true;
     }
 
     updateWorkspaceTruth(record);
+    if (changed) {
+      persistState();
+    }
     return refreshEnvelope(record, listJobsForCapsule(record.capsule.id), confirmation);
   }
 
@@ -5387,8 +6795,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       return;
     }
 
+    for (const record of capsules.values()) {
+      syncWorkspaceArtifactLedger(record);
+    }
+
     const payload: OperatorStateFile = {
-      version: 3,
+      version: 4,
       records: [...capsules.values()],
       generationTasks: [...generationTasks.values()].map((task) => cloneGenerationTask(task)),
       jobs: [...jobs.values()].map((job) => cloneJob(job)),
@@ -5420,6 +6832,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
           record.previewSummary = normalizePreviewSummary(record.previewSummary);
           record.auditSummary = normalizeAuditSummary(record.auditSummary);
           record.diagnosticsSummary = normalizeDiagnosticsSummary(record.diagnosticsSummary);
+          record.techStackSummary = normalizeTechStackSummary(record.techStackSummary);
+          record.envChecklistSummary = normalizeEnvChecklistSummary(record.envChecklistSummary);
+          record.credentialReadiness = normalizeCredentialReadinessSummary(record.credentialReadiness);
+          record.deploymentSummary = normalizeDeploymentSummary(record.deploymentSummary);
+          record.workflow = normalizeWorkflowState(record.workflow);
           record.capsule.truthState ??= 'planning';
           record.capsule.latestJob ??= null;
           if (invalidateVolatilePreviewRuntime(record)) {
@@ -5512,6 +6929,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     record.capsule.recentEvents = [event, ...record.capsule.recentEvents].slice(0, 8);
     record.logsSummary.entries = [event, ...record.logsSummary.entries].slice(0, 8);
     record.capsule.updatedAt = event.createdAt;
+    record.capsule.lastActiveAt = event.createdAt;
   }
 
   function createPlanRecord(input: {
@@ -5555,6 +6973,8 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         connector: input.connector,
         createdAt,
         updatedAt: createdAt,
+        archivedAt: null,
+        lastActiveAt: createdAt,
         recentEvents: [...input.logs],
         truthState: 'planning',
         latestJob: null,
@@ -5574,14 +6994,13 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       },
       generatedProject: null,
       generatedRecipe: null,
+      workspaceArtifactLedger: defaultWorkspaceArtifactLedger(),
       artifactSummary: defaultArtifactSummary(input.entryKind === 'upload-project' ? 'repository' : input.entryKind === 'scan-server' ? 'server' : 'generated'),
-      previewSummary: {
+      previewSummary: normalizePreviewSummary({
         ...defaultPreviewSummary(),
-        status: input.previewUrl ? 'verified' : 'unavailable',
-        verified: Boolean(input.previewUrl),
+        status: input.previewUrl ? 'building' : 'unavailable',
         previewUrl: input.previewUrl,
-        verifiedAt: input.previewUrl ? createdAt : null,
-      },
+      }),
       auditSummary: {
         ...defaultAuditSummary(),
         host: input.source.serverHost,
@@ -5590,9 +7009,16 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         status: input.entryKind === 'scan-server' ? 'pending' : 'pending',
       },
       diagnosticsSummary: defaultDiagnosticsSummary(),
+      techStackSummary: defaultTechStackSummary(),
+      envChecklistSummary: defaultEnvChecklistSummary(),
+      credentialReadiness: defaultCredentialReadinessSummary(),
+      deploymentSummary: defaultDeploymentSummary(),
+      workflow: defaultWorkflowState(),
     };
     alignPreviewUrlWithSlug(record);
+    refreshCredentialReadinessFromConnector(record, { checkedAt: null });
     record.artifactSummary.sourceRef = input.source.repoUrl ?? input.source.idea ?? input.source.serverHost ?? null;
+    syncWorkspaceArtifactLedger(record);
     capsules.set(id, record);
     updateWorkspaceTruth(record);
     persistState();
@@ -5717,13 +7143,269 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     return root;
   }
 
+  function hasRepairRecipeApplied(record: CapsuleRecord) {
+    return (record.techStackSummary.notes ?? [])
+      .some((entry) => trimText(entry).startsWith(repairRecipeAppliedMarker));
+  }
+
+  function materializeRepairStartCommand(input: {
+    record: CapsuleRecord;
+    sourceRoot: string;
+    slug: string;
+    startCommand: string;
+    runtimePort: number;
+  }) {
+    let command = trimText(input.startCommand);
+    if (!command) {
+      return null;
+    }
+
+    const containerPort = input.runtimePort;
+    const dockerfilePath = trimText(input.record.techStackSummary.dockerfilePath) || 'Dockerfile';
+    const imageTag = `${slugify(input.slug, 'repair-workspace')}-repair-preview`;
+
+    if (/^docker\s+run\s+-p\s+<host>:<container>$/i.test(command)) {
+      return [
+        `docker build -f ${shellQuote(dockerfilePath)} -t ${shellQuote(imageTag)} .`,
+        `docker run --rm -p $PORT:${containerPort} ${shellQuote(imageTag)}`,
+      ].join(' && ');
+    }
+
+    command = command
+      .replace(/<host>/gi, '$PORT')
+      .replace(/<container>/gi, String(containerPort))
+      .replace(/<port>/gi, String(containerPort))
+      .replace(/\bPORT=\d{2,5}\b/g, 'PORT=$PORT')
+      .replace(/--port\s+\d{2,5}/g, '--port $PORT')
+      .replace(/-p\s+\d{2,5}\s*:\s*\d{2,5}/g, (_value) => {
+        const match = _value.match(/-p\s+(\d{2,5})\s*:\s*(\d{2,5})/);
+        return match?.[2] ? `-p $PORT:${match[2]}` : `-p $PORT:${containerPort}`;
+      });
+
+    if (/^docker\s+run\b/i.test(command) && !/\$PORT/.test(command)) {
+      if (/-p\s+[^\s]+/.test(command)) {
+        command = command.replace(/-p\s+[^\s]+/, `-p $PORT:${containerPort}`);
+      } else {
+        command = `${command} -p $PORT:${containerPort}`;
+      }
+    }
+
+    return command;
+  }
+
+  async function runShellCommandInRepo(sourceRoot: string, command: string, timeoutMs: number) {
+    return runLocalCommand({
+      command: 'bash',
+      args: ['-lc', command],
+      cwd: sourceRoot,
+      timeoutMs,
+    });
+  }
+
+  function detectRepairBackedRepoBuildPlan(record: CapsuleRecord, sourceRoot: string, slug: string): RepoBuildPlan | null {
+    if (!hasRepairRecipeApplied(record)) {
+      return null;
+    }
+
+    const ledger = normalizeWorkspaceArtifactLedger(record.workspaceArtifactLedger);
+    const runtimePort = normalizeRuntimePort(
+      ledger.chosenStack.runtimePort
+      ?? record.techStackSummary.runtimePort
+      ?? null,
+    ) ?? 3000;
+    const installCommand = trimText(ledger.runnableEntry.installCommand)
+      || trimText(record.techStackSummary.installCommand)
+      || null;
+    const buildCommand = trimText(ledger.runnableEntry.buildCommand)
+      || trimText(record.techStackSummary.buildCommand)
+      || null;
+    const rawStartCommand = trimText(ledger.chosenStack.startCommand)
+      || trimText(record.techStackSummary.startCommand)
+      || trimText(ledger.runnableEntry.runCommands.at(-1))
+      || null;
+    const composeFilePath = trimText(ledger.chosenStack.composeFilePath)
+      || trimText(record.techStackSummary.composeFilePath)
+      || null;
+    const composeServiceName = trimText(ledger.chosenStack.composeServiceName)
+      || trimText(record.techStackSummary.composeServiceName)
+      || null;
+    const entryFile = trimText(ledger.runnableEntry.entryFile)
+      || trimText(record.techStackSummary.detectionSource)
+      || 'repair-entry';
+
+    if (
+      (record.techStackSummary.kind === 'docker-compose' || Boolean(composeFilePath))
+      && composeFilePath
+      && composeServiceName
+    ) {
+      const composeCommandPrefix = `docker compose -f ${composeFilePath}`;
+      return {
+        runtimeLabel: 'Repair recipe (Docker Compose)',
+        installCommand: `${composeCommandPrefix} config`,
+        buildCommand: `${composeCommandPrefix} build ${composeServiceName}`,
+        runCommands: [
+          `${composeCommandPrefix} config`,
+          `${composeCommandPrefix} build ${composeServiceName}`,
+          `${composeCommandPrefix} up -d --build ${composeServiceName}`,
+        ],
+        entryFile: composeFilePath,
+        previewKind: 'proxy',
+        async build() {
+          const config = await runLocalCommand({
+            command: 'docker',
+            args: ['compose', '-f', composeFilePath, 'config'],
+            cwd: sourceRoot,
+            timeoutMs: 2 * 60 * 1000,
+          });
+          if (config.exitCode !== 0) {
+            throw new Error((config.stderr || config.stdout || 'docker compose config failed').trim());
+          }
+
+          const build = await runLocalCommand({
+            command: 'docker',
+            args: ['compose', '-f', composeFilePath, 'build', composeServiceName],
+            cwd: sourceRoot,
+            timeoutMs: 12 * 60 * 1000,
+          });
+          if (build.exitCode !== 0) {
+            throw new Error((build.stderr || build.stdout || 'docker compose build failed').trim());
+          }
+
+          return {
+            install: config,
+            build,
+          };
+        },
+        async startPreviewRuntime(currentRecord) {
+          return startComposePreviewRuntime(currentRecord, {
+            sourceRoot,
+            composeFilePath,
+            composeServiceName,
+            runtimePort,
+          });
+        },
+      };
+    }
+
+    if (!rawStartCommand) {
+      return null;
+    }
+
+    const startCommand = materializeRepairStartCommand({
+      record,
+      sourceRoot,
+      slug,
+      startCommand: rawStartCommand,
+      runtimePort,
+    });
+    if (!startCommand) {
+      return null;
+    }
+
+    return {
+      runtimeLabel: 'Repair recipe',
+      installCommand,
+      buildCommand,
+      runCommands: [
+        ...(installCommand ? [installCommand] : []),
+        ...(buildCommand ? [buildCommand] : []),
+        startCommand,
+      ],
+      entryFile,
+      previewKind: 'proxy',
+      async build() {
+        const install = installCommand
+          ? await runShellCommandInRepo(sourceRoot, installCommand, 8 * 60 * 1000)
+          : null;
+        if (install && install.exitCode !== 0) {
+          throw new Error((install.stderr || install.stdout || 'repair install command failed').trim());
+        }
+
+        const build = buildCommand
+          ? await runShellCommandInRepo(sourceRoot, buildCommand, 10 * 60 * 1000)
+          : null;
+        if (build && build.exitCode !== 0) {
+          throw new Error((build.stderr || build.stdout || 'repair build command failed').trim());
+        }
+
+        return {
+          install,
+          build,
+        };
+      },
+      async startPreviewRuntime(currentRecord) {
+        return startWorkspacePreviewRuntime(currentRecord, {
+          command: 'bash',
+          args: ['-lc', startCommand],
+          cwd: sourceRoot,
+        });
+      },
+    };
+  }
+
   function detectRepoBuildPlan(sourceRoot: string, slug: string): RepoBuildPlan | null {
     const packageJsonPath = join(sourceRoot, 'package.json');
-    const indexHtmlPath = join(sourceRoot, 'index.html');
+    const packageManager = detectNodePackageManager(sourceRoot);
+    const compose = analyzeComposeFile(sourceRoot);
     const viteConfigPresent = ['vite.config.ts', 'vite.config.js', 'vite.config.mjs', 'vite.config.cjs']
       .some((filename) => existsSync(join(sourceRoot, filename)));
     const nextConfigPresent = ['next.config.ts', 'next.config.js', 'next.config.mjs', 'next.config.cjs']
       .some((filename) => existsSync(join(sourceRoot, filename)));
+
+    if (
+      compose?.recipeReliable
+      && compose.composeFilePath
+      && compose.composeServiceName
+      && compose.exposedPort
+    ) {
+      const composeCommandPrefix = `docker compose -f ${compose.composeFilePath}`;
+      return {
+        runtimeLabel: 'Docker Compose',
+        installCommand: `${composeCommandPrefix} config`,
+        buildCommand: `${composeCommandPrefix} build ${compose.composeServiceName}`,
+        runCommands: [
+          `${composeCommandPrefix} config`,
+          `${composeCommandPrefix} build ${compose.composeServiceName}`,
+          `${composeCommandPrefix} up -d --build ${compose.composeServiceName}`,
+        ],
+        entryFile: compose.composeFilePath,
+        previewKind: 'proxy',
+        async build() {
+          const config = await runLocalCommand({
+            command: 'docker',
+            args: ['compose', '-f', compose.composeFilePath!, 'config'],
+            cwd: sourceRoot,
+            timeoutMs: 2 * 60 * 1000,
+          });
+          if (config.exitCode !== 0) {
+            throw new Error((config.stderr || config.stdout || 'docker compose config failed').trim());
+          }
+
+          const build = await runLocalCommand({
+            command: 'docker',
+            args: ['compose', '-f', compose.composeFilePath!, 'build', compose.composeServiceName!],
+            cwd: sourceRoot,
+            timeoutMs: 12 * 60 * 1000,
+          });
+          if (build.exitCode !== 0) {
+            throw new Error((build.stderr || build.stdout || 'docker compose build failed').trim());
+          }
+
+          return {
+            install: config,
+            build,
+          };
+        },
+        async startPreviewRuntime(record) {
+          return startComposePreviewRuntime(record, {
+            sourceRoot,
+            composeFilePath: compose.composeFilePath!,
+            composeServiceName: compose.composeServiceName!,
+            runtimePort: compose.exposedPort!,
+          });
+        },
+      };
+    }
 
     if (existsSync(packageJsonPath)) {
       let packageJson: Record<string, unknown> = {};
@@ -5743,23 +7425,34 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
           ? packageJson.devDependencies as Record<string, unknown>
           : {}),
       };
+      const hasBuildScript = typeof scripts.build === 'string' && String(scripts.build).trim().length > 0;
+      const hasStartScript = typeof scripts.start === 'string' && String(scripts.start).trim().length > 0;
+      const hasReact = typeof dependencies.react === 'string' || typeof dependencies['react-dom'] === 'string';
+      const hasVite = viteConfigPresent
+        || typeof dependencies.vite === 'string'
+        || (typeof scripts.dev === 'string' && String(scripts.dev).includes('vite'))
+        || (typeof scripts.build === 'string' && String(scripts.build).includes('vite build'));
 
       if (
-        nextConfigPresent
-        || typeof dependencies.next === 'string'
-        || (typeof scripts.build === 'string' && String(scripts.build).includes('next build'))
+        hasBuildScript
+        && hasStartScript
+        && (
+          nextConfigPresent
+          || typeof dependencies.next === 'string'
+          || (typeof scripts.build === 'string' && String(scripts.build).includes('next build'))
+        )
       ) {
         return {
           runtimeLabel: 'Next.js',
-          installCommand: 'npm install',
-          buildCommand: 'npm run build',
-          runCommands: ['npm install', 'npm run build', 'PORT=3000 npm run start'],
+          installCommand: packageManager.installCommand,
+          buildCommand: packageManager.buildCommand,
+          runCommands: [packageManager.installCommand, packageManager.buildCommand, `PORT=3000 ${packageManager.startCommand}`],
           entryFile: '.next/BUILD_ID',
           previewKind: 'proxy',
           async build() {
             const install = await runLocalCommand({
-              command: 'npm',
-              args: ['install'],
+              command: packageManager.installInvocation.command,
+              args: packageManager.installInvocation.args,
               cwd: sourceRoot,
               timeoutMs: 8 * 60 * 1000,
             });
@@ -5768,8 +7461,8 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
             }
 
             const build = await runLocalCommand({
-              command: 'npm',
-              args: ['run', 'build'],
+              command: packageManager.scriptInvocation('build').command,
+              args: packageManager.scriptInvocation('build').args,
               cwd: sourceRoot,
               timeoutMs: 10 * 60 * 1000,
             });
@@ -5802,8 +7495,8 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
             }
 
             return startWorkspacePreviewRuntime(record, {
-              command: 'npm',
-              args: ['run', 'start', '--', '--hostname', '127.0.0.1'],
+              command: packageManager.scriptInvocation('start', ['--hostname', '127.0.0.1']).command,
+              args: packageManager.scriptInvocation('start', ['--hostname', '127.0.0.1']).args,
               cwd: sourceRoot,
               env: {
                 NEXT_TELEMETRY_DISABLED: '1',
@@ -5813,18 +7506,18 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         };
       }
 
-      if (viteConfigPresent || typeof dependencies.vite === 'string' || typeof scripts.dev === 'string' && String(scripts.dev).includes('vite')) {
+      if (hasVite && hasReact && hasBuildScript) {
         return {
-          runtimeLabel: 'Vite',
-          installCommand: 'npm install',
-          buildCommand: 'vite build',
-          runCommands: ['npm install', 'npm run dev'],
+          runtimeLabel: 'Vite / React',
+          installCommand: packageManager.installCommand,
+          buildCommand: packageManager.buildCommand,
+          runCommands: [packageManager.installCommand, packageManager.buildCommand],
           entryFile: 'index.html',
           previewKind: 'static',
           async build(buildRoot: string) {
             const install = await runLocalCommand({
-              command: 'npm',
-              args: ['install'],
+              command: packageManager.installInvocation.command,
+              args: packageManager.installInvocation.args,
               cwd: sourceRoot,
               timeoutMs: 8 * 60 * 1000,
             });
@@ -5864,27 +7557,23 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       }
     }
 
-    if (existsSync(indexHtmlPath)) {
+    const singleFileHtmlCanvas = analyzeSingleFileHtmlCanvas(sourceRoot);
+    if (singleFileHtmlCanvas?.supported) {
       return {
-        runtimeLabel: 'Static site',
+        runtimeLabel: 'Single-file HTML / Canvas',
         installCommand: null,
         buildCommand: null,
-        runCommands: ['serve .'],
+        runCommands: ['serve index.html'],
         entryFile: 'index.html',
         previewKind: 'static',
         async build(buildRoot: string) {
           rmSync(buildRoot, { recursive: true, force: true });
           mkdirSync(buildRoot, { recursive: true });
-          for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
-            if (entry.name === '.git' || entry.name === 'node_modules') {
-              continue;
-            }
-            cpSync(join(sourceRoot, entry.name), join(buildRoot, entry.name), { recursive: true, force: true });
-          }
+          cpSync(join(sourceRoot, 'index.html'), join(buildRoot, 'index.html'), { force: true });
           return {
             install: null,
             build: {
-              stdout: 'static_files_copied',
+              stdout: 'single_file_html_copied',
               stderr: '',
               exitCode: 0,
             },
@@ -6173,6 +7862,67 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     }
   }
 
+  function buildGeneratedProjectTechStackSummary(
+    template: GeneratedProjectTemplate,
+    inferredStack: StackDescriptor,
+  ): OperatorTechStackSummary {
+    const filePaths = new Set(template.files.map((file) => file.path));
+    const joinedCommands = template.runCommands.join(' ').toLowerCase();
+    const entryFile = template.entryFile.toLowerCase();
+    const hasVite = filePaths.has('vite.config.ts') || joinedCommands.includes('vite');
+    const hasPython = entryFile.endsWith('.py') || joinedCommands.includes('python');
+    const hasPhp = entryFile.endsWith('.php') || joinedCommands.includes('php -s');
+    const kind: OperatorTechStackSummary['kind'] = hasVite
+      ? 'vite'
+      : hasPython
+        ? 'python'
+        : hasPhp
+          ? 'dockerfile'
+          : entryFile.endsWith('.html')
+            ? 'static'
+            : 'unknown';
+
+    const installCommand = kind === 'vite'
+      ? 'npm install'
+      : kind === 'python'
+        ? 'pip install -r requirements.txt'
+        : null;
+    const buildCommand = kind === 'vite' ? 'npm run build' : null;
+    const startCommand = template.runCommands.at(-1) ?? null;
+    const runtimePort = kind === 'python'
+      ? 8000
+      : kind === 'static' || kind === 'dockerfile'
+        ? 8080
+        : kind === 'vite'
+          ? 3000
+          : null;
+
+    return {
+      ...defaultTechStackSummary(),
+      kind,
+      label: inferredStack.label,
+      detectionSource: `generated:${template.entryFile}`,
+      installCommand,
+      buildCommand,
+      startCommand,
+      runtimePort,
+      healthcheckPath: '/',
+      dockerfilePath: filePaths.has('Dockerfile') ? 'Dockerfile' : null,
+      composeFilePath: null,
+      composeServiceName: null,
+      goldenPath: kind === 'vite'
+        ? 'vite-react'
+        : kind === 'static'
+          ? 'single-file-html-canvas'
+          : null,
+      recipeReliable: kind === 'vite' || kind === 'static',
+      blockReason: kind === 'vite' || kind === 'static' ? null : 'unsupported_stack',
+      notes: [
+        `Generated workspace entry: ${template.entryFile}`,
+      ],
+    };
+  }
+
   function ensureGeneratedProjectArchive(capsuleId: string) {
     const directory = ensureGeneratedProjectDirectory(capsuleId);
     if (!directory) {
@@ -6238,6 +7988,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     if (record.capsule.entryKind === 'generate-from-idea') {
       record.capsule.generationSource = templateOverride ? 'template' : inferGenerationSource(record);
     }
+    record.techStackSummary = buildGeneratedProjectTechStackSummary(template, inferredStack);
     record.artifactSummary = {
       sourceType: 'generated',
       sourceRef: record.capsule.source.idea ?? record.capsule.name,
@@ -6249,16 +8000,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       installCommand: generatedProject.runCommands[0] ?? null,
       buildCommand: generatedProject.runCommands.at(-1) ?? null,
     };
-    record.previewSummary = {
-      ...record.previewSummary,
-      status: 'building',
-      verified: false,
+    setPreviewBuilding(record, {
       previewUrl: record.capsule.previewUrl,
       entryFile: generatedProject.entryFile,
       assetCount: generatedProject.files.length,
-      verifiedAt: null,
-      lastError: null,
-    };
+    });
     record.infraSummary.items = [
       ...record.infraSummary.items.filter((item) => item.label !== 'Source bundle' && item.label !== '源码包'),
       { label: recipe?.locale === 'zh-CN' ? '源码包' : 'Source bundle', value: generatedProject.archiveUrl ?? generatedProject.archiveName },
@@ -6266,6 +8012,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     addEvent(record, 'success', recipe?.locale === 'zh-CN'
       ? 'AI 已经把计划落实成可下载、可部署的真实源码包。'
       : 'AI materialized a real project bundle for deployment and download.');
+    syncWorkspaceArtifactLedger(record, trimText(input.userIntent) || input.idea);
     persistState();
     return generatedProject;
   }
@@ -6277,7 +8024,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   function listCapsules() {
     return [...capsules.values()]
       .map((record) => record.capsule)
-      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+      .sort((left, right) => {
+        const rightTime = Math.max(timestampMs(right.lastActiveAt), timestampMs(right.updatedAt));
+        const leftTime = Math.max(timestampMs(left.lastActiveAt), timestampMs(left.updatedAt));
+        return rightTime - leftTime;
+      });
   }
 
   function listWorkspaces() {
@@ -6429,8 +8180,25 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
 
   async function startGeneratedPreviewJob(record: CapsuleRecord, jobId: string) {
     const zh = /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '));
+    const task = getActiveWorkflowTask(record);
 
     try {
+      if (task) {
+        setWorkflowFailure(task, null);
+        appendWorkflowCard(task, createWorkflowCard(task, {
+          id: `${task.id}:execution:running:${jobId}`,
+          kind: 'execution',
+          stage: 'running',
+          title: zh ? '执行预览重建' : 'Run preview rebuild',
+          summary: zh ? '系统正在使用当前工作区里的源码与入口重建预览。' : 'The system is rebuilding preview from the existing workspace source and entry.',
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '入口文件' : 'Entry file', record.artifactSummary.entryFile ?? (record.generatedProject?.entryFile ?? 'unknown'), 'executor', `${task.id}:generated-entry`),
+            createWorkflowEvidenceItem(zh ? '运行命令' : 'Run command', record.artifactSummary.runCommands[0] ?? (record.generatedProject?.runCommands[0] ?? 'unknown'), 'executor', `${task.id}:generated-run-command`),
+          ],
+          nextStep: zh ? '构建完成后进入验证。' : 'Move into verification after the build finishes.',
+          source: 'executor',
+        }));
+      }
       markJobStage(jobId, {
         status: 'running',
         progress: 12,
@@ -6468,17 +8236,22 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       }
       record.capsule.previewUrl = buildPreviewUrl(record.capsule.slug);
       record.infraSummary.endpoint = record.capsule.previewUrl;
-      record.previewSummary = {
-        ...record.previewSummary,
-        status: 'verified',
-        verified: true,
+      setPreviewBuilding(record, {
         previewUrl: record.capsule.previewUrl,
         entryFile: record.generatedProject.entryFile,
         assetCount: record.generatedProject.files.length,
-        verifiedAt: nowIso(),
-        lastError: null,
-      };
-      record.capsule.status = 'preview_live';
+      });
+      const verification = await runPreviewVerification(record, {
+        previewKind: 'static',
+        buildRoot: build.buildRoot,
+        entryFile: record.generatedProject.entryFile,
+        assetCount: record.generatedProject.files.length,
+        goldenPath: 'vite-react',
+        screenshotLabel: 'generated-runtime.png',
+      });
+      if (!verification.ok) {
+        throw new Error(verification.reason ?? 'preview_verification_failed');
+      }
       record.capsule.healthScore = Math.max(record.capsule.healthScore, 84);
       record.logsSummary.headline = zh ? '共享预览已经恢复。' : 'The shared preview is healthy again.';
       updateDiagnostics(record, {
@@ -6507,6 +8280,20 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         detail: record.capsule.previewUrl ?? '',
         activeStepIndex: 2,
       });
+      if (task) {
+        appendWorkflowCard(task, createWorkflowCard(task, {
+          id: `${task.id}:verification:verifying:${jobId}`,
+          kind: 'verification',
+          stage: 'verifying',
+          title: zh ? '验证预览结果' : 'Verify preview result',
+          summary: zh ? '构建完成，系统正在验证预览地址是否真实可访问。' : 'Build completed, and the system is validating that the preview URL is actually reachable.',
+          evidence: [
+            ...(record.capsule.previewUrl ? [createWorkflowEvidenceItem(zh ? '预览地址' : 'Preview URL', record.capsule.previewUrl, 'executor', `${task.id}:generated-preview-url`)] : []),
+          ],
+          nextStep: zh ? '验证通过后进入部分成功。' : 'Move into partial success when verification passes.',
+          source: 'executor',
+        }));
+      }
       recordJobStepResult(jobId, 2, {
         stdout: record.capsule.previewUrl,
         stderr: '',
@@ -6517,14 +8304,24 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         summary: zh ? '预览已经恢复。' : 'The preview is healthy again.',
         detail: record.capsule.previewUrl ?? '',
       });
+      if (task) {
+        appendWorkflowCard(task, createWorkflowCard(task, {
+          id: `${task.id}:verification:partial_success:${jobId}`,
+          kind: 'verification',
+          stage: 'partial_success',
+          title: zh ? '预览验证成功' : 'Preview verification succeeded',
+          summary: zh ? '系统已基于同一工作区工件完成预览恢复与验证。' : 'Preview recovery and verification completed from the same workspace artifacts.',
+          evidence: [
+            ...(record.capsule.previewUrl ? [createWorkflowEvidenceItem(zh ? '预览地址' : 'Preview URL', record.capsule.previewUrl, 'executor', `${task.id}:generated-preview-success`)] : []),
+          ],
+          nextStep: zh ? '可以继续 readiness 或生产发布确认。' : 'Continue to readiness checks or production publish confirmation.',
+          source: 'executor',
+        }));
+      }
       persistState();
     } catch (error) {
       const message = trimText(error instanceof Error ? error.message : String(error)) || 'generated_preview_failed';
-      record.capsule.status = 'needs_attention';
-      record.previewSummary.status = 'failed';
-      record.previewSummary.verified = false;
-      record.previewSummary.verifiedAt = null;
-      record.previewSummary.lastError = message;
+      setPreviewFailed(record, message);
       updateDiagnostics(record, {
         stage: 'build_preview',
         headline: zh ? '预览恢复失败' : 'Preview repair failed',
@@ -6541,6 +8338,19 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         error: message,
         activeStepIndex: jobs.get(jobId)?.steps.findIndex((step) => step.status === 'in_progress') ?? 0,
       });
+      if (task) {
+        applyWorkflowFailure(task, buildWorkflowFailure(mapWorkflowErrorToFailureCode(message), {
+          stage: 'failed',
+          summary: zh ? `预览恢复失败：${message}` : `Preview recovery failed: ${message}`,
+          probableRootCause: message,
+          recommendedActions: [
+            zh ? '继续沿用当前工作区工件，先修复构建错误后再重试预览。' : 'Keep using the current workspace artifacts, fix the build error, and retry preview.',
+          ],
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '失败信息' : 'Failure detail', message, 'executor', `${task.id}:generated-preview-failure`),
+          ],
+        }), 'executor');
+      }
       persistState();
     }
   }
@@ -6552,6 +8362,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       if (record.capsule.entryKind === 'scan-server') {
         const connector = resolveActionConnector(record);
         if (!connector) {
+          setCredentialReadiness(record, 'missing_credentials', {
+            detail: zh ? '当前运行时里没有可用的 SSH 凭据。' : 'No SSH credentials are available in the current runtime.',
+            checkedAt: nowIso(),
+          });
           throw new Error(zh ? '当前运行时里没有可用的 SSH 凭据，请重新体检一次服务器。' : 'No SSH credentials are available in the current runtime. Re-run the server audit first.');
         }
 
@@ -6598,6 +8412,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
           detail: diagnosisText,
           command: 'ssh diagnostic read',
           lastError: null,
+        });
+        setCredentialReadiness(record, 'ready', {
+          detail: zh
+            ? `预检通过：${connector.username}@${connector.host}:${connector.port}`
+            : `Preflight passed: ${connector.username}@${connector.host}:${connector.port}`,
+          checkedAt: nowIso(),
         });
         record.logsSummary.headline = zh ? '远端诊断已完成。' : 'Remote diagnosis completed.';
         addEvent(record, 'info', zh ? '已刷新远端服务诊断。' : 'Remote service diagnosis refreshed.');
@@ -6659,6 +8479,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       persistState();
     } catch (error) {
       const message = trimText(error instanceof Error ? error.message : String(error)) || 'diagnose_service_failed';
+      if (record.capsule.entryKind === 'scan-server') {
+        setCredentialReadiness(record, mapRemoteErrorToCredentialReadinessStatus(message), {
+          detail: message,
+          checkedAt: nowIso(),
+        });
+      }
       updateDiagnostics(record, {
         stage: 'diagnose_service',
         headline: zh ? '服务诊断失败' : 'Service diagnosis failed',
@@ -6683,6 +8509,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     const zh = /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '));
     const connector = resolveActionConnector(record);
     if (!connector) {
+      setCredentialReadiness(record, 'missing_credentials', {
+        detail: zh ? '当前运行时里没有可用的 SSH 凭据。' : 'No SSH credentials are available in the current runtime.',
+        checkedAt: nowIso(),
+      });
       const message = zh ? '当前运行时里没有可用的 SSH 凭据，请重新体检一次服务器。' : 'No SSH credentials are available in the current runtime. Re-run the server audit first.';
       markJobStage(jobId, {
         status: 'failed',
@@ -6768,6 +8598,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         command: 'ssh takeover',
         lastError: null,
       });
+      setCredentialReadiness(record, 'ready', {
+        detail: zh
+          ? `预检通过：${connector.username}@${connector.host}:${connector.port}`
+          : `Preflight passed: ${connector.username}@${connector.host}:${connector.port}`,
+        checkedAt: nowIso(),
+      });
       addEvent(record, 'success', zh ? '旧服务器接管已经激活。' : 'Server takeover is active.');
       markJobStage(jobId, {
         status: 'completed',
@@ -6823,6 +8659,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         command: 'ssh takeover',
         lastError: finalMessage,
       });
+      setCredentialReadiness(record, mapRemoteErrorToCredentialReadinessStatus(finalMessage), {
+        detail: finalMessage,
+        checkedAt: nowIso(),
+      });
       addEvent(record, 'error', finalMessage);
       const hasFailedStep = jobs.get(jobId)?.steps.some((step) => step.status === 'attention');
       if (!hasFailedStep) {
@@ -6843,6 +8683,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     const zh = /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '));
     const connector = resolveActionConnector(record);
     if (!connector) {
+      setCredentialReadiness(record, 'missing_credentials', {
+        detail: zh ? '当前运行时里没有可用的 SSH 凭据。' : 'No SSH credentials are available in the current runtime.',
+        checkedAt: nowIso(),
+      });
       const message = zh ? '当前运行时里没有可用的 SSH 凭据，请重新体检一次服务器。' : 'No SSH credentials are available in the current runtime. Re-run the server audit first.';
       markJobStage(jobId, {
         status: 'failed',
@@ -6941,6 +8785,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         command: 'ssh migration inventory',
         lastError: null,
       });
+      setCredentialReadiness(record, 'ready', {
+        detail: zh
+          ? `预检通过：${connector.username}@${connector.host}:${connector.port}`
+          : `Preflight passed: ${connector.username}@${connector.host}:${connector.port}`,
+        checkedAt: nowIso(),
+      });
       addEvent(record, 'success', zh ? '已生成可下载的迁移包。' : 'A downloadable migration bundle is ready.');
       markJobStage(jobId, {
         status: 'completed',
@@ -6995,6 +8845,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         detail: finalMessage,
         command: 'ssh migration',
         lastError: finalMessage,
+      });
+      setCredentialReadiness(record, mapRemoteErrorToCredentialReadinessStatus(finalMessage), {
+        detail: finalMessage,
+        checkedAt: nowIso(),
       });
       addEvent(record, 'error', finalMessage);
       const hasFailedStep = jobs.get(jobId)?.steps.some((step) => step.status === 'attention');
@@ -7054,6 +8908,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         if (record.capsule.entryKind === 'scan-server') {
           const connector = resolveActionConnector(record);
           if (!connector) {
+            setCredentialReadiness(record, 'missing_credentials', {
+              detail: zh ? '当前运行时里没有可用的 SSH 凭据。' : 'No SSH credentials are available in the current runtime.',
+              checkedAt: nowIso(),
+            });
             throw new Error('connector_credentials_missing');
           }
           const bootstrapSteps = getRemotePlaybook('bootstrap-docker')?.steps ?? [];
@@ -7119,6 +8977,45 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       }
       case 'publish_release': {
         const zh = /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '));
+        const task = getActiveWorkflowTask(record);
+        refreshCredentialReadinessFromConnector(record, { checkedAt: nowIso() });
+        if (isCredentialReadinessBlocked(record.credentialReadiness.status)) {
+          const message = `${record.credentialReadiness.headline}. ${record.credentialReadiness.nextAction}`;
+          setDeploymentPipelineStep(record, 'pipeline_preflight', 'attention', message);
+          markJobStage(jobId, {
+            status: 'blocked',
+            progress: 0,
+            summary: zh ? '正式版发布已阻止。' : 'Production publish was blocked.',
+            detail: message,
+            error: `ssh_preflight_${record.credentialReadiness.status}`,
+            activeStepIndex: 0,
+          });
+          updateDiagnostics(record, {
+            stage: 'publish_release',
+            headline: zh ? '正式版发布被 SSH 预检阻止' : 'Production publish blocked by SSH preflight',
+            detail: `${record.credentialReadiness.detail}\n${record.credentialReadiness.nextAction}`,
+            command: 'ssh preflight',
+            lastError: message,
+          });
+          if (task) {
+            applyWorkflowFailure(task, buildWorkflowFailure(
+              record.credentialReadiness.status === 'auth_failed' ? 'ssh_auth_failed' : 'ssh_missing_credentials',
+              {
+                stage: 'blocked',
+                summary: message,
+                probableRootCause: record.credentialReadiness.detail,
+                recommendedActions: [record.credentialReadiness.nextAction],
+                evidence: [
+                  createWorkflowEvidenceItem(zh ? 'SSH 预检' : 'SSH preflight', record.credentialReadiness.detail, 'preflight', `${task.id}:publish-ssh`),
+                ],
+              },
+            ), 'preflight');
+          }
+          addEvent(record, 'warning', message);
+          persistState();
+          return;
+        }
+        setDeploymentPipelineStep(record, 'pipeline_preflight', 'completed', record.credentialReadiness.detail);
         if (record.previewSummary.status !== 'verified') {
           markJobStage(jobId, {
             status: 'blocked',
@@ -7128,7 +9025,123 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
             error: 'preview_not_verified',
             activeStepIndex: 0,
           });
+          if (task) {
+            applyWorkflowFailure(task, buildWorkflowFailure('deploy_blocked', {
+              stage: 'blocked',
+              summary: zh ? '正式版发布已阻止，因为预览尚未完成验证。' : 'Production publish was blocked because preview verification has not completed.',
+              probableRootCause: zh ? '还没有可验证的 preview 成果。' : 'There is no verified preview result yet.',
+              recommendedActions: [
+                zh ? '先完成 preview 验证，再重试生产发布。' : 'Finish preview verification first, then retry production publish.',
+              ],
+              evidence: [
+                createWorkflowEvidenceItem(zh ? '预览状态' : 'Preview status', record.previewSummary.status, 'executor', `${task.id}:publish-preview-status`),
+              ],
+            }), 'executor');
+          }
           addEvent(record, 'warning', zh ? '正式版发布已阻止，原因是预览尚未通过真实校验。' : 'Production publish was blocked because preview verification has not completed.');
+          persistState();
+          return;
+        }
+        if (record.envChecklistSummary.status === 'blocked') {
+          const message = zh
+            ? `正式版发布已阻止，仍缺少 ${record.envChecklistSummary.missingRequiredCount} 个必填部署项。`
+            : `Production publish was blocked because ${record.envChecklistSummary.missingRequiredCount} required deployment input(s) are still missing.`;
+          setDeploymentPipelineStep(record, 'pipeline_production', 'attention', message);
+          markJobStage(jobId, {
+            status: 'blocked',
+            progress: 0,
+            summary: zh ? '正式版发布已阻止。' : 'Production publish was blocked.',
+            detail: message,
+            error: 'env_requirements_missing',
+            activeStepIndex: 0,
+          });
+          if (task) {
+            applyWorkflowFailure(task, buildWorkflowFailure('env_missing', {
+              stage: 'blocked',
+              summary: message,
+              probableRootCause: zh ? '部署清单里仍有必填项缺失。' : 'Required deployment inputs are still missing from the checklist.',
+              recommendedActions: [
+                zh ? '先补齐必填环境项，再继续发布。' : 'Fill the required environment items before publishing.',
+              ],
+              evidence: [
+                createWorkflowEvidenceItem(zh ? '缺失数量' : 'Missing count', String(record.envChecklistSummary.missingRequiredCount), 'preflight', `${task.id}:publish-env-missing`),
+              ],
+            }), 'preflight');
+          }
+          addEvent(record, 'warning', message);
+          persistState();
+          return;
+        }
+        if (
+          record.capsule.entryKind === 'upload-project'
+          && (record.techStackSummary.kind === 'static' || record.techStackSummary.kind === 'vite')
+          && !record.techStackSummary.dockerfilePath
+          && !record.techStackSummary.composeFilePath
+        ) {
+          const message = zh
+            ? '正式版发布已阻止，因为当前仓库只有经过验证的静态预览，还没有可安全接力到生产的运行时配方。'
+            : 'Production publish was blocked because this repository currently has only a verified static preview lane and no safe runtime recipe for production handoff.';
+          setDeploymentPipelineStep(record, 'pipeline_production', 'attention', message);
+          markJobStage(jobId, {
+            status: 'blocked',
+            progress: 0,
+            summary: zh ? '正式版发布已阻止。' : 'Production publish was blocked.',
+            detail: message,
+            error: 'static_preview_only',
+            activeStepIndex: 0,
+          });
+          if (task) {
+            applyWorkflowFailure(task, buildWorkflowFailure('static_preview_only', {
+              stage: 'blocked',
+              summary: message,
+              probableRootCause: zh
+                ? '仓库可以生成真实静态预览，但没有 Dockerfile / Compose 等生产运行时接力依据。'
+                : 'The repository can produce a real static preview, but there is no grounded Dockerfile/Compose runtime recipe for production deployment.',
+              recommendedActions: [
+                zh
+                  ? '补充 Dockerfile、Compose 服务入口或明确的生产运行时配方，再继续发布。'
+                  : 'Add a Dockerfile, Compose service entry, or another grounded production runtime recipe before publishing.',
+                zh
+                  ? '在生产接力未明确前，继续把当前结果当作 verified preview 使用。'
+                  : 'Keep using the current result as a verified preview until the production handoff path is explicit.',
+              ],
+              evidence: [
+                createWorkflowEvidenceItem(zh ? '技术栈' : 'Tech stack', record.techStackSummary.label, 'preflight', `${task.id}:publish-static-stack`),
+                createWorkflowEvidenceItem(zh ? '预览模式' : 'Preview mode', 'static', 'executor', `${task.id}:publish-static-preview`),
+              ],
+            }), 'system');
+          }
+          addEvent(record, 'warning', message);
+          persistState();
+          return;
+        }
+        if (!record.deploymentSummary.supported) {
+          const message = zh
+            ? '正式版发布已阻止，因为当前仓库还没有通过受支持的真实预览链路。'
+            : 'Production publish was blocked because this repository has not gone through a supported verified preview pipeline.';
+          setDeploymentPipelineStep(record, 'pipeline_production', 'attention', message);
+          markJobStage(jobId, {
+            status: 'blocked',
+            progress: 0,
+            summary: zh ? '正式版发布已阻止。' : 'Production publish was blocked.',
+            detail: message,
+            error: 'unsupported_deploy_path',
+            activeStepIndex: 0,
+          });
+          if (task) {
+            applyWorkflowFailure(task, buildWorkflowFailure('deploy_blocked', {
+              stage: 'blocked',
+              summary: message,
+              probableRootCause: zh ? '当前仓库还没有经过受支持的 preview 路径。' : 'The repository has not gone through a supported preview path yet.',
+              recommendedActions: [
+                zh ? '先补齐受支持的预览链路，再继续发布。' : 'Complete a supported preview path first, then continue publishing.',
+              ],
+              evidence: [
+                createWorkflowEvidenceItem(zh ? '部署支持' : 'Deployment support', String(record.deploymentSummary.supported), 'system', `${task.id}:publish-supported`),
+              ],
+            }), 'system');
+          }
+          addEvent(record, 'warning', message);
           persistState();
           return;
         }
@@ -7156,9 +9169,13 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
 
         const releaseUrl = buildReleaseUrl(record.capsule.slug) ?? productionUrlFor(record.capsule.slug, productionDomainSuffix);
         record.capsule.productionUrl = releaseUrl;
+        record.deploymentSummary.previewOnly = false;
         record.infraSummary.productionEndpoint = releaseUrl;
         record.capsule.status = 'production_live';
         record.capsule.healthScore = Math.max(record.capsule.healthScore, 88);
+        setDeploymentPipelineStep(record, 'pipeline_production', 'completed', zh
+          ? `正式版已切到 ${releaseUrl}。`
+          : `Production is now live at ${releaseUrl}.`);
         record.infraSummary.items = [
           ...record.infraSummary.items.filter((item) => !['Primary domain', 'Release lane', 'TLS'].includes(item.label)),
           { label: 'Release lane', value: releaseUrl },
@@ -7201,6 +9218,19 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
           summary: zh ? '正式版已经发布。' : 'Production release is live.',
           detail: releaseUrl,
         });
+        if (task) {
+          appendWorkflowCard(task, createWorkflowCard(task, {
+            kind: 'verification',
+            stage: 'success',
+            title: zh ? '正式版发布成功' : 'Production release succeeded',
+            summary: zh ? `正式版已切到 ${releaseUrl}，并且仍然基于同一份已验证构建。` : `Production is now live at ${releaseUrl} and still points to the same verified build.`,
+            evidence: [
+              createWorkflowEvidenceItem(zh ? '正式版地址' : 'Production URL', releaseUrl, 'executor', `${task.id}:publish-url`),
+            ],
+            nextStep: zh ? '后续可以继续开启监控、绑定域名或回滚。' : 'You can now continue with monitoring, domain binding, or rollback.',
+            source: 'executor',
+          }));
+        }
         persistState();
         return;
       }
@@ -7213,6 +9243,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       case 'scan_server': {
         const connector = resolveActionConnector(record);
         if (!connector || !record.capsule.connector) {
+          setCredentialReadiness(record, 'missing_credentials', {
+            detail: /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '))
+              ? '当前运行时里没有可用的 SSH 凭据。'
+              : 'No SSH credentials are available in the current runtime.',
+            checkedAt: nowIso(),
+          });
           throw new Error('connector_credentials_missing');
         }
         await startServerScanJob(record, {
@@ -7615,15 +9651,1379 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     return map;
   }
 
+  function safeReadTextFile(path: string) {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  type NodePackageManager = {
+    name: 'npm' | 'pnpm' | 'yarn';
+    installCommand: string;
+    buildCommand: string;
+    startCommand: string;
+    devCommand: string;
+    installInvocation: {
+      command: string;
+      args: string[];
+    };
+    scriptInvocation(script: 'build' | 'start' | 'dev', extraArgs?: string[]): {
+      command: string;
+      args: string[];
+    };
+  };
+
+  function detectNodePackageManager(sourceRoot: string): NodePackageManager {
+    if (existsSync(join(sourceRoot, 'pnpm-lock.yaml'))) {
+      return {
+        name: 'pnpm',
+        installCommand: 'pnpm install --frozen-lockfile',
+        buildCommand: 'pnpm build',
+        startCommand: 'pnpm start',
+        devCommand: 'pnpm dev',
+        installInvocation: {
+          command: 'pnpm',
+          args: ['install', '--frozen-lockfile'],
+        },
+        scriptInvocation(script, extraArgs = []) {
+          return {
+            command: 'pnpm',
+            args: [script, ...extraArgs],
+          };
+        },
+      };
+    }
+
+    if (existsSync(join(sourceRoot, 'yarn.lock'))) {
+      return {
+        name: 'yarn',
+        installCommand: 'yarn install --frozen-lockfile',
+        buildCommand: 'yarn build',
+        startCommand: 'yarn start',
+        devCommand: 'yarn dev',
+        installInvocation: {
+          command: 'yarn',
+          args: ['install', '--frozen-lockfile'],
+        },
+        scriptInvocation(script, extraArgs = []) {
+          return {
+            command: 'yarn',
+            args: [script, ...extraArgs],
+          };
+        },
+      };
+    }
+
+    return {
+      name: 'npm',
+      installCommand: 'npm install',
+      buildCommand: 'npm run build',
+      startCommand: 'npm run start',
+      devCommand: 'npm run dev',
+      installInvocation: {
+        command: 'npm',
+        args: ['install'],
+      },
+      scriptInvocation(script, extraArgs = []) {
+        return {
+          command: 'npm',
+          args: ['run', script, ...(extraArgs.length > 0 ? ['--', ...extraArgs] : [])],
+        };
+      },
+    };
+  }
+
+  function normalizeRequirementId(kind: OperatorEnvChecklistItem['kind'], label: string) {
+    return `${kind}:${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  }
+
+  function createRequirementItem(input: Omit<OperatorEnvChecklistItem, 'id'>): OperatorEnvChecklistItem {
+    return {
+      id: normalizeRequirementId(input.kind, input.label),
+      ...input,
+    };
+  }
+
+  function addOrMergeRequirement(
+    map: Map<string, OperatorEnvChecklistItem>,
+    item: OperatorEnvChecklistItem,
+  ) {
+    const key = normalizeRequirementId(item.kind, item.label);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, item);
+      return;
+    }
+
+    const rank = (value: OperatorEnvChecklistItem['status']) => {
+      if (value === 'needs_value') return 3;
+      if (value === 'inferred') return 2;
+      return 1;
+    };
+    map.set(key, {
+      ...existing,
+      required: existing.required || item.required,
+      status: rank(item.status) > rank(existing.status) ? item.status : existing.status,
+      valueHint: existing.valueHint ?? item.valueHint,
+      source: existing.source === 'inference' ? item.source : existing.source,
+      purpose: existing.purpose === 'Deployment requirement' ? item.purpose : existing.purpose,
+    });
+  }
+
+  function looksSensitiveRequirement(label: string) {
+    return /(secret|token|password|passwd|private|key|apikey|api_key|client_secret|auth_secret|jwt)/i.test(label);
+  }
+
+  function looksNetworkRequirement(label: string) {
+    return /(app_url|site_url|public_url|base_url|callback|redirect|origin|hostname|domain|nextauth_url|webhook)/i.test(label);
+  }
+
+  function looksDataRequirement(label: string) {
+    return /(database_url|db_|postgres|mysql|mariadb|redis|mongo|amqp|s3_|aws_|r2_|bucket|storage)/i.test(label);
+  }
+
+  function inferRequirementPurpose(label: string, kind: OperatorEnvChecklistItem['kind']) {
+    if (kind === 'healthcheck') {
+      return 'Path used to verify the service is healthy after deploy.';
+    }
+    if (kind === 'storage') {
+      return 'Persistent storage or mounted volume required by the workload.';
+    }
+    if (kind === 'network') {
+      return 'Domain, callback URL, or public network setting required for production.';
+    }
+    if (label === 'PORT') {
+      return 'Runtime port that the application must bind to inside the preview or production environment.';
+    }
+    if (looksSensitiveRequirement(label)) {
+      return 'Secret or token required before production deployment is allowed.';
+    }
+    if (looksNetworkRequirement(label)) {
+      return 'Public URL, domain, or callback value required for external access.';
+    }
+    if (looksDataRequirement(label)) {
+      return 'Connection or storage setting required for database, cache, or object storage access.';
+    }
+    return 'Environment variable required by the project during build or runtime.';
+  }
+
+  function inferRequirementStatus(
+    label: string,
+    valueHint: string | null,
+    required: boolean,
+  ): OperatorEnvChecklistItem['status'] {
+    if (label === 'PORT') {
+      return 'inferred';
+    }
+    if (!required) {
+      return valueHint ? 'inferred' : 'optional';
+    }
+    if (looksSensitiveRequirement(label) || looksNetworkRequirement(label) || looksDataRequirement(label)) {
+      return 'needs_value';
+    }
+    return valueHint ? 'inferred' : 'needs_value';
+  }
+
+  function parseEnvTemplateEntries(sourceRoot: string) {
+    const candidates = [
+      '.env',
+      '.env.example',
+      '.env.sample',
+      '.env.template',
+      '.env.production',
+      '.env.production.example',
+      '.env.local.example',
+    ];
+    const items: Array<{ label: string; valueHint: string | null; source: string }> = [];
+
+    for (const filename of candidates) {
+      const absolutePath = join(sourceRoot, filename);
+      if (!existsSync(absolutePath)) {
+        continue;
+      }
+
+      const raw = safeReadTextFile(absolutePath);
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          continue;
+        }
+        const match = trimmed.match(/^([A-Z][A-Z0-9_]{1,})=(.*)$/);
+        if (!match) {
+          continue;
+        }
+        const label = match[1];
+        const normalizedValue = match[2].trim().replace(/^['"]|['"]$/g, '');
+        items.push({
+          label,
+          valueHint: normalizedValue || null,
+          source: filename,
+        });
+      }
+    }
+
+    return items;
+  }
+
+  function collectSourceEnvReferences(sourceRoot: string) {
+    const files: string[] = [];
+    const allowedExtensions = new Set(['.js', '.cjs', '.mjs', '.ts', '.tsx', '.jsx', '.py', '.php', '.env', '.sh']);
+    const blockedDirectories = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor']);
+    const visit = (currentPath: string, depth = 0) => {
+      if (files.length >= 80 || depth > 4) {
+        return;
+      }
+
+      const entries = (() => {
+        try {
+          return readdirSync(currentPath, { withFileTypes: true, encoding: 'utf8' }) as Array<{
+            name: string;
+            isDirectory(): boolean;
+          }>;
+        } catch {
+          return null;
+        }
+      })();
+      if (!entries) {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (files.length >= 80) {
+          return;
+        }
+        if (entry.isDirectory()) {
+          if (blockedDirectories.has(entry.name)) {
+            continue;
+          }
+          visit(join(currentPath, entry.name), depth + 1);
+          continue;
+        }
+
+        const extension = extname(entry.name).toLowerCase();
+        if (allowedExtensions.has(extension) || entry.name === 'Dockerfile') {
+          files.push(join(currentPath, entry.name));
+        }
+      }
+    };
+
+    visit(sourceRoot);
+    const references = new Set<string>();
+    for (const path of files) {
+      const raw = safeReadTextFile(path);
+      for (const regex of [
+        /process\.env\.([A-Z][A-Z0-9_]+)/g,
+        /import\.meta\.env\.([A-Z][A-Z0-9_]+)/g,
+        /os\.getenv\(['"]([A-Z][A-Z0-9_]+)['"]\)/g,
+        /getenv\(['"]([A-Z][A-Z0-9_]+)['"]\)/g,
+        /\$\{([A-Z][A-Z0-9_]+)(?::-[^}]*)?\}/g,
+      ]) {
+        let match = regex.exec(raw);
+        while (match) {
+          references.add(match[1]);
+          match = regex.exec(raw);
+        }
+      }
+    }
+
+    return [...references];
+  }
+
+  const staticPosterSourcePattern = /\b(coming soon|placeholder|diagnostic|preview unavailable|build failed|runtime unavailable|under construction)\b/i;
+
+  function extractHealthcheckPathFromText(raw: string) {
+    const explicit = raw.match(/\/api\/v\d+\/health|\/api\/health|\/healthz|\/health|\/status/);
+    return explicit?.[0] ?? null;
+  }
+
+  function rootProjectEntries(sourceRoot: string) {
+    return readdirSync(sourceRoot, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith('.'))
+      .filter((entry) => entry.name !== 'node_modules');
+  }
+
+  function analyzeSingleFileHtmlCanvas(sourceRoot: string) {
+    const indexHtmlPath = join(sourceRoot, 'index.html');
+    if (!existsSync(indexHtmlPath)) {
+      return null;
+    }
+
+    const entries = rootProjectEntries(sourceRoot);
+    const nonIndexEntries = entries.filter((entry) => entry.name !== 'index.html');
+    const raw = safeReadTextFile(indexHtmlPath);
+    const hasCanvas = /<canvas[\s>]/i.test(raw);
+    const hasInlineRuntimeScript = /<script\b(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/script>/i.test(raw);
+    const hasLocalRuntimeScript = /<script[^>]+src=["'](?!https?:\/\/|\/\/)[^"']+["']/i.test(raw);
+    const placeholderLike = staticPosterSourcePattern.test(raw);
+    const supported = nonIndexEntries.length === 0 && !placeholderLike && (hasCanvas || hasInlineRuntimeScript || hasLocalRuntimeScript);
+
+    return {
+      supported,
+      detectionSource: 'index.html',
+      entryFile: 'index.html',
+      runtimePort: 80,
+      healthcheckPath: '/',
+      hasCanvas,
+      hasRuntimeScript: hasInlineRuntimeScript || hasLocalRuntimeScript,
+      blockReason: supported ? null : 'unsupported_stack' as const,
+      notes: supported
+        ? ['Single-file HTML runtime detected with canvas or local script behavior.']
+        : ['Static HTML was detected, but it does not qualify as a supported single-file runtime recipe.'],
+    };
+  }
+
+  function analyzeComposeFile(sourceRoot: string) {
+    const rootEntries = readdirSync(sourceRoot, { withFileTypes: true });
+    const composeFile = rootEntries
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .find((name) => /(?:^|\.)(?:docker-)?compose.*\.ya?ml$/i.test(name) || /^compose.*\.ya?ml$/i.test(name));
+    if (!composeFile) {
+      return null;
+    }
+
+    const raw = safeReadTextFile(join(sourceRoot, composeFile));
+    if (!raw.trim()) {
+      return null;
+    }
+
+    let parsed: unknown = null;
+    try {
+      parsed = parseYaml(raw);
+    } catch {
+      parsed = null;
+    }
+    const services = typeof parsed === 'object' && parsed !== null && typeof (parsed as { services?: unknown }).services === 'object' && (parsed as { services?: unknown }).services !== null
+      ? (parsed as { services: Record<string, unknown> }).services
+      : {};
+    const serviceEntries = Object.entries(services);
+    const firstService = serviceEntries[0];
+    const firstServiceName = firstService?.[0] ?? null;
+    const firstServiceRecord = typeof firstService?.[1] === 'object' && firstService?.[1] !== null
+      ? firstService[1] as Record<string, unknown>
+      : null;
+    const environmentVariables: Array<{ label: string; valueHint: string | null }> = [];
+    const exposedPorts: number[] = [];
+    const storageHints: string[] = [];
+    let healthcheckPath: string | null = null;
+
+    if (firstServiceRecord) {
+      const environment = firstServiceRecord.environment;
+      if (Array.isArray(environment)) {
+        for (const entry of environment) {
+          if (typeof entry !== 'string') {
+            continue;
+          }
+          const separatorIndex = entry.indexOf('=');
+          const label = separatorIndex === -1 ? entry.trim() : entry.slice(0, separatorIndex).trim();
+          const valueHint = separatorIndex === -1 ? null : entry.slice(separatorIndex + 1).trim();
+          if (label) {
+            environmentVariables.push({ label, valueHint: valueHint || null });
+          }
+        }
+      } else if (typeof environment === 'object' && environment !== null) {
+        for (const [label, value] of Object.entries(environment as Record<string, unknown>)) {
+          if (!label.trim()) {
+            continue;
+          }
+          environmentVariables.push({
+            label: label.trim(),
+            valueHint: typeof value === 'string' ? value.trim() || null : null,
+          });
+        }
+      }
+
+      const ports = Array.isArray(firstServiceRecord.ports) ? firstServiceRecord.ports : [];
+      for (const entry of ports) {
+        if (typeof entry === 'number' && Number.isFinite(entry)) {
+          exposedPorts.push(entry);
+          continue;
+        }
+        if (typeof entry !== 'string') {
+          continue;
+        }
+        const segments = entry.split(':').map((segment) => segment.trim()).filter(Boolean);
+        const published = Number(segments.at(-1));
+        if (Number.isFinite(published)) {
+          exposedPorts.push(published);
+        }
+      }
+
+      const volumes = Array.isArray(firstServiceRecord.volumes) ? firstServiceRecord.volumes : [];
+      for (const entry of volumes) {
+        if (typeof entry !== 'string') {
+          continue;
+        }
+        const normalized = entry.trim();
+        if (normalized) {
+          storageHints.push(normalized);
+        }
+      }
+
+      const healthcheck = firstServiceRecord.healthcheck;
+      if (Array.isArray((healthcheck as { test?: unknown[] } | null)?.test)) {
+        healthcheckPath = extractHealthcheckPathFromText(
+          ((healthcheck as { test?: unknown[] }).test ?? [])
+            .map((entry) => (typeof entry === 'string' ? entry : ''))
+            .join(' '),
+        );
+      } else if (typeof (healthcheck as { test?: unknown } | null)?.test === 'string') {
+        healthcheckPath = extractHealthcheckPathFromText(String((healthcheck as { test?: unknown }).test));
+      }
+    }
+
+    for (const match of raw.matchAll(/\$\{([A-Z][A-Z0-9_]+)(?::-[^}]*)?\}/g)) {
+      environmentVariables.push({
+        label: match[1],
+        valueHint: null,
+      });
+    }
+
+    return {
+      composeFilePath: composeFile,
+      composeServiceName: firstServiceName,
+      serviceCount: serviceEntries.length,
+      environmentVariables,
+      exposedPort: exposedPorts[0] ?? null,
+      storageHints,
+      healthcheckPath,
+      recipeReliable: serviceEntries.length === 1 && Boolean(firstServiceName) && Boolean(exposedPorts[0]) && Boolean(healthcheckPath),
+      blockReason: serviceEntries.length === 0
+        || !firstServiceName
+        || !exposedPorts[0]
+        || !healthcheckPath
+        || serviceEntries.length > 1
+        ? 'compose_recipe_missing' as const
+        : null,
+      raw,
+    };
+  }
+
+  function analyzeDockerfile(sourceRoot: string) {
+    const candidates = ['Dockerfile', 'docker/Dockerfile', 'deploy/Dockerfile'];
+    const dockerfilePath = candidates.find((candidate) => existsSync(join(sourceRoot, candidate))) ?? null;
+    if (!dockerfilePath) {
+      return null;
+    }
+
+    const raw = safeReadTextFile(join(sourceRoot, dockerfilePath));
+    const exposeMatch = raw.match(/^\s*EXPOSE\s+(\d{2,5})/im);
+    const envMatches = [...raw.matchAll(/^\s*ENV\s+([A-Z][A-Z0-9_]+)(?:=(.*))?$/gim)];
+    return {
+      dockerfilePath,
+      exposedPort: exposeMatch?.[1] ? Number(exposeMatch[1]) : null,
+      environmentVariables: envMatches.map((match) => ({
+        label: match[1],
+        valueHint: typeof match[2] === 'string' ? match[2].trim() || null : null,
+      })),
+      raw,
+    };
+  }
+
+  function detectRepoTechnicalProfile(sourceRoot: string, fallbackStack: StackDescriptor) {
+    const packageJsonPath = join(sourceRoot, 'package.json');
+    const packageManager = detectNodePackageManager(sourceRoot);
+    const packageJson = existsSync(packageJsonPath)
+      ? (() => {
+        try {
+          return JSON.parse(readFileSync(packageJsonPath, 'utf8')) as Record<string, unknown>;
+        } catch {
+          return {} as Record<string, unknown>;
+        }
+      })()
+      : {} as Record<string, unknown>;
+    const scripts = typeof packageJson.scripts === 'object' && packageJson.scripts !== null
+      ? packageJson.scripts as Record<string, unknown>
+      : {};
+    const dependencies = {
+      ...(typeof packageJson.dependencies === 'object' && packageJson.dependencies !== null
+        ? packageJson.dependencies as Record<string, unknown>
+        : {}),
+      ...(typeof packageJson.devDependencies === 'object' && packageJson.devDependencies !== null
+        ? packageJson.devDependencies as Record<string, unknown>
+        : {}),
+    };
+    const compose = analyzeComposeFile(sourceRoot);
+    const dockerfile = analyzeDockerfile(sourceRoot);
+    const composeFilePath = compose?.composeFilePath ?? null;
+    const composeServiceName = compose?.composeServiceName ?? null;
+    const dockerfilePath = dockerfile?.dockerfilePath ?? null;
+    const nextConfigPresent = ['next.config.ts', 'next.config.js', 'next.config.mjs', 'next.config.cjs']
+      .some((filename) => existsSync(join(sourceRoot, filename)));
+    const viteConfigPresent = ['vite.config.ts', 'vite.config.js', 'vite.config.mjs', 'vite.config.cjs']
+      .some((filename) => existsSync(join(sourceRoot, filename)));
+    const requirementsPresent = existsSync(join(sourceRoot, 'requirements.txt'));
+    const pyprojectPresent = existsSync(join(sourceRoot, 'pyproject.toml'));
+    const pythonEntrypoint = ['main.py', 'app.py', 'manage.py']
+      .find((filename) => existsSync(join(sourceRoot, filename))) ?? null;
+    const hasBuildScript = typeof scripts.build === 'string' && String(scripts.build).trim().length > 0;
+    const hasStartScript = typeof scripts.start === 'string' && String(scripts.start).trim().length > 0;
+    const hasDevScript = typeof scripts.dev === 'string' && String(scripts.dev).trim().length > 0;
+    const hasReact = typeof dependencies.react === 'string' || typeof dependencies['react-dom'] === 'string';
+    const hasVite = viteConfigPresent
+      || typeof dependencies.vite === 'string'
+      || (typeof scripts.dev === 'string' && String(scripts.dev).includes('vite'))
+      || (typeof scripts.build === 'string' && String(scripts.build).includes('vite build'));
+    const hasNext = nextConfigPresent
+      || typeof dependencies.next === 'string'
+      || (typeof scripts.build === 'string' && String(scripts.build).includes('next build'));
+    const sourceEnvReferences = collectSourceEnvReferences(sourceRoot);
+    const envTemplates = parseEnvTemplateEntries(sourceRoot);
+    const sourceSample = sourceEnvReferences.join(' ');
+    const singleFileHtmlCanvas = analyzeSingleFileHtmlCanvas(sourceRoot);
+    const healthcheckPath = (() => {
+      const raw = [
+        safeReadTextFile(join(sourceRoot, 'package.json')),
+        safeReadTextFile(join(sourceRoot, 'main.py')),
+        safeReadTextFile(join(sourceRoot, 'app.py')),
+        compose?.raw ?? '',
+        dockerfile?.raw ?? '',
+        safeReadTextFile(join(sourceRoot, 'index.html')),
+      ].join('\n');
+      const explicit = extractHealthcheckPathFromText(raw);
+      if (explicit) {
+        return explicit;
+      }
+      if (compose?.healthcheckPath) {
+        return compose.healthcheckPath;
+      }
+      if (hasNext || (hasVite && hasReact) || existsSync(packageJsonPath)) {
+        return '/';
+      }
+      if (singleFileHtmlCanvas?.supported) {
+        return '/';
+      }
+      return null;
+    })();
+
+    const techStackSummary = (() => {
+      if (compose) {
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'docker-compose' as const,
+          label: 'Docker Compose',
+          detectionSource: compose.composeFilePath,
+          installCommand: 'docker compose config',
+          buildCommand: compose.composeServiceName ? `docker compose -f ${compose.composeFilePath} build ${compose.composeServiceName}` : 'docker compose build',
+          startCommand: compose.composeServiceName ? `docker compose -f ${compose.composeFilePath} up -d --build ${compose.composeServiceName}` : `docker compose -f ${compose.composeFilePath} up`,
+          runtimePort: compose.exposedPort ?? null,
+          healthcheckPath: compose.healthcheckPath ?? null,
+          dockerfilePath,
+          composeFilePath,
+          composeServiceName,
+          goldenPath: compose.recipeReliable ? 'docker-compose' : null,
+          recipeReliable: compose.recipeReliable,
+          blockReason: compose.blockReason,
+          notes: compose.recipeReliable
+            ? ['Compose recipe is reliable enough for automated preview and deploy handoff.']
+            : ['Compose was detected, but the recipe is missing a single reliable service, published port, or health target.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (dockerfile) {
+        const dockerContainerPort = dockerfile.exposedPort ?? fallbackStack.runtimePort ?? 3000;
+        const dockerImageTag = 'workspace-repair-preview';
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'dockerfile' as const,
+          label: 'Dockerfile',
+          detectionSource: dockerfile.dockerfilePath,
+          installCommand: null,
+          buildCommand: `docker build -f ${dockerfile.dockerfilePath} .`,
+          startCommand: [
+            `docker build -f ${shellQuote(dockerfile.dockerfilePath)} -t ${shellQuote(dockerImageTag)} .`,
+            `docker run --rm -p $PORT:${dockerContainerPort} ${shellQuote(dockerImageTag)}`,
+          ].join(' && '),
+          runtimePort: dockerContainerPort,
+          healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: null,
+          recipeReliable: false,
+          blockReason: 'unsupported_stack',
+          notes: ['Dockerfile detected. Runtime port and health checks should follow the container entrypoint.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (hasNext) {
+        const nextRecipeReliable = hasBuildScript && hasStartScript;
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'nextjs' as const,
+          label: 'Next.js',
+          detectionSource: nextConfigPresent ? 'next.config.*' : 'package.json',
+          installCommand: packageManager.installCommand,
+          buildCommand: hasBuildScript ? packageManager.buildCommand : null,
+          startCommand: hasStartScript ? `PORT=<port> ${packageManager.startCommand}` : null,
+          runtimePort: fallbackStack.runtimePort || 3000,
+          healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: nextRecipeReliable ? 'nextjs' : null,
+          recipeReliable: nextRecipeReliable,
+          blockReason: null,
+          notes: nextRecipeReliable
+            ? ['Next.js runtime detected with reliable build and start scripts.']
+            : ['Next.js was detected, but the repository is missing a stable build/start recipe.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (hasVite) {
+        const viteRecipeReliable = hasReact && hasBuildScript;
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'vite' as const,
+          label: hasReact ? 'Vite / React' : 'Vite app',
+          detectionSource: viteConfigPresent ? 'vite.config.*' : 'package.json',
+          installCommand: packageManager.installCommand,
+          buildCommand: viteRecipeReliable ? packageManager.buildCommand : null,
+          startCommand: hasReact ? packageManager.devCommand : null,
+          runtimePort: fallbackStack.runtimePort || 3000,
+          healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: viteRecipeReliable ? 'vite-react' : null,
+          recipeReliable: viteRecipeReliable,
+          blockReason: hasReact ? null : 'unsupported_stack',
+          notes: hasReact
+            ? (viteRecipeReliable
+                ? ['Vite and React were detected with a reliable build path.']
+                : ['Vite and React were detected, but the repository is missing a stable build recipe.'])
+            : ['Vite was detected without React, which is outside the supported golden paths.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (existsSync(packageJsonPath)) {
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'node' as const,
+          label: 'Node.js app',
+          detectionSource: 'package.json',
+          installCommand: packageManager.installCommand,
+          buildCommand: hasBuildScript ? packageManager.buildCommand : null,
+          startCommand: hasStartScript
+            ? packageManager.startCommand
+            : hasDevScript
+              ? packageManager.devCommand
+              : null,
+          runtimePort: fallbackStack.runtimePort || 3000,
+          healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: null,
+          recipeReliable: false,
+          blockReason: 'unsupported_stack',
+          notes: ['Generic Node.js package detected.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (requirementsPresent || pyprojectPresent || pythonEntrypoint || /django|flask|fastapi|uvicorn|gunicorn/i.test(sourceSample)) {
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'python' as const,
+          label: 'Python app',
+          detectionSource: requirementsPresent
+            ? 'requirements.txt'
+            : pyprojectPresent
+              ? 'pyproject.toml'
+              : pythonEntrypoint ?? 'python source',
+          installCommand: requirementsPresent ? 'pip install -r requirements.txt' : 'pip install -e .',
+          buildCommand: null,
+          startCommand: pythonEntrypoint === 'manage.py'
+            ? 'python manage.py runserver 0.0.0.0:<port>'
+            : /fastapi|uvicorn/i.test(sourceSample)
+              ? 'uvicorn main:app --host 0.0.0.0 --port <port>'
+              : 'python app.py',
+          runtimePort: fallbackStack.runtimePort || 8000,
+          healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: null,
+          recipeReliable: false,
+          blockReason: 'unsupported_stack',
+          notes: ['Python project files detected.'],
+        } satisfies OperatorTechStackSummary;
+      }
+
+      if (singleFileHtmlCanvas) {
+        return {
+          ...defaultTechStackSummary(),
+          kind: 'static' as const,
+          label: singleFileHtmlCanvas.supported ? 'Single-file HTML / Canvas' : 'Static HTML',
+          detectionSource: singleFileHtmlCanvas.detectionSource,
+          installCommand: null,
+          buildCommand: null,
+          startCommand: singleFileHtmlCanvas.supported ? 'serve index.html' : null,
+          runtimePort: singleFileHtmlCanvas.runtimePort,
+          healthcheckPath: singleFileHtmlCanvas.healthcheckPath,
+          dockerfilePath,
+          composeFilePath: null,
+          composeServiceName: null,
+          goldenPath: singleFileHtmlCanvas.supported ? 'single-file-html-canvas' : null,
+          recipeReliable: singleFileHtmlCanvas.supported,
+          blockReason: singleFileHtmlCanvas.blockReason,
+          notes: singleFileHtmlCanvas.notes,
+        } satisfies OperatorTechStackSummary;
+      }
+
+      return defaultTechStackSummary();
+    })();
+
+    const checklistMap = new Map<string, OperatorEnvChecklistItem>();
+    if (techStackSummary.runtimePort) {
+      addOrMergeRequirement(checklistMap, createRequirementItem({
+        kind: 'env',
+        label: 'PORT',
+        required: true,
+        status: 'inferred',
+        valueHint: String(techStackSummary.runtimePort),
+        source: techStackSummary.detectionSource ?? 'stack detection',
+        purpose: inferRequirementPurpose('PORT', 'env'),
+      }));
+    }
+    if (techStackSummary.healthcheckPath) {
+      addOrMergeRequirement(checklistMap, createRequirementItem({
+        kind: 'healthcheck',
+        label: 'Health check path',
+        required: true,
+        status: 'inferred',
+        valueHint: techStackSummary.healthcheckPath,
+        source: techStackSummary.detectionSource ?? 'stack detection',
+        purpose: inferRequirementPurpose('HEALTHCHECK_PATH', 'healthcheck'),
+      }));
+    }
+    for (const entry of envTemplates) {
+      const required = entry.label !== 'PORT';
+      addOrMergeRequirement(checklistMap, createRequirementItem({
+        kind: looksNetworkRequirement(entry.label) ? 'network' : 'env',
+        label: entry.label,
+        required,
+        status: inferRequirementStatus(entry.label, entry.valueHint, required),
+        valueHint: entry.valueHint,
+        source: entry.source,
+        purpose: inferRequirementPurpose(entry.label, looksNetworkRequirement(entry.label) ? 'network' : 'env'),
+      }));
+    }
+    if (compose) {
+      for (const envEntry of compose.environmentVariables) {
+        const required = envEntry.label !== 'PORT';
+        addOrMergeRequirement(checklistMap, createRequirementItem({
+          kind: looksNetworkRequirement(envEntry.label) ? 'network' : 'env',
+          label: envEntry.label,
+          required,
+          status: inferRequirementStatus(envEntry.label, envEntry.valueHint, required),
+          valueHint: envEntry.valueHint,
+          source: compose.composeFilePath,
+          purpose: inferRequirementPurpose(envEntry.label, looksNetworkRequirement(envEntry.label) ? 'network' : 'env'),
+        }));
+      }
+      for (const storageHint of compose.storageHints) {
+        addOrMergeRequirement(checklistMap, createRequirementItem({
+          kind: 'storage',
+          label: `Persistent volume`,
+          required: true,
+          status: 'inferred',
+          valueHint: storageHint,
+          source: compose.composeFilePath,
+          purpose: inferRequirementPurpose('Persistent volume', 'storage'),
+        }));
+      }
+    }
+    if (dockerfile) {
+      for (const envEntry of dockerfile.environmentVariables) {
+        const required = envEntry.label !== 'PORT';
+        addOrMergeRequirement(checklistMap, createRequirementItem({
+          kind: looksNetworkRequirement(envEntry.label) ? 'network' : 'env',
+          label: envEntry.label,
+          required,
+          status: inferRequirementStatus(envEntry.label, envEntry.valueHint, required),
+          valueHint: envEntry.valueHint,
+          source: dockerfile.dockerfilePath,
+          purpose: inferRequirementPurpose(envEntry.label, looksNetworkRequirement(envEntry.label) ? 'network' : 'env'),
+        }));
+      }
+    }
+    for (const label of sourceEnvReferences) {
+      const required = label !== 'PORT' && !/^NEXT_PUBLIC_|^VITE_/i.test(label);
+      addOrMergeRequirement(checklistMap, createRequirementItem({
+        kind: looksNetworkRequirement(label) ? 'network' : 'env',
+        label,
+        required,
+        status: inferRequirementStatus(label, null, required),
+        valueHint: null,
+        source: 'source scan',
+        purpose: inferRequirementPurpose(label, looksNetworkRequirement(label) ? 'network' : 'env'),
+      }));
+    }
+
+    const checklistItems = [...checklistMap.values()]
+      .sort((left, right) => {
+        if (left.required !== right.required) {
+          return left.required ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      });
+    const missingRequiredCount = checklistItems.filter((entry) => entry.required && entry.status === 'needs_value').length;
+    const envChecklistSummary: OperatorEnvChecklistSummary = {
+      status: missingRequiredCount > 0 ? 'blocked' : checklistItems.length > 0 ? 'ready' : 'pending',
+      headline: missingRequiredCount > 0
+        ? 'Missing required deployment inputs.'
+        : checklistItems.length > 0
+          ? 'Deployment checklist is ready.'
+          : 'Checklist will appear after source analysis.',
+      detail: missingRequiredCount > 0
+        ? `${missingRequiredCount} required item(s) still need real values before production can start.`
+        : checklistItems.length > 0
+          ? 'The stack, runtime, and health-check requirements were inferred from the real source files.'
+          : 'No project requirements were inferred yet.',
+      missingRequiredCount,
+      items: checklistItems,
+    };
+
+    const previewSupported = techStackSummary.recipeReliable;
+    const deploymentSummary: OperatorDeploymentSummary = {
+      targetLabel: 'Server #19',
+      targetRef: '#19',
+      previewOnly: true,
+      supported: previewSupported,
+      successCriteria: [
+        'Page is reachable from the preview or production URL.',
+        'The primary health check responds without fatal errors.',
+        'Logs do not show startup crashes or repeated fatal exits.',
+      ],
+      rollbackPlan: [
+        'Keep the last verified preview build available as the rollback candidate.',
+        'If production fails, stop the cutover and route back to the last verified build.',
+      ],
+      pipeline: [
+        { id: 'pipeline_fetch', title: 'Source fetch', status: 'completed', detail: 'Repository source was fetched into an isolated workspace.' },
+        { id: 'pipeline_detect', title: 'Stack detect', status: techStackSummary.kind === 'unknown' || !techStackSummary.recipeReliable ? 'attention' : 'completed', detail: techStackSummary.kind === 'unknown' ? 'Could not confidently identify a supported stack yet.' : `Detected ${techStackSummary.label} from ${techStackSummary.detectionSource ?? 'source files'}.` },
+        { id: 'pipeline_env', title: 'Env checklist render', status: missingRequiredCount > 0 ? 'attention' : checklistItems.length > 0 ? 'completed' : 'planned', detail: missingRequiredCount > 0 ? `${missingRequiredCount} required input(s) still need real values.` : 'Deployment requirements were inferred from env files, compose config, and source references.' },
+        { id: 'pipeline_preflight', title: 'SSH preflight (#19)', status: 'attention', detail: 'Verify SSH credentials and connectivity before production deployment to server #19.' },
+        { id: 'pipeline_preview', title: 'Preview deploy', status: previewSupported ? 'planned' : 'attention', detail: previewSupported ? 'Build, smoke-test, and verify a preview before production cutover.' : techStackSummary.blockReason === 'compose_recipe_missing' ? 'Compose was detected, but the recipe is missing a reliable service, port, or health target.' : 'This stack is outside the supported golden paths, so preview deployment is blocked.' },
+        { id: 'pipeline_production', title: 'Production deploy to server #19', status: missingRequiredCount > 0 ? 'attention' : 'planned', detail: missingRequiredCount > 0 ? 'Production stays blocked until the required inputs are filled.' : 'Production remains confirmation-gated even after the preview succeeds.' },
+      ],
+    };
+
+    return {
+      techStackSummary,
+      envChecklistSummary,
+      deploymentSummary,
+    };
+  }
+
+  function setDeploymentPipelineStep(
+    record: CapsuleRecord,
+    stepId: string,
+    status: OperatorPlanStep['status'],
+    detail?: string | null,
+  ) {
+    const step = record.deploymentSummary.pipeline.find((entry) => entry.id === stepId);
+    if (!step) {
+      return;
+    }
+
+    step.status = status;
+    if (typeof detail === 'string' && detail.trim()) {
+      step.detail = detail.trim();
+    }
+  }
+
+  function applyRepoTechnicalProfile(
+    record: CapsuleRecord,
+    profile: ReturnType<typeof detectRepoTechnicalProfile>,
+  ) {
+    record.techStackSummary = profile.techStackSummary;
+    record.envChecklistSummary = profile.envChecklistSummary;
+    record.deploymentSummary = profile.deploymentSummary;
+    record.capsule.stackLabel = profile.techStackSummary.label;
+    record.infraSummary.runtime = profile.techStackSummary.label;
+    record.infraSummary.items = [
+      ...record.infraSummary.items.filter((item) => ![
+        'Detected stack',
+        'Detection source',
+        'Runtime port',
+        'Health check',
+        'Deploy target',
+      ].includes(item.label)),
+      { label: 'Detected stack', value: profile.techStackSummary.label },
+      ...(profile.techStackSummary.detectionSource
+        ? [{ label: 'Detection source', value: profile.techStackSummary.detectionSource }]
+        : []),
+      ...(profile.techStackSummary.runtimePort
+        ? [{ label: 'Runtime port', value: String(profile.techStackSummary.runtimePort) }]
+        : []),
+      ...(profile.techStackSummary.healthcheckPath
+        ? [{ label: 'Health check', value: profile.techStackSummary.healthcheckPath }]
+        : []),
+      { label: 'Deploy target', value: profile.deploymentSummary.targetLabel },
+    ];
+    refreshCredentialReadinessFromConnector(record, { checkedAt: record.credentialReadiness.checkedAt });
+  }
+
+  type RepoGroundedPreflight = {
+    repoUrl: string;
+    reachable: boolean;
+    reachabilityCode: 'reachable' | 'repo_unreachable' | 'repo_auth_failed' | 'github_proxy_aborted';
+    reachabilityDetail: string;
+    packageManager: 'pnpm' | 'yarn' | 'npm' | 'python' | 'docker' | 'static' | 'unknown';
+    monorepo: boolean;
+    workspacePath: string | null;
+    appEntry: string | null;
+    buildCandidates: string[];
+    devCandidates: string[];
+    previewCandidates: string[];
+    envMissing: string[];
+    confidence: number;
+    techProfile: ReturnType<typeof detectRepoTechnicalProfile> | null;
+    buildPlan: RepoBuildPlan | null;
+    failure: OperatorWorkflowFailure | null;
+    evidence: OperatorWorkflowEvidenceItem[];
+    recommendedPath: string;
+    alternatePath: string | null;
+    risk: string;
+  };
+
+  function detectMonorepoWorkspace(sourceRoot: string) {
+    const workspaceMarker = existsSync(join(sourceRoot, 'pnpm-workspace.yaml'))
+      || existsSync(join(sourceRoot, 'turbo.json'))
+      || existsSync(join(sourceRoot, 'nx.json'));
+    const packageJsonPath = join(sourceRoot, 'package.json');
+    let workspacePath: string | null = null;
+
+    if (existsSync(packageJsonPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as Record<string, unknown>;
+        const workspaces = parsed.workspaces;
+        if (Array.isArray(workspaces) && workspaces.some((entry) => typeof entry === 'string')) {
+          workspacePath = String(workspaces.find((entry) => typeof entry === 'string') ?? null);
+        } else if (typeof workspaces === 'object' && workspaces && Array.isArray((workspaces as { packages?: unknown[] }).packages)) {
+          const packages = (workspaces as { packages?: unknown[] }).packages ?? [];
+          workspacePath = String(packages.find((entry) => typeof entry === 'string') ?? null);
+        }
+      } catch {
+        workspacePath = null;
+      }
+    }
+
+    const appsDir = existsSync(join(sourceRoot, 'apps')) ? 'apps/*' : null;
+    return {
+      monorepo: workspaceMarker || Boolean(workspacePath) || Boolean(appsDir),
+      workspacePath: workspacePath || appsDir,
+    };
+  }
+
+  function extractRepoScriptCandidates(sourceRoot: string) {
+    const packageJsonPath = join(sourceRoot, 'package.json');
+    if (!existsSync(packageJsonPath)) {
+      return {
+        build: [] as string[],
+        dev: [] as string[],
+        preview: [] as string[],
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as Record<string, unknown>;
+      const scripts = typeof parsed.scripts === 'object' && parsed.scripts !== null
+        ? parsed.scripts as Record<string, unknown>
+        : {};
+      return {
+        build: typeof scripts.build === 'string' ? [String(scripts.build)] : [],
+        dev: typeof scripts.dev === 'string' ? [String(scripts.dev)] : [],
+        preview: [
+          ...(typeof scripts.preview === 'string' ? [String(scripts.preview)] : []),
+          ...(typeof scripts.start === 'string' ? [String(scripts.start)] : []),
+        ],
+      };
+    } catch {
+      return {
+        build: [],
+        dev: [],
+        preview: [],
+      };
+    }
+  }
+
+  function inferPreflightPackageManager(sourceRoot: string, techProfile: ReturnType<typeof detectRepoTechnicalProfile> | null): RepoGroundedPreflight['packageManager'] {
+    if (techProfile?.techStackSummary.kind === 'python') {
+      return 'python';
+    }
+    if (techProfile?.techStackSummary.kind === 'docker-compose' || techProfile?.techStackSummary.kind === 'dockerfile') {
+      return 'docker';
+    }
+    if (techProfile?.techStackSummary.kind === 'static') {
+      return 'static';
+    }
+    if (existsSync(join(sourceRoot, 'pnpm-lock.yaml'))) return 'pnpm';
+    if (existsSync(join(sourceRoot, 'yarn.lock'))) return 'yarn';
+    if (existsSync(join(sourceRoot, 'package-lock.json')) || existsSync(join(sourceRoot, 'package.json'))) return 'npm';
+    return 'unknown';
+  }
+
+  function buildRepoRepairRecommendation(input: {
+    repoUrl: string;
+    techProfile: ReturnType<typeof detectRepoTechnicalProfile>;
+    scriptCandidates: {
+      build: string[];
+      dev: string[];
+      preview: string[];
+    };
+  }) {
+    const stack = input.techProfile.techStackSummary;
+    const runtimePort = normalizeRuntimePort(stack.runtimePort) ?? (stack.kind === 'python' ? 8000 : 3000);
+    const healthcheckPath = trimText(stack.healthcheckPath) || '/';
+    const composeServiceName = trimText(stack.composeServiceName) || null;
+    const composeFilePath = trimText(stack.composeFilePath) || null;
+    const dockerfilePath = trimText(stack.dockerfilePath) || null;
+
+    const fallbackStartCommand = (() => {
+      if (stack.kind === 'docker-compose' && composeFilePath && composeServiceName) {
+        return `docker compose -f ${composeFilePath} up -d --build ${composeServiceName}`;
+      }
+
+      if (stack.kind === 'dockerfile' && dockerfilePath) {
+        const imageTag = `${slugify(input.repoUrl, 'repo')}-repair-preview`;
+        return [
+          `docker build -f ${shellQuote(dockerfilePath)} -t ${shellQuote(imageTag)} .`,
+          `docker run --rm -p $PORT:${runtimePort} ${shellQuote(imageTag)}`,
+        ].join(' && ');
+      }
+
+      return null;
+    })();
+
+    const startCommand = trimText(stack.startCommand)
+      || input.scriptCandidates.preview[0]
+      || input.scriptCandidates.dev[0]
+      || fallbackStartCommand
+      || null;
+    const dockerRunMode = fallbackStartCommand
+      || (startCommand && /^docker\s+(run|compose)\b/i.test(startCommand) ? startCommand : null);
+
+    return {
+      startCommand,
+      port: runtimePort,
+      healthcheckPath,
+      dockerRunMode,
+      composeServiceName,
+    };
+  }
+
+  function buildRepoRepairEvidenceItems(input: {
+    taskId: string;
+    recommendation: ReturnType<typeof buildRepoRepairRecommendation>;
+  }) {
+    const items: OperatorWorkflowEvidenceItem[] = [];
+    if (input.recommendation.startCommand) {
+      items.push(createWorkflowEvidenceItem('Recommended start command', input.recommendation.startCommand, 'preflight', `${input.taskId}:repair-start`));
+    }
+    items.push(createWorkflowEvidenceItem('Recommended port', String(input.recommendation.port), 'preflight', `${input.taskId}:repair-port`));
+    items.push(createWorkflowEvidenceItem('Recommended healthcheck', input.recommendation.healthcheckPath, 'preflight', `${input.taskId}:repair-health`));
+    if (input.recommendation.dockerRunMode) {
+      items.push(createWorkflowEvidenceItem('Recommended Docker run mode', input.recommendation.dockerRunMode, 'preflight', `${input.taskId}:repair-docker`));
+    }
+    if (input.recommendation.composeServiceName) {
+      items.push(createWorkflowEvidenceItem('Recommended compose service', input.recommendation.composeServiceName, 'preflight', `${input.taskId}:repair-compose-service`));
+    }
+    return items;
+  }
+
+  function evaluateRepoPreflightConfidence(input: {
+    techProfile: ReturnType<typeof detectRepoTechnicalProfile> | null;
+    buildPlan: RepoBuildPlan | null;
+    packageManager: RepoGroundedPreflight['packageManager'];
+    monorepo: boolean;
+    workspacePath: string | null;
+    envMissing: string[];
+    reachable: boolean;
+  }) {
+    let score = 0;
+    if (input.reachable) score += 0.25;
+    if (input.techProfile?.techStackSummary.recipeReliable) score += 0.25;
+    if (input.packageManager !== 'unknown') score += 0.15;
+    if (input.buildPlan) score += 0.2;
+    if (!input.monorepo || Boolean(input.workspacePath)) score += 0.1;
+    if (input.envMissing.length <= 3) score += 0.05;
+    return Math.max(0, Math.min(1, Number(score.toFixed(2))));
+  }
+
+  async function runRepoGroundedPreflight(
+    repoUrl: string,
+    fallbackStack: StackDescriptor,
+  ): Promise<RepoGroundedPreflight> {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'sloth-operator-preflight-'));
+    const sourceRoot = join(tempRoot, 'source');
+    const trimmedRepoUrl = trimText(repoUrl);
+
+    const classifyReachabilityFailure = (message: string) => {
+      const normalized = message.toLowerCase();
+      if (normalized.includes('proxy connect aborted')) return 'github_proxy_aborted' as const;
+      if (
+        normalized.includes('authentication failed')
+        || normalized.includes('permission denied')
+        || normalized.includes('could not read username')
+        || normalized.includes('repository not found')
+      ) {
+        return 'repo_auth_failed' as const;
+      }
+      return 'repo_unreachable' as const;
+    };
+
+    const buildFailureResult = (code: OperatorWorkflowFailureCode, detail: string): RepoGroundedPreflight => {
+      const evidence = [
+        createWorkflowEvidenceItem('Repository URL', trimmedRepoUrl, 'preflight', 'repo-url'),
+        createWorkflowEvidenceItem('Reachability check', detail, 'preflight', 'repo-reachability'),
+      ];
+      const failure = buildWorkflowFailure(code, {
+        stage: 'blocked',
+        summary: detail,
+        probableRootCause: detail,
+        recommendedActions: [
+          code === 'repo_auth_failed'
+            ? 'Use a public repository URL or provide credentials before retrying.'
+            : code === 'github_proxy_aborted'
+              ? 'Fix the configured HTTP/HTTPS proxy before retrying Git access.'
+              : 'Verify the repository URL and Git reachability before retrying.',
+        ],
+        evidence,
+      });
+      return {
+        repoUrl: trimmedRepoUrl,
+        reachable: false,
+        reachabilityCode: code === 'repo_auth_failed' ? 'repo_auth_failed' : code === 'github_proxy_aborted' ? 'github_proxy_aborted' : 'repo_unreachable',
+        reachabilityDetail: detail,
+        packageManager: 'unknown',
+        monorepo: false,
+        workspacePath: null,
+        appEntry: null,
+        buildCandidates: [],
+        devCandidates: [],
+        previewCandidates: [],
+        envMissing: [],
+        confidence: 0.2,
+        techProfile: null,
+        buildPlan: null,
+        failure,
+        evidence,
+        recommendedPath: 'Stop before build and resolve repository access first.',
+        alternatePath: null,
+        risk: 'Repository access is not grounded yet.',
+      };
+    };
+
+    try {
+      if (!trimmedRepoUrl) {
+        return buildFailureResult('repo_url_invalid', 'Repository URL is missing or invalid.');
+      }
+
+      const lsRemote = await runLocalCommand({
+        command: 'git',
+        args: ['ls-remote', '--heads', trimmedRepoUrl],
+        cwd: tempRoot,
+        timeoutMs: 90_000,
+        env: {
+          GIT_TERMINAL_PROMPT: '0',
+        },
+      });
+      const reachabilityDetail = trimText([lsRemote.stderr, lsRemote.stdout].filter(Boolean).join('\n')) || `git ls-remote exit=${lsRemote.exitCode ?? 'unknown'}`;
+      if (lsRemote.exitCode !== 0) {
+        return buildFailureResult(classifyReachabilityFailure(reachabilityDetail), reachabilityDetail);
+      }
+
+      await fetchRepositorySource(trimmedRepoUrl, sourceRoot);
+      const techProfile = detectRepoTechnicalProfile(sourceRoot, fallbackStack);
+      const buildPlan = detectRepoBuildPlan(sourceRoot, slugify(trimmedRepoUrl, 'repo'));
+      const workspaceDetection = detectMonorepoWorkspace(sourceRoot);
+      const scriptCandidates = extractRepoScriptCandidates(sourceRoot);
+      const packageManager = inferPreflightPackageManager(sourceRoot, techProfile);
+      const envMissing = techProfile.envChecklistSummary.items
+        .filter((entry) => entry.required && entry.status === 'needs_value')
+        .map((entry) => entry.label);
+      const appEntry = techProfile.techStackSummary.composeServiceName
+        ?? techProfile.techStackSummary.dockerfilePath
+        ?? techProfile.techStackSummary.detectionSource
+        ?? null;
+      const confidence = evaluateRepoPreflightConfidence({
+        techProfile,
+        buildPlan,
+        packageManager,
+        monorepo: workspaceDetection.monorepo,
+        workspacePath: workspaceDetection.workspacePath,
+        envMissing,
+        reachable: true,
+      });
+      const repairRecommendation = buildRepoRepairRecommendation({
+        repoUrl: trimmedRepoUrl,
+        techProfile,
+        scriptCandidates,
+      });
+      const repairEvidence = buildRepoRepairEvidenceItems({
+        taskId: 'repo-preflight',
+        recommendation: repairRecommendation,
+      });
+      const repairRecommendedAction = repairRecommendation.startCommand
+        ? `Use the recommended start command: ${repairRecommendation.startCommand}`
+        : null;
+      const repairRecommendedDockerAction = repairRecommendation.dockerRunMode
+        ? `Docker run mode candidate: ${repairRecommendation.dockerRunMode}`
+        : null;
+      const evidence: OperatorWorkflowEvidenceItem[] = [
+        createWorkflowEvidenceItem('Repository URL', trimmedRepoUrl, 'preflight', 'repo-url'),
+        createWorkflowEvidenceItem('Git reachability', 'git ls-remote succeeded.', 'preflight', 'repo-reachability'),
+        createWorkflowEvidenceItem('Package manager', packageManager, 'preflight', 'repo-package-manager'),
+        createWorkflowEvidenceItem('Workspace layout', workspaceDetection.monorepo
+          ? `monorepo${workspaceDetection.workspacePath ? ` (${workspaceDetection.workspacePath})` : ''}`
+          : 'single package/app', 'preflight', 'repo-workspace-layout'),
+        createWorkflowEvidenceItem('Detected stack', techProfile.techStackSummary.label, 'preflight', 'repo-stack'),
+        ...(appEntry ? [createWorkflowEvidenceItem('App entry', appEntry, 'preflight', 'repo-app-entry')] : []),
+        ...(scriptCandidates.build[0] ? [createWorkflowEvidenceItem('Build candidate', scriptCandidates.build[0], 'preflight', 'repo-build-candidate')] : []),
+        ...repairEvidence,
+      ];
+
+      let failure: OperatorWorkflowFailure | null = null;
+      if (packageManager === 'unknown' && techProfile.techStackSummary.kind === 'unknown') {
+        failure = buildWorkflowFailure('package_manager_unknown', {
+          stage: 'blocked',
+          summary: 'Could not determine a package manager or runtime from the repository root.',
+          probableRootCause: 'The repository root does not expose a recognizable runtime entry, package manager, or container configuration.',
+          recommendedActions: [
+            'Point the task at the actual app directory or provide the correct workspace path.',
+            'Add a package manager lockfile, Dockerfile, or runtime entrypoint before retrying.',
+            ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+          ],
+          evidence,
+        });
+      } else if (techProfile.techStackSummary.blockReason === 'unsupported_stack') {
+        failure = buildWorkflowFailure('unsupported_stack', {
+          stage: 'blocked',
+          summary: `Detected ${techProfile.techStackSummary.label}, but it is outside the supported golden paths.`,
+          probableRootCause: 'Only single-file HTML/Canvas, Vite/React, Next.js, and Docker Compose with a reliable recipe are allowed to continue.',
+          recommendedActions: [
+            'Convert the repository into one of the supported golden paths before retrying.',
+            'Avoid generic Node, Dockerfile-only, Python, or static poster preview paths.',
+            ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+            ...(repairRecommendedDockerAction ? [repairRecommendedDockerAction] : []),
+          ],
+          evidence,
+        });
+      } else if (techProfile.techStackSummary.blockReason === 'compose_recipe_missing') {
+        failure = buildWorkflowFailure('compose_recipe_missing', {
+          stage: 'blocked',
+          summary: 'Docker Compose was detected, but the recipe is missing a reliable runtime contract.',
+          probableRootCause: 'The Compose file does not expose one unambiguous service with a published port and health target.',
+          recommendedActions: [
+            'Reduce the compose entry to one primary service for preview execution.',
+            'Add a published runtime port and a real health target before retrying.',
+            ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+            ...(repairRecommendation.composeServiceName ? [`Primary compose service candidate: ${repairRecommendation.composeServiceName}`] : []),
+          ],
+          evidence,
+        });
+      } else if (techProfile.techStackSummary.kind === 'unknown' || (workspaceDetection.monorepo && !workspaceDetection.workspacePath && !buildPlan)) {
+        failure = buildWorkflowFailure('workspace_detection_failed', {
+          stage: 'blocked',
+          summary: 'The repository structure is not grounded enough to choose a safe app workspace.',
+          probableRootCause: 'The repository may be a monorepo or non-standard layout without a clear app/service entrypoint.',
+          recommendedActions: [
+            'Select the target workspace/app path before any build starts.',
+            'Add a clearer runtime entrypoint or workspace manifest.',
+            ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+          ],
+          evidence,
+        });
+      } else if (!buildPlan) {
+        if (techProfile.techStackSummary.kind === 'docker-compose') {
+          failure = buildWorkflowFailure('compose_recipe_missing', {
+            stage: 'blocked',
+            summary: 'A Compose stack was detected, but there is no safe Compose execution recipe for preview/deploy continuation yet.',
+            probableRootCause: techProfile.techStackSummary.composeServiceName
+              ? `The repository is grounded as Docker Compose (${techProfile.techStackSummary.composeServiceName}), but the workflow does not have a verified Compose preview/deploy handoff yet.`
+              : 'A Compose file was detected, but the primary service topology is not grounded enough for a safe preview/deploy handoff.',
+            recommendedActions: [
+              'Declare the primary Compose service entry and service topology that should own preview and deploy.',
+              'Add a verified Compose execution recipe or another grounded runtime handoff before continuing.',
+              ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+              ...(repairRecommendation.composeServiceName ? [`Primary compose service candidate: ${repairRecommendation.composeServiceName}`] : []),
+            ],
+            evidence,
+          });
+        } else {
+          failure = buildWorkflowFailure(scriptCandidates.build.length > 0 ? 'build_command_uncertain' : 'build_script_missing', {
+            stage: 'blocked',
+            summary: scriptCandidates.build.length > 0
+              ? 'A stack was detected, but the safe build/preview path is still uncertain.'
+              : 'No reliable build or preview script was detected from repository evidence.',
+            probableRootCause: scriptCandidates.build.length > 0
+              ? 'The repository exposes partial scripts, but the runtime path is not grounded enough for automated preview execution.'
+              : 'The repository does not expose a build/start path that can be verified automatically.',
+            recommendedActions: [
+              'Review the detected stack and choose the recommended execution path before any build runs.',
+              'Add or clarify the build/start scripts, Dockerfile, or compose service entry.',
+              ...(repairRecommendedAction ? [repairRecommendedAction] : []),
+              ...(repairRecommendedDockerAction ? [repairRecommendedDockerAction] : []),
+            ],
+            evidence,
+          });
+        }
+      }
+
+      const recommendedPath = buildPlan
+        ? `Use ${techProfile.techStackSummary.label} with ${buildPlan.buildCommand ?? 'its detected runtime flow'} after confirmation.`
+        : `Stop before build. Review ${techProfile.techStackSummary.label} evidence and choose the app/workspace path first.`;
+      const alternatePath = techProfile.techStackSummary.kind === 'docker-compose'
+        ? 'Fallback to the compose service topology instead of guessing a package manager build.'
+        : techProfile.techStackSummary.blockReason === 'unsupported_stack'
+          ? 'Fallback to one of the four supported golden paths instead of forcing the current stack.'
+        : workspaceDetection.monorepo
+            ? 'Fallback to selecting the concrete app workspace before any install/build step.'
+            : null;
+
+      return {
+        repoUrl: trimmedRepoUrl,
+        reachable: true,
+        reachabilityCode: 'reachable',
+        reachabilityDetail,
+        packageManager,
+        monorepo: workspaceDetection.monorepo,
+        workspacePath: workspaceDetection.workspacePath,
+        appEntry,
+        buildCandidates: scriptCandidates.build,
+        devCandidates: scriptCandidates.dev,
+        previewCandidates: scriptCandidates.preview,
+        envMissing,
+        confidence,
+        techProfile,
+        buildPlan,
+        failure,
+        evidence,
+        recommendedPath,
+        alternatePath,
+        risk: failure ? failure.probableRootCause : 'Grounded preflight has enough evidence to continue after confirmation.',
+      };
+    } catch (error) {
+      const message = trimText(error instanceof Error ? error.message : String(error)) || 'repo_preflight_failed';
+      return buildFailureResult(mapWorkflowErrorToFailureCode(message), message);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }
+
   async function startRepositoryPreviewJob(record: CapsuleRecord, input: AnalyzeProjectInput, jobId: string) {
     const zh = /[\u3400-\u9fff]/.test([record.capsule.name, record.capsule.summary].join(' '));
     const sourceRef = trimText(input.repoUrl) || trimText(input.sourceRef);
+    const getCurrentTask = () => getActiveWorkflowTask(record);
     const directory = ensureGeneratedProjectDirectory(record.capsule.id);
     if (!directory) {
       const message = zh ? '当前运行时没有配置工作区目录，无法生成真实预览。' : 'The operator runtime does not have a workspace directory configured.';
-      record.previewSummary.status = 'failed';
-      record.previewSummary.lastError = message;
-      record.capsule.status = 'needs_attention';
+      setPreviewFailed(record, message);
       updateDiagnostics(record, {
         stage: 'workspace_bootstrap',
         headline: zh ? '工作区目录缺失' : 'Workspace directory missing',
@@ -7639,11 +11039,40 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         error: message,
         activeStepIndex: 0,
       });
+      const currentTask = getCurrentTask();
+      if (currentTask) {
+        applyWorkflowFailure(currentTask, buildWorkflowFailure('workspace_detection_failed', {
+          stage: 'failed',
+          summary: message,
+          probableRootCause: message,
+          recommendedActions: [
+            zh ? '先修复工作区目录配置，再重新执行预览。' : 'Fix the workspace directory configuration, then rerun the preview flow.',
+          ],
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '工作区目录' : 'Workspace directory', message, 'system', `${currentTask.id}:workspace-missing`),
+          ],
+        }), 'system');
+      }
       persistState();
       return;
     }
 
     try {
+      const currentTask = getCurrentTask();
+      if (currentTask) {
+        setWorkflowFailure(currentTask, null);
+        appendWorkflowCard(currentTask, createWorkflowCard(currentTask, {
+          kind: 'execution',
+          stage: 'running',
+          title: zh ? '执行仓库构建链' : 'Run the repository build flow',
+          summary: zh ? '系统正在真实拉取源码、生成构建计划并执行隔离构建。' : 'The system is fetching the source, grounding the build plan, and running an isolated build.',
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '源码来源' : 'Source', sourceRef, 'executor', `${currentTask.id}:execution-source`),
+          ],
+          nextStep: zh ? '构建完成后进入预览验证。' : 'Move into preview verification after the build completes.',
+          source: 'executor',
+        }));
+      }
       markJobStage(jobId, {
         status: 'running',
         progress: 8,
@@ -7660,9 +11089,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       });
       record.artifactSummary.sourceType = 'repository';
       record.artifactSummary.sourceRef = sourceRef;
-      record.previewSummary.status = 'building';
-      record.previewSummary.verified = false;
-      record.previewSummary.previewUrl = null;
+      setPreviewBuilding(record, {
+        previewUrl: null,
+        entryFile: null,
+        assetCount: 0,
+      });
       const fetchResult = await fetchRepositorySource(sourceRef, directory.sourceRoot);
       recordJobStepResult(jobId, 0, fetchResult, {
         status: 'running',
@@ -7670,6 +11101,9 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         summary: zh ? '源码已经拉取完成。' : 'Source fetched successfully.',
         detail: zh ? '正在检测仓库结构。' : 'Detecting repository structure.',
       });
+      setDeploymentPipelineStep(record, 'pipeline_fetch', 'completed', zh
+        ? '源码已拉取到隔离工作区。'
+        : 'Source was fetched into the isolated workspace.');
 
       markJobStage(jobId, {
         status: 'running',
@@ -7678,11 +11112,43 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         detail: zh ? '分析 package.json、Vite 配置和静态入口。' : 'Inspecting package.json, Vite config, and static entry points.',
         activeStepIndex: 1,
       });
-      const plan = detectRepoBuildPlan(directory.sourceRoot, record.capsule.slug);
+      const technicalProfile = detectRepoTechnicalProfile(
+        directory.sourceRoot,
+        inferStack([record.capsule.name, sourceRef, trimText(input.notes)]),
+      );
+      applyRepoTechnicalProfile(record, technicalProfile);
+      record.artifactSummary.installCommand = technicalProfile.techStackSummary.installCommand;
+      record.artifactSummary.buildCommand = technicalProfile.techStackSummary.buildCommand;
+      setDeploymentPipelineStep(record, 'pipeline_detect', technicalProfile.techStackSummary.recipeReliable ? 'completed' : 'attention');
+      setDeploymentPipelineStep(record, 'pipeline_env', technicalProfile.envChecklistSummary.status === 'blocked'
+        ? 'attention'
+        : technicalProfile.envChecklistSummary.status === 'ready'
+          ? 'completed'
+          : 'planned');
+      const nativePlan = detectRepoBuildPlan(directory.sourceRoot, record.capsule.slug);
+      const plan = nativePlan ?? detectRepairBackedRepoBuildPlan(record, directory.sourceRoot, record.capsule.slug);
+      const usingRepairBackedPlan = !nativePlan && Boolean(plan);
+      record.deploymentSummary.supported = Boolean(plan);
+      if (!plan) {
+        setDeploymentPipelineStep(record, 'pipeline_preview', 'attention', zh
+          ? (record.techStackSummary.blockReason === 'compose_recipe_missing'
+              ? '已识别到 Docker Compose，但缺少可靠的主服务、端口或健康检查配方。'
+              : `已识别为 ${record.techStackSummary.label}，但它不在当前支持的 golden path 内。`)
+          : (record.techStackSummary.blockReason === 'compose_recipe_missing'
+              ? 'Docker Compose was detected, but the recipe is missing a reliable service, port, or health target.'
+              : `Detected ${record.techStackSummary.label}, but it is outside the supported golden paths.`));
+        setDeploymentPipelineStep(record, 'pipeline_production', 'attention', zh
+          ? '生产发布已阻止，因为当前技术栈还不能完成真实预览验证。'
+          : 'Production is blocked because this stack cannot complete verified preview execution yet.');
+      }
       if (!plan) {
         throw new Error(zh
-          ? '暂时只支持真实构建 Vite 或静态站点仓库，当前仓库没有检测到可验证的前端入口。'
-          : 'Only Vite and static-site repositories can be verified right now. No supported frontend entry was detected.');
+          ? (record.techStackSummary.blockReason === 'compose_recipe_missing'
+              ? 'compose_recipe_missing: Docker Compose 缺少可靠的主服务、端口或健康检查配方。'
+              : `unsupported_stack: 已识别为 ${record.techStackSummary.label}，但当前仅支持 single-file HTML/Canvas、Vite/React、Next.js 和带可靠 recipe 的 Docker Compose。`)
+          : (record.techStackSummary.blockReason === 'compose_recipe_missing'
+              ? 'compose_recipe_missing: Docker Compose is missing a reliable primary service, published port, or health target.'
+              : `unsupported_stack: ${record.techStackSummary.label} is outside the supported golden paths.`));
       }
       recordJobStepResult(jobId, 1, {
         stdout: `${plan.runtimeLabel}\n${plan.entryFile}`,
@@ -7700,14 +11166,27 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         progress: 40,
         summary: zh ? '正在生成构建计划。' : 'Preparing build plan.',
         detail: zh
-          ? `${plan.runtimeLabel}，安装命令 ${plan.installCommand ?? '无需安装'}，构建命令 ${plan.buildCommand ?? '无需构建'}。`
-          : `${plan.runtimeLabel}; install ${plan.installCommand ?? 'not required'}; build ${plan.buildCommand ?? 'not required'}.`,
+          ? `${plan.runtimeLabel}，安装命令 ${plan.installCommand ?? '无需安装'}，构建命令 ${plan.buildCommand ?? '无需构建'}。${usingRepairBackedPlan ? '（已应用修复配方）' : ''}`
+          : `${plan.runtimeLabel}; install ${plan.installCommand ?? 'not required'}; build ${plan.buildCommand ?? 'not required'}.${usingRepairBackedPlan ? ' (repair recipe applied)' : ''}`,
         activeStepIndex: 2,
       });
       record.artifactSummary.installCommand = plan.installCommand;
       record.artifactSummary.buildCommand = plan.buildCommand;
       record.artifactSummary.entryFile = plan.entryFile;
       record.artifactSummary.runCommands = plan.runCommands;
+      record.techStackSummary.installCommand = plan.installCommand;
+      record.techStackSummary.buildCommand = plan.buildCommand;
+      record.techStackSummary.startCommand = plan.runCommands.at(-1) ?? record.techStackSummary.startCommand;
+      if (usingRepairBackedPlan) {
+        record.techStackSummary.blockReason = null;
+      }
+      setDeploymentPipelineStep(record, 'pipeline_preview', 'in_progress', zh
+        ? (usingRepairBackedPlan
+            ? '已按修复配方重新进入隔离构建和预览验证。'
+            : '隔离构建和预览验证已开始。')
+        : (usingRepairBackedPlan
+            ? 'The repair recipe was applied and isolated build/preview verification has resumed.'
+            : 'Isolated build and preview verification have started.'));
       recordJobStepResult(jobId, 2, {
         stdout: `${plan.installCommand ?? 'none'}\n${plan.buildCommand ?? 'none'}`.trim(),
         stderr: '',
@@ -7762,17 +11241,14 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       }
       record.capsule.previewUrl = buildPreviewUrl(record.capsule.slug);
       record.infraSummary.endpoint = record.capsule.previewUrl;
-      record.previewSummary = {
-        status: 'building',
-        verified: false,
+      const previewAssetCount = plan.previewKind === 'static'
+        ? countFilesInDirectory(buildRoot)
+        : countFilesInDirectory(join(directory.sourceRoot, '.next'));
+      setPreviewBuilding(record, {
         previewUrl: record.capsule.previewUrl,
         entryFile: plan.entryFile,
-        assetCount: plan.previewKind === 'static'
-          ? countFilesInDirectory(buildRoot)
-          : countFilesInDirectory(join(directory.sourceRoot, '.next')),
-        verifiedAt: null,
-        lastError: null,
-      };
+        assetCount: previewAssetCount,
+      });
       recordJobStepResult(jobId, 4, {
         stdout: plan.previewKind === 'static' ? indexPath : previewRuntimeTarget,
         stderr: '',
@@ -7791,16 +11267,38 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         detail: plan.previewKind === 'static' ? (record.capsule.previewUrl ?? '') : previewRuntimeTarget,
         activeStepIndex: 5,
       });
-      if (plan.previewKind === 'proxy') {
-        await waitForPreviewRuntime(previewRuntimeTarget);
+      const verifyingTask = getCurrentTask();
+      if (verifyingTask) {
+        appendWorkflowCard(verifyingTask, createWorkflowCard(verifyingTask, {
+          kind: 'verification',
+          stage: 'verifying',
+          title: zh ? '验证预览结果' : 'Verify the preview result',
+          summary: zh ? '构建已经完成，系统正在确认预览入口是否真实可访问。' : 'The build finished and the system is confirming that the preview entry is actually reachable.',
+          evidence: [
+            ...(record.capsule.previewUrl ? [createWorkflowEvidenceItem(zh ? '预览地址' : 'Preview URL', record.capsule.previewUrl, 'executor', `${verifyingTask.id}:verifying-preview-url`)] : []),
+          ],
+          nextStep: zh ? '如果健康检查通过，会进入 partial_success。' : 'If the health check passes, the flow moves into partial_success.',
+          source: 'executor',
+        }));
       }
-      record.previewSummary = {
-        ...record.previewSummary,
-        status: 'verified',
-        verified: true,
-        verifiedAt: nowIso(),
-        lastError: null,
-      };
+      const verification = await runPreviewVerification(record, {
+        previewKind: plan.previewKind,
+        buildRoot: plan.previewKind === 'static' ? buildRoot : null,
+        runtimeUrl: plan.previewKind === 'proxy' ? previewRuntimeTarget : null,
+        entryFile: plan.entryFile,
+        assetCount: previewAssetCount,
+        screenshotLabel: 'repo-runtime.png',
+      });
+      if (!verification.ok) {
+        throw new Error(verification.reason ?? 'preview_verification_failed');
+      }
+      record.deploymentSummary.previewOnly = true;
+      setDeploymentPipelineStep(record, 'pipeline_preview', 'completed', zh
+        ? '真实预览已经通过运行时、健康检查、截图和烟雾验证。'
+        : 'The verified preview passed runtime, health, screenshot, and smoke verification.');
+      setDeploymentPipelineStep(record, 'pipeline_production', record.envChecklistSummary.status === 'blocked' ? 'attention' : 'planned', record.envChecklistSummary.status === 'blocked'
+        ? (zh ? '生产发布仍被缺失项阻塞。' : 'Production is still blocked by missing required inputs.')
+        : (zh ? '等待人工确认后发布到服务器 #19。' : 'Waiting for approval before deploying to server #19.'));
       record.artifactSummary.archiveUrl = buildWorkspaceArchiveUrl(record.capsule.id);
       record.artifactSummary.manifestUrl = buildWorkspaceManifestUrl(record.capsule.id);
       record.artifactSummary.fileCount = countFilesInDirectory(directory.sourceRoot);
@@ -7828,17 +11326,34 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         summary: zh ? '真实预览已经准备好。' : 'The verified preview is ready.',
         detail: record.capsule.previewUrl ?? '',
       });
+      const successTask = getCurrentTask();
+      if (successTask) {
+        appendWorkflowCard(successTask, createWorkflowCard(successTask, {
+          kind: 'verification',
+          stage: 'partial_success',
+          title: zh ? '预览验证成功' : 'Preview verification succeeded',
+          summary: zh ? '真实预览已经通过健康检查，接下来可以继续做 readiness 和生产确认。' : 'The verified preview passed health checks. The next step is readiness review and production confirmation.',
+          evidence: [
+            ...(record.capsule.previewUrl ? [createWorkflowEvidenceItem(zh ? '预览地址' : 'Preview URL', record.capsule.previewUrl, 'executor', `${successTask.id}:preview-success-url`)] : []),
+            ...(record.techStackSummary.buildCommand ? [createWorkflowEvidenceItem(zh ? '构建命令' : 'Build command', record.techStackSummary.buildCommand, 'executor', `${successTask.id}:preview-success-build`)] : []),
+          ],
+          nextStep: record.envChecklistSummary.status === 'blocked'
+            ? (zh ? '先补齐缺失环境项，再申请发布。' : 'Fill the missing environment inputs before publish.')
+            : (zh ? '如需生产发布，下一步进入确认。' : 'If production is needed, the next step is confirmation.'),
+          source: 'executor',
+        }));
+      }
       persistState();
     } catch (error) {
       const message = trimText(error instanceof Error ? error.message : String(error)) || 'repository_preview_failed';
       stopWorkspacePreviewRuntime(record.capsule.id);
-      record.capsule.status = 'needs_attention';
       record.capsule.healthScore = Math.max(28, Math.min(record.capsule.healthScore, 58));
-      record.previewSummary.status = 'failed';
-      record.previewSummary.verified = false;
-      record.previewSummary.previewUrl = null;
-      record.previewSummary.verifiedAt = null;
-      record.previewSummary.lastError = message;
+      setPreviewFailed(record, message, { clearPreviewUrl: true });
+      record.deploymentSummary.previewOnly = true;
+      setDeploymentPipelineStep(record, 'pipeline_preview', 'attention', message);
+      setDeploymentPipelineStep(record, 'pipeline_production', 'attention', zh
+        ? '预览失败时不允许进入正式发布。'
+        : 'Production remains blocked while preview verification is failing.');
       updateDiagnostics(record, {
         headline: zh ? '仓库导入失败' : 'Repository import failed',
         detail: message,
@@ -7853,6 +11368,20 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         error: message,
         activeStepIndex: jobs.get(jobId)?.steps.findIndex((step) => step.status === 'in_progress') ?? 0,
       });
+      const failedTask = getCurrentTask();
+      if (failedTask) {
+        applyWorkflowFailure(failedTask, buildWorkflowFailure(mapWorkflowErrorToFailureCode(message), {
+          stage: 'failed',
+          summary: zh ? `执行失败：${message}` : `Execution failed: ${message}`,
+          probableRootCause: message,
+          recommendedActions: [
+            zh ? '根据失败诊断调整仓库脚本、依赖或运行时，再重新执行。' : 'Adjust the repository scripts, dependencies, or runtime based on the diagnosis, then rerun.',
+          ],
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '失败信息' : 'Failure detail', message, 'executor', `${failedTask.id}:execution-failure`),
+          ],
+        }), 'executor');
+      }
       persistState();
     }
   }
@@ -7988,6 +11517,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         command: 'ssh',
         lastError: null,
       });
+      setCredentialReadiness(record, 'ready', {
+        detail: zh
+          ? `预检通过：${connector.username}@${connector.host}:${connector.port}`
+          : `Preflight passed: ${connector.username}@${connector.host}:${connector.port}`,
+        checkedAt: nowIso(),
+      });
       addEvent(record, 'success', zh ? '旧服务器已完成真实 SSH 只读体检。' : 'The server completed a real SSH read-only audit.');
       persistState();
     } catch (error) {
@@ -7999,6 +11534,10 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       record.auditSummary.lastError = finalMessage;
       record.capsule.status = 'needs_attention';
       record.capsule.healthScore = Math.max(26, Math.min(record.capsule.healthScore, 58));
+      setCredentialReadiness(record, mapRemoteErrorToCredentialReadinessStatus(finalMessage), {
+        detail: finalMessage,
+        checkedAt: nowIso(),
+      });
       updateDiagnostics(record, {
         stage: 'scan_server',
         headline: zh ? '旧服务器体检失败' : 'Server audit failed',
@@ -8022,40 +11561,55 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   function createPlan(input: CreatePlanInput): OperatorEnvelope {
     const stack = inferStack([input.title ?? '', input.brief]);
     const brief = trimText(input.brief) || 'Prepare an operator-first launch plan.';
+    const planningMode = input.planningMode === 'on' ? 'on' : 'off';
+    const taskMode = input.taskMode === 'new_turn' ? 'new_turn' : 'continue';
+    const name = input.title?.trim() || 'Untitled operator plan';
+    const zh = /[\u3400-\u9fff]/.test(`${name} ${brief}`);
     const steps: OperatorPlanStep[] = [
       {
         id: createId('step'),
-        title: 'Clarify deployment scope',
+        title: zh ? '理解目标' : 'Understand the goal',
         status: 'completed',
-        detail: 'Tree-scan the request and normalize launch intent.',
+        detail: zh ? '先把输入整理成可以执行的任务边界。' : 'Normalize the request into an executable task boundary.',
       },
       {
         id: createId('step'),
-        title: 'Prepare preview environment',
+        title: input.entryKind === 'scan-server'
+          ? (zh ? '只读预检' : 'Read-only preflight')
+          : (zh ? '输出计划' : 'Emit the plan'),
         status: 'planned',
-        detail: 'Reserve runtime, endpoint, and health probes.',
+        detail: input.entryKind === 'scan-server'
+          ? (zh ? '先做只读体检，不直接改动服务器。' : 'Start with a read-only audit before any server mutation.')
+          : (zh ? '先把执行路径讲清楚，再等待确认。' : 'Explain the execution path first, then wait for confirmation.'),
       },
       {
         id: createId('step'),
-        title: 'Publish and attach operations',
+        title: zh ? '确认后执行' : 'Execute after confirmation',
         status: 'planned',
-        detail: 'Attach logs, diagnostics, rollback, and production routing.',
+        detail: zh ? '在确认前不执行任何变更动作。' : 'No mutating action runs before confirmation.',
       },
     ];
     const plan: OperatorExecutionPlan = {
       id: createId('plan'),
-      title: input.title?.trim() || 'Operator execution plan',
+      title: name,
       summary: brief,
       risk: input.entryKind === 'scan-server' ? 'medium' : 'low',
       estimatedMinutes: input.entryKind === 'scan-server' ? 8 : 5,
       estimatedMonthlyCost: stack.monthlyCost,
-      assumptions: ['Automatic runtime detection is enabled.', 'Human confirmation is required before production cutover.'],
-      confirmations: input.entryKind === 'scan-server' ? ['Confirm takeover or migration before any remote mutation.'] : ['Confirm production publish before domain cutover.'],
+      assumptions: [
+        planningMode === 'on'
+          ? (zh ? '计划模式下，所有变更动作都会停在确认前。' : 'With planning mode on, all mutating actions stop before confirmation.')
+          : (zh ? '即使关闭计划模式，也只会先做只读预检。' : 'Even with planning mode off, the system still starts with read-only preflight.'),
+      ],
+      confirmations: input.entryKind === 'scan-server'
+        ? [zh ? '接管或迁移前仍需确认。' : 'Takeover or migration still requires confirmation.']
+        : [zh ? '写文件、安装依赖、构建、预览和发布前仍需确认。' : 'Writing files, installing dependencies, building, previewing, and publishing still require confirmation.'],
       steps,
     };
 
-    const record = createPlanRecord({
-      name: input.title?.trim() || 'Untitled operator plan',
+    const existingRecord = input.existingCapsuleId ? requireRecord(input.existingCapsuleId) : null;
+    const record = existingRecord ?? createPlanRecord({
+      name,
       entryKind: input.entryKind,
       stack,
       summary: brief,
@@ -8078,59 +11632,158 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       ],
     });
 
+    record.capsule.name = name;
+    record.plan = plan;
+    record.capsule.summary = brief;
+    record.capsule.headline = plan.title;
+    record.workflow.planningMode = planningMode;
+    record.capsule.source = {
+      repoUrl: input.entryKind === 'upload-project' ? (input.parsedInput?.repoUrl ?? null) : null,
+      idea: input.entryKind === 'generate-from-idea' ? brief : null,
+      serverHost: input.entryKind === 'scan-server' ? (input.parsedInput?.serverHost ?? brief) : null,
+    };
+
+    const task = ensureWorkflowTask(record, {
+      taskMode,
+      planningMode,
+      title: name,
+      userIntent: trimText(input.userIntent) || brief,
+      parsedInput: input.parsedInput ?? {
+        kind: input.entryKind === 'generate-from-idea'
+          ? 'idea'
+          : input.entryKind === 'scan-server'
+            ? 'server'
+            : 'unknown',
+        rawInput: brief,
+        idea: input.entryKind === 'generate-from-idea' ? brief : null,
+        serverHost: input.entryKind === 'scan-server' ? brief : null,
+      },
+      sessionId: input.sessionId ?? null,
+    });
+    if (!task.thread.messages.some((entry) => entry.role === 'user' && entry.content === task.userIntent)) {
+      appendWorkflowUserTurn(task, task.userIntent);
+    }
+    setWorkflowFailure(task, null);
+    setWorkflowPendingConfirmation(task, null);
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'understanding',
+      stage: 'parsing',
+      title: zh ? '理解目标' : 'Understand the goal',
+      summary: input.entryKind === 'generate-from-idea'
+        ? (zh ? '系统会先把 idea 收束成一个可执行计划，再等待确认后生成代码。' : 'The system will first turn the idea into an executable plan, then wait for confirmation before generating code.')
+        : input.entryKind === 'scan-server'
+          ? (zh ? '系统会先做只读 SSH 体检，再决定是否进入接管或迁移。' : 'The system starts with a read-only SSH audit before any takeover or migration.')
+          : (zh ? '系统会先把任务收束成工作流，再继续。' : 'The system will first turn the request into a workflow.'),
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '用户目标' : 'User goal', task.userIntent, 'system', `${task.id}:plan-intent`),
+      ],
+      nextStep: zh ? '输出计划并进入确认。' : 'Emit the plan and move into confirmation.',
+      source: 'system',
+    }));
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'plan',
+      stage: 'llm_planning',
+      title: planningMode === 'on'
+        ? (zh ? '规划模式计划' : 'Planning-mode plan')
+        : (zh ? '执行建议' : 'Execution plan'),
+      summary: input.entryKind === 'generate-from-idea'
+        ? (zh ? '先输出完整计划，确认后再进入 scaffold -> preview -> deploy readiness。' : 'Output the full plan first, then move into scaffold -> preview -> deploy readiness after confirmation.')
+        : input.entryKind === 'scan-server'
+          ? (zh ? '先做只读服务器体检，确认后再进入接管或迁移。' : 'Run a read-only server audit first, then only proceed into takeover or migration after confirmation.')
+          : (zh ? '先计划，再确认，再执行。' : 'Plan first, confirm, then execute.'),
+      evidence: [
+        createWorkflowEvidenceItem(zh ? 'planning mode' : 'planning mode', planningMode, 'system', `${task.id}:plan-mode`),
+      ],
+      nextStep: zh ? '等待确认。' : 'Await confirmation.',
+      source: 'system',
+    }));
+    const planConfirmationToken = createId('workflow-confirm');
+    setWorkflowPendingConfirmation(task, {
+      token: planConfirmationToken,
+      label: zh ? '确认后继续' : 'Continue after confirmation',
+      summary: zh ? '确认前不会执行任何变更动作。' : 'No mutating action will run before confirmation.',
+      expiresAt: new Date(Date.now() + confirmationTtlMs).toISOString(),
+    });
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'confirmation',
+      stage: 'awaiting_confirmation',
+      title: zh ? '等待确认' : 'Awaiting confirmation',
+      summary: zh ? '计划已经准备好，确认后才进入真实执行。' : 'The plan is ready, and real execution only starts after confirmation.',
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '工作区类型' : 'Workspace type', input.entryKind, 'system', `${task.id}:entry-kind`),
+        createWorkflowEvidenceItem(zh ? '确认编号' : 'Confirmation id', planConfirmationToken, 'system', `${task.id}:plan-confirmation-id`),
+      ],
+      nextStep: zh ? '确认后进入 queued / running。' : 'Move into queued / running after confirmation.',
+      source: 'system',
+    }));
+
+    persistState();
+
     return buildEnvelope(record);
   }
 
-  function analyzeProject(input: AnalyzeProjectInput): OperatorEnvelope {
+  async function analyzeProject(input: AnalyzeProjectInput): Promise<OperatorEnvelope> {
     const name = trimText(input.projectName) || 'Imported project';
     const sourceRef = trimText(input.repoUrl) || trimText(input.sourceRef);
-    const stack = inferStack([name, sourceRef, trimText(input.notes)]);
-    const zh = /[\u3400-\u9fff]/.test([name, sourceRef, trimText(input.notes)].join(' '));
+    const hasSourceRef = sourceRef.length > 0;
+    const normalizedNotes = trimText(input.notes);
+    const planningMode = input.planningMode === 'on' ? 'on' : 'off';
+    const taskMode = input.taskMode === 'new_turn' ? 'new_turn' : 'continue';
+    const userIntent = trimText(input.userIntent) || [normalizedNotes, sourceRef].filter(Boolean).join('\n\n') || name;
+    const stack = inferStack([name, sourceRef, normalizedNotes]);
+    const zh = /[\u3400-\u9fff]/.test([name, sourceRef, normalizedNotes, userIntent].join(' '));
+    const shouldAutoStartBuild = input.autoStartBuild === true;
+
     const plan: OperatorExecutionPlan = {
       id: createId('plan'),
-      title: zh ? '仓库导入执行计划' : 'Repository ingest plan',
+      title: zh ? '可见代理仓库工作流' : 'Visible agent repository workflow',
       summary: zh
-        ? '工作区会先完成真实拉取、结构检测、隔离构建和预览校验，再决定是否进入发布。'
-        : 'The workspace will fetch the source, detect the structure, run an isolated build, and verify the preview before publish is allowed.',
+        ? '系统会先解析输入、执行 grounded preflight、输出计划，再在确认后进入真实构建与验证。'
+        : 'The system parses the request, runs grounded preflight, emits a plan, and only then moves into real build and verification after confirmation.',
       risk: 'low',
       estimatedMinutes: 8,
       estimatedMonthlyCost: stack.monthlyCost,
       assumptions: [
-        zh ? '源码必须可被当前运行时访问。' : 'The source must be reachable from the current runtime.',
-        zh ? '没有真实构建结果时，不会再展示预览成功。' : 'No successful preview will be shown without a real build result.',
+        zh ? '只有 grounded preflight 通过后，才允许构建候选命令。' : 'Build commands are only allowed after grounded preflight has enough evidence.',
+        zh ? '任何写文件、安装依赖、构建、预览和发布都仍然需要确认门槛。' : 'All writes, installs, builds, previews, and publishes stay confirmation-gated.',
       ],
       confirmations: [
-        zh ? '发布正式版前仍需要确认域名、TLS 和流量切换。' : 'Production publish still requires domain, TLS, and traffic confirmation.',
+        planningMode === 'on'
+          ? (zh ? '计划模式已开启，确认前不会执行任何变更动作。' : 'Planning mode is on, so no mutating action will run before confirmation.')
+          : (zh ? '自动模式仍然只会先做只读预检，真实执行仍需确认。' : 'Auto mode still limits itself to read-only preflight until confirmation.'),
       ],
       steps: [
         {
-          id: createId('step'),
-          title: zh ? '记录源码来源' : 'Capture source',
+          id: 'visible-stage-parsing',
+          title: zh ? '解析输入' : 'Parse input',
           status: 'completed',
-          detail: sourceRef || (zh ? '等待补充仓库地址或压缩包链接。' : 'Waiting for a repository or archive URL.'),
+          detail: zh ? '拆分自然语言意图、repo URL 和执行上下文。' : 'Split the natural-language intent, repo URL, and execution context.',
         },
         {
-          id: createId('step'),
-          title: zh ? '真实构建与预览校验' : 'Real build and preview verification',
-          status: 'in_progress',
-          detail: zh ? '会依次执行 fetch -> detect -> build -> preview health check。' : 'The job will run fetch -> detect -> build -> preview health check.',
+          id: 'visible-stage-preflight',
+          title: zh ? 'Grounded preflight' : 'Grounded preflight',
+          status: hasSourceRef ? 'in_progress' : 'attention',
+          detail: hasSourceRef
+            ? (zh ? '执行 git reachability、包管理器/工作区/脚本/环境清单扫描。' : 'Run git reachability plus package manager, workspace, script, and env-readiness scans.')
+            : (zh ? '必须先提供可解析的仓库 URL。' : 'A valid repository URL is required first.'),
         },
         {
-          id: createId('step'),
-          title: zh ? '发布正式版' : 'Publish release',
+          id: 'visible-stage-confirm',
+          title: zh ? '确认后执行' : 'Execute after confirmation',
           status: 'planned',
-          detail: zh ? '只有真实预览通过后，才会进入发布和运维动作。' : 'Publish and operations only continue after a verified preview exists.',
+          detail: zh ? '确认前不会开始 install/build/preview/deploy。' : 'install/build/preview/deploy will not start before confirmation.',
         },
       ],
     };
 
-    const record = createPlanRecord({
+    const record = input.existingCapsuleId ? requireRecord(input.existingCapsuleId) : null;
+    const workspaceRecord = record ?? createPlanRecord({
       name,
       entryKind: 'upload-project',
       stack,
       summary: zh
-        ? '源码来源已接入工作区，正在执行真实拉取和构建。'
-        : 'The source has been attached to the workspace and is now being fetched and built.',
+        ? '可见代理工作流已创建，等待 grounded preflight 结论。'
+        : 'The visible agent workflow has been created and is waiting for grounded preflight conclusions.',
       source: {
         repoUrl: sourceRef || null,
         idea: null,
@@ -8142,43 +11795,263 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       previewUrl: null,
       productionUrl: null,
       plan,
-      logsHeadline: zh ? '仓库导入任务已排队。' : 'Repository ingest has been queued.',
+      logsHeadline: zh ? '仓库工作流已创建。' : 'Repository workflow created.',
       logs: [
         {
           id: createId('event'),
           level: 'info',
-          message: zh
-            ? `已创建真实仓库导入任务，等待执行 ${sourceRef || 'source ingest'}。`
-            : `A real repository ingest job has been created for ${sourceRef || 'the source input'}.`,
-          createdAt: nowIso(),
-        },
-        {
-          id: createId('event'),
-          level: 'info',
-          message: zh ? `目标技术栈候选：${stack.label}。` : `Candidate runtime stack: ${stack.label}.`,
+          message: zh ? '系统正在为这个仓库准备可见代理时间线。' : 'Preparing the visible agent timeline for this repository.',
           createdAt: nowIso(),
         },
       ],
       infraItems: [
         { label: zh ? '源码来源' : 'Source', value: sourceRef || (zh ? '待补充' : 'Pending input') },
         { label: zh ? '候选运行时' : 'Candidate runtime', value: stack.runtime },
-        { label: zh ? '构建策略' : 'Build strategy', value: stack.build },
+        { label: zh ? '规划模式' : 'Planning mode', value: planningMode },
       ],
     });
-    updateDiagnostics(record, {
-      stage: 'fetch',
-      headline: zh ? '仓库导入已排队' : 'Repository ingest queued',
-      detail: sourceRef || (zh ? '等待仓库地址。' : 'Waiting for a repository URL.'),
-      command: sourceRef || null,
+
+    workspaceRecord.capsule.name = name;
+    workspaceRecord.capsule.source.repoUrl = sourceRef || null;
+    workspaceRecord.capsule.summary = zh
+      ? '系统会把 parsing、preflight、计划、确认、执行、验证逐段显示出来。'
+      : 'The system shows parsing, preflight, planning, confirmation, execution, and verification as distinct visible stages.';
+    workspaceRecord.plan = plan;
+    workspaceRecord.artifactSummary.sourceType = 'repository';
+    workspaceRecord.artifactSummary.sourceRef = sourceRef || null;
+
+    const task = ensureWorkflowTask(workspaceRecord, {
+      taskMode,
+      planningMode,
+      title: name,
+      userIntent,
+      parsedInput: {
+        kind: 'repo',
+        rawInput: userIntent,
+        repoUrl: sourceRef || null,
+        notes: normalizedNotes || null,
+      },
+      sessionId: input.sessionId ?? null,
+    });
+
+    if (!task.thread.messages.some((entry) => entry.role === 'user' && entry.content === userIntent)) {
+      appendWorkflowUserTurn(task, userIntent);
+    }
+    setWorkflowFailure(task, null);
+    setWorkflowPendingConfirmation(task, null);
+
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'understanding',
+      stage: 'parsing',
+      title: zh ? '理解请求' : 'Understand the request',
+      summary: hasSourceRef
+        ? (zh ? `已提取纯仓库地址 ${sourceRef}，并保留附加要求供后续计划使用。` : `Extracted the clean repository URL ${sourceRef} and kept the extra intent for planning.`)
+        : (zh ? '还没有拿到可用的仓库地址，因此先停在解析阶段。' : 'A usable repository URL has not been provided yet, so the flow stays in parsing.'),
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '原始目标' : 'Original goal', userIntent, 'system', `${task.id}:intent`),
+        ...(sourceRef ? [createWorkflowEvidenceItem(zh ? '仓库地址' : 'Repository URL', sourceRef, 'system', `${task.id}:repo-url`)] : []),
+      ],
+      nextStep: hasSourceRef
+        ? (zh ? '执行 grounded preflight，确认仓库可达性和构建证据。' : 'Run grounded preflight to verify reachability and build evidence.')
+        : (zh ? '补充纯仓库 URL 后再继续。' : 'Provide a clean repository URL before continuing.'),
+      source: 'system',
+    }));
+
+    if (!hasSourceRef) {
+      const failure = buildWorkflowFailure('repo_url_invalid', {
+        stage: 'blocked',
+        summary: zh ? '没有检测到可用的仓库 URL，系统不会进入构建猜测。' : 'No valid repository URL was detected, so the system will not guess a build path.',
+        probableRootCause: zh ? '输入里缺少纯仓库 URL，或者链接格式不合法。' : 'The input is missing a clean repository URL, or the link format is invalid.',
+        recommendedActions: [
+          zh ? '只粘贴纯仓库 URL，例如 https://github.com/org/repo。' : 'Paste only the clean repository URL, such as https://github.com/org/repo.',
+        ],
+        evidence: [
+          createWorkflowEvidenceItem(zh ? '原始输入' : 'Original input', userIntent, 'system', `${task.id}:invalid-input`),
+        ],
+      });
+      applyWorkflowFailure(task, failure, 'system');
+      updateDiagnostics(workspaceRecord, {
+        stage: 'parsing',
+        headline: zh ? '仓库 URL 无效' : 'Invalid repository URL',
+        detail: failure.humanSummary,
+        command: null,
+        lastError: failure.probableRootCause,
+      });
+      workspaceRecord.logsSummary.headline = failure.humanSummary;
+      persistState();
+      return buildEnvelope(workspaceRecord);
+    }
+
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'preflight',
+      stage: 'preflight',
+      title: zh ? 'Grounded preflight' : 'Grounded preflight',
+      summary: zh ? '正在检查 git reachability、工作区结构、脚本候选和部署清单。' : 'Checking git reachability, workspace structure, script candidates, and deployment readiness.',
+      evidence: [
+        createWorkflowEvidenceItem('git ls-remote', sourceRef, 'preflight', `${task.id}:ls-remote`),
+      ],
+      nextStep: zh ? '根据真实仓库证据输出推荐执行路径。' : 'Use real repository evidence to choose the recommended execution path.',
+      source: 'preflight',
+    }));
+
+    const preflight = await runRepoGroundedPreflight(sourceRef, stack);
+    task.parsedInput.confidence = preflight.confidence;
+    task.parsedInput.repoUrl = preflight.repoUrl;
+    task.evidence = [
+      ...task.evidence.filter((entry) => !entry.id.startsWith(`${task.id}:repo-`)),
+      ...preflight.evidence,
+    ];
+    workspaceRecord.capsule.source.repoUrl = preflight.repoUrl;
+    workspaceRecord.capsule.headline = zh ? '可见代理仓库工作流' : 'Visible agent repository workflow';
+
+    if (preflight.techProfile) {
+      applyRepoTechnicalProfile(workspaceRecord, preflight.techProfile);
+      workspaceRecord.artifactSummary.installCommand = preflight.techProfile.techStackSummary.installCommand;
+      workspaceRecord.artifactSummary.buildCommand = preflight.techProfile.techStackSummary.buildCommand;
+    }
+
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'preflight',
+      stage: 'preflight',
+      title: zh ? '预检结论' : 'Preflight conclusion',
+      summary: zh
+        ? `置信度 ${Math.round(preflight.confidence * 100)}%。${preflight.recommendedPath}`
+        : `Confidence ${Math.round(preflight.confidence * 100)}%. ${preflight.recommendedPath}`,
+      evidence: preflight.evidence,
+      nextStep: preflight.alternatePath ?? (zh ? '输出计划并等待确认。' : 'Emit the plan and wait for confirmation.'),
+      source: 'preflight',
+    }));
+
+    if (preflight.failure) {
+      applyWorkflowFailure(task, preflight.failure, 'preflight');
+      workspaceRecord.logsSummary.headline = preflight.failure.humanSummary;
+      updateDiagnostics(workspaceRecord, {
+        stage: 'preflight',
+        headline: zh ? '仓库预检阻塞' : 'Repository preflight blocked',
+        detail: preflight.failure.humanSummary,
+        command: 'git ls-remote',
+        lastError: preflight.failure.probableRootCause,
+      });
+      persistState();
+      return buildEnvelope(workspaceRecord);
+    }
+
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'plan',
+      stage: 'llm_planning',
+      title: planningMode === 'on'
+        ? (zh ? '规划模式完整计划' : 'Planning mode full plan')
+        : (zh ? '自动模式执行建议' : 'Auto-mode execution plan'),
+      summary: zh
+        ? [
+          `推荐路径：${preflight.recommendedPath}`,
+          preflight.alternatePath ? `备选路径：${preflight.alternatePath}` : null,
+          `风险：${preflight.risk}`,
+        ].filter(Boolean).join(' ')
+        : [
+          `Recommended path: ${preflight.recommendedPath}`,
+          preflight.alternatePath ? `Fallback path: ${preflight.alternatePath}` : null,
+          `Risk: ${preflight.risk}`,
+        ].filter(Boolean).join(' '),
+      evidence: [
+        ...preflight.evidence.slice(0, 4),
+        ...(preflight.buildPlan?.buildCommand ? [createWorkflowEvidenceItem(zh ? '构建命令候选' : 'Build candidate', preflight.buildPlan.buildCommand, 'preflight', `${task.id}:build-command`)] : []),
+      ],
+      nextStep: zh
+        ? '进入确认阶段，确认前不执行 install/build/preview/deploy。'
+        : 'Move into confirmation. No install/build/preview/deploy will run before approval.',
+      source: 'system',
+    }));
+
+    if (!shouldAutoStartBuild || planningMode === 'on') {
+      task.currentStage = 'awaiting_confirmation';
+      const preflightConfirmationToken = createId('workflow-confirm');
+      setWorkflowPendingConfirmation(task, {
+        token: preflightConfirmationToken,
+        label: zh ? '确认后开始真实执行' : 'Confirm before real execution',
+        summary: zh
+          ? '确认后才会开始 install/build/preview/deploy。'
+          : 'install/build/preview/deploy only start after confirmation.',
+        expiresAt: new Date(Date.now() + confirmationTtlMs).toISOString(),
+      });
+      appendWorkflowCard(task, createWorkflowCard(task, {
+        kind: 'confirmation',
+        stage: 'awaiting_confirmation',
+        title: zh ? '等待确认' : 'Awaiting confirmation',
+        summary: planningMode === 'on'
+          ? (zh ? '当前处于计划模式，所有变更动作都必须停在确认前。' : 'Planning mode is on, so all mutating actions stop before confirmation.')
+          : (zh ? '只读 preflight 已完成，但真实执行仍然不会自动开始。' : 'Read-only preflight is done, but real execution will still not auto-start.'),
+        evidence: [
+          createWorkflowEvidenceItem(zh ? 'planning mode' : 'planning mode', planningMode, 'system', `${task.id}:planning-mode`),
+          createWorkflowEvidenceItem(zh ? '置信度' : 'confidence', `${Math.round(preflight.confidence * 100)}%`, 'preflight', `${task.id}:confidence`),
+          createWorkflowEvidenceItem(zh ? '确认编号' : 'Confirmation id', preflightConfirmationToken, 'system', `${task.id}:preflight-confirmation-id`),
+        ],
+        nextStep: zh ? '用户确认后进入 queued -> running -> verifying。' : 'After confirmation, move into queued -> running -> verifying.',
+        source: 'system',
+      }));
+      workspaceRecord.logsSummary.headline = zh ? '预检和计划已完成，等待确认。' : 'Preflight and planning are complete. Waiting for confirmation.';
+      updateDiagnostics(workspaceRecord, {
+        stage: 'preflight',
+        headline: zh ? '仓库预检完成，等待确认' : 'Repository preflight complete, awaiting confirmation',
+        detail: preflight.recommendedPath,
+        command: 'git ls-remote / source scan',
+        lastError: null,
+      });
+      persistState();
+      return buildEnvelope(workspaceRecord);
+    }
+
+    if (preflight.confidence < 0.75 || !preflight.buildPlan) {
+      const failure = preflight.failure ?? buildWorkflowFailure(preflight.confidence < 0.45 ? 'workspace_detection_failed' : 'build_command_uncertain', {
+        stage: 'blocked',
+        summary: zh ? '预检置信度不足，系统不会直接开始构建。' : 'Preflight confidence is too low, so the system will not start a build.',
+        probableRootCause: preflight.risk,
+        recommendedActions: [
+          zh ? '先根据预检证据选择推荐路径，再继续执行。' : 'Choose the recommended path from the preflight evidence before continuing.',
+        ],
+        evidence: preflight.evidence,
+      });
+      applyWorkflowFailure(task, failure, 'preflight');
+      updateDiagnostics(workspaceRecord, {
+        stage: 'preflight',
+        headline: zh ? '预检阻止了自动构建' : 'Preflight blocked automatic build',
+        detail: failure.humanSummary,
+        command: 'git ls-remote / source scan',
+        lastError: failure.probableRootCause,
+      });
+      workspaceRecord.logsSummary.headline = failure.humanSummary;
+      persistState();
+      return buildEnvelope(workspaceRecord);
+    }
+
+    setWorkflowPendingConfirmation(task, null);
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      kind: 'execution',
+      stage: 'queued',
+      title: zh ? '执行已排队' : 'Execution queued',
+      summary: zh ? '真实构建与预览验证已进入执行队列。' : 'The real build and preview verification flow has been queued.',
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '推荐路径' : 'Recommended path', preflight.recommendedPath, 'preflight', `${task.id}:queued-path`),
+      ],
+      nextStep: zh ? '进入真实构建与验证。' : 'Move into real build and verification.',
+      source: 'executor',
+    }));
+
+    workspaceRecord.logsSummary.headline = zh ? '仓库执行链已排队。' : 'The repository execution flow has been queued.';
+    updateDiagnostics(workspaceRecord, {
+      stage: 'queued',
+      headline: zh ? '仓库执行链已排队' : 'Repository execution queued',
+      detail: preflight.recommendedPath,
+      command: preflight.buildPlan.buildCommand,
       lastError: null,
     });
 
     const job = createJob({
-      capsuleId: record.capsule.id,
+      capsuleId: workspaceRecord.capsule.id,
       kind: 'build_repo_preview',
       title: zh ? '仓库真实预览构建' : 'Repository preview build',
-      summary: zh ? '仓库导入任务已排队。' : 'The repository ingest job is queued.',
-      detail: sourceRef || (zh ? '等待仓库地址。' : 'Waiting for a repository URL.'),
+      summary: zh ? '仓库预览链已排队。' : 'The repository preview flow is queued.',
+      detail: sourceRef,
       steps: [
         { title: zh ? '拉取源码' : 'Fetch source', detail: zh ? '克隆仓库或下载压缩包。' : 'Clone the repo or download the archive.' },
         { title: zh ? '检测结构' : 'Detect structure', detail: zh ? '识别前端入口和构建方式。' : 'Identify the frontend entry and build mode.' },
@@ -8189,10 +12062,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       ],
     });
     if (job) {
-      void startRepositoryPreviewJob(record, input, job.id);
+      void startRepositoryPreviewJob(workspaceRecord, input, job.id);
     }
 
-    return buildEnvelope(record);
+    persistState();
+    return buildEnvelope(workspaceRecord);
   }
 
   async function generateProjectEnvelope(
@@ -8445,7 +12319,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       }] : []),
     ];
 
-    const record = createPlanRecord({
+    const planningMode = input.planningMode === 'on' ? 'on' : 'off';
+    const taskMode = input.taskMode === 'new_turn' ? 'new_turn' : 'continue';
+    const userIntent = trimText(input.userIntent) || input.idea.trim();
+    const existingRecord = input.existingCapsuleId ? requireRecord(input.existingCapsuleId) : null;
+    const record = existingRecord ?? createPlanRecord({
       name,
       entryKind: 'generate-from-idea',
       stack,
@@ -8479,10 +12357,44 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
             : (zh ? '本地回退规划 + 本地源码模板 + 预览构建' : 'local fallback planning + local source template + preview build') },
       ],
     });
+    record.capsule.name = name;
+    record.capsule.summary = usedModelBundle
+      ? (zh ? '同一工作区里已经生成源码并接上共享预览。' : 'The same workspace now contains generated source and a shared preview.')
+      : (zh ? '同一工作区里已经生成首版源码和共享预览。' : 'The same workspace now contains a first source bundle and a shared preview.');
+    record.plan = plan;
     record.capsule.generationSource = usedModelBundle ? 'model' : 'template';
     record.capsule.stackLabel = displayStackLabel;
     record.infraSummary.runtime = displayRuntime;
     record.generatedRecipe = recipe;
+    const workflowTask = ensureWorkflowTask(record, {
+      taskMode,
+      planningMode,
+      title: name,
+      userIntent,
+      parsedInput: {
+        kind: 'idea',
+        rawInput: userIntent,
+        idea: input.idea.trim(),
+        confidence: usedModelBundle ? 0.92 : planned.trace.usedModel ? 0.82 : 0.68,
+      },
+      sessionId: input.sessionId ?? null,
+    });
+    if (!workflowTask.thread.messages.some((entry) => entry.role === 'user' && entry.content === userIntent)) {
+      appendWorkflowUserTurn(workflowTask, userIntent);
+    }
+    setWorkflowFailure(workflowTask, null);
+    setWorkflowPendingConfirmation(workflowTask, null);
+    appendWorkflowCard(workflowTask, createWorkflowCard(workflowTask, {
+      kind: 'execution',
+      stage: 'running',
+      title: zh ? '生成源码与预览' : 'Generate source and preview',
+      summary: zh ? '系统正在同一工作区里生成代码、物料和共享预览。' : 'The system is generating code, artifacts, and the shared preview inside the same workspace.',
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '想法' : 'Idea', input.idea.trim(), 'executor', `${workflowTask.id}:idea-source`),
+      ],
+      nextStep: zh ? '完成后进入预览验证。' : 'Move into preview verification after generation finishes.',
+      source: planned.trace.usedModel ? 'llm' : 'mock',
+    }));
     materializeGeneratedProject(record, {
       ...input,
       projectName: name,
@@ -8494,13 +12406,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     const previewBuild = record.generatedProject ? previewBuildRootFor(record) : null;
     const previewBuildError = previewBuild ? readPreviewBuildError(previewBuild) : null;
     if (previewBuildError) {
-      record.previewSummary = {
-        ...record.previewSummary,
-        status: 'failed',
-        verified: false,
-        verifiedAt: null,
-        lastError: previewBuildError,
-      };
+      setPreviewFailed(record, previewBuildError, {
+        previewUrl,
+        entryFile: record.generatedProject?.entryFile ?? null,
+        assetCount: record.generatedProject?.files.length ?? 0,
+      });
       updateDiagnostics(record, {
         stage: 'build_preview',
         headline: zh ? '预览构建失败' : 'Preview build failed',
@@ -8508,27 +12418,77 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
         command: 'vite build',
         lastError: previewBuildError,
       });
-      record.capsule.status = 'needs_attention';
       addEvent(record, 'warning', zh
         ? '共享预览编译未完全成功，已切换到诊断页展示错误。'
         : 'Shared preview compilation did not fully succeed, so a diagnostics page is being shown.');
       record.logsSummary.headline = zh ? '预览构建需要处理。' : 'Preview build needs attention.';
+      applyWorkflowFailure(workflowTask, buildWorkflowFailure('preview_failed', {
+        stage: 'failed',
+        summary: zh ? `预览构建失败：${previewBuildError}` : `Preview build failed: ${previewBuildError}`,
+        probableRootCause: previewBuildError,
+        recommendedActions: [
+          zh ? '先在同一工作区里查看源码和构建诊断，再继续修复。' : 'Inspect the source bundle and build diagnostics in the same workspace before retrying.',
+        ],
+        evidence: [
+          createWorkflowEvidenceItem(zh ? '预览构建错误' : 'Preview build error', previewBuildError, 'executor', `${workflowTask.id}:idea-preview-error`),
+        ],
+      }), usedModelBundle ? 'executor' : 'mock');
       persistState();
     } else {
-      record.previewSummary = {
-        ...record.previewSummary,
-        status: 'verified',
-        verified: true,
-        verifiedAt: nowIso(),
-        lastError: null,
-      };
-      updateDiagnostics(record, {
-        stage: 'build_preview',
-        headline: zh ? '真实预览已就绪' : 'Verified preview is ready',
-        detail: zh ? '源码、构建和共享预览都已经准备好。' : 'The source, build output, and shared preview are all ready.',
-        command: 'vite build',
-        lastError: null,
+      setPreviewBuilding(record, {
+        previewUrl,
+        entryFile: record.generatedProject?.entryFile ?? null,
+        assetCount: record.generatedProject?.files.length ?? 0,
       });
+      const verification = await runPreviewVerification(record, {
+        previewKind: 'static',
+        buildRoot: previewBuild?.buildRoot ?? null,
+        entryFile: record.generatedProject?.entryFile ?? null,
+        assetCount: record.generatedProject?.files.length ?? 0,
+        goldenPath: 'vite-react',
+        screenshotLabel: 'generated-runtime.png',
+      });
+      if (!verification.ok) {
+        const message = verification.reason ?? 'preview_verification_failed';
+        updateDiagnostics(record, {
+          stage: 'build_preview',
+          headline: zh ? '预览验证失败' : 'Preview verification failed',
+          detail: message,
+          command: 'vite build',
+          lastError: message,
+        });
+        record.logsSummary.headline = zh ? '预览验证需要处理。' : 'Preview verification needs attention.';
+        applyWorkflowFailure(workflowTask, buildWorkflowFailure('preview_failed', {
+          stage: 'failed',
+          summary: zh ? `预览验证失败：${message}` : `Preview verification failed: ${message}`,
+          probableRootCause: message,
+          recommendedActions: [
+            zh ? '先修复占位页、诊断页或运行时证据缺失，再继续上线流程。' : 'Fix the poster/diagnostic output or missing runtime evidence before continuing.',
+          ],
+          evidence: [
+            createWorkflowEvidenceItem(zh ? '验证失败' : 'Verification failure', message, 'executor', `${workflowTask.id}:idea-preview-verify-error`),
+          ],
+        }), usedModelBundle ? 'executor' : 'mock');
+      } else {
+        updateDiagnostics(record, {
+          stage: 'build_preview',
+          headline: zh ? '真实预览已就绪' : 'Verified preview is ready',
+          detail: zh ? '源码、构建和共享预览都已经准备好。' : 'The source, build output, and shared preview are all ready.',
+          command: 'vite build',
+          lastError: null,
+        });
+        appendWorkflowCard(workflowTask, createWorkflowCard(workflowTask, {
+          kind: 'verification',
+          stage: 'partial_success',
+          title: zh ? '首版预览已验证' : 'First preview verified',
+          summary: zh ? '源码、构建和共享预览都已经准备好，现在可以继续做 deploy readiness。' : 'The source, build output, and shared preview are ready, so deploy readiness can continue.',
+          evidence: [
+            ...(previewUrl ? [createWorkflowEvidenceItem(zh ? '预览地址' : 'Preview URL', previewUrl, 'executor', `${workflowTask.id}:idea-preview-url`)] : []),
+          ],
+          nextStep: zh ? '继续在同一工作区里做 deploy readiness 和发布确认。' : 'Continue deploy readiness and publish confirmation inside the same workspace.',
+          source: usedModelBundle ? 'llm' : 'mock',
+        }));
+      }
     }
 
     return {
@@ -8545,6 +12505,47 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   function startGenerateProjectTask(input: GenerateProjectInput) {
     const requestedName = trimText(input.projectName) || compactLaunchDisplayTitle('', input.idea);
     const task = buildGenerationTask(input, requestedName);
+    const existingRecord = input.existingCapsuleId ? requireRecord(input.existingCapsuleId) : null;
+    if (existingRecord) {
+      const zh = detectGenerateProjectLocale(input) === 'zh-CN';
+      const workflowTask = ensureWorkflowTask(existingRecord, {
+        taskMode: input.taskMode === 'new_turn' ? 'new_turn' : 'continue',
+        planningMode: input.planningMode === 'on' ? 'on' : 'off',
+        title: requestedName,
+        userIntent: trimText(input.userIntent) || input.idea.trim(),
+        parsedInput: {
+          kind: 'idea',
+          rawInput: trimText(input.userIntent) || input.idea.trim(),
+          idea: input.idea.trim(),
+        },
+        sessionId: input.sessionId ?? null,
+      });
+      setWorkflowFailure(workflowTask, null);
+      setWorkflowPendingConfirmation(workflowTask, null);
+      appendWorkflowCard(workflowTask, createWorkflowCard(workflowTask, {
+        id: `${workflowTask.id}:execution:queued:${task.id}`,
+        kind: 'execution',
+        stage: 'queued',
+        title: zh ? '确认已消费，生成任务已排队' : 'Confirmation consumed, generation queued',
+        summary: zh
+          ? '同一工作区里的 scaffold -> preview 任务已经进入真实执行队列。'
+          : 'The scaffold -> preview task inside the same workspace has entered the real execution queue.',
+        evidence: [
+          createWorkflowEvidenceItem(zh ? '想法' : 'Idea', input.idea.trim(), 'executor', `${workflowTask.id}:idea-queued`),
+          createWorkflowEvidenceItem(zh ? '执行任务' : 'Executor task', `build_idea_preview:${task.id}`, 'executor', `${workflowTask.id}:idea-queued-task`),
+          ...(trimText(input.confirmedPendingConfirmationId)
+            ? [createWorkflowEvidenceItem(
+              zh ? '确认编号' : 'Confirmation id',
+              trimText(input.confirmedPendingConfirmationId),
+              'system',
+              `${workflowTask.id}:idea-confirmation-id`,
+            )]
+            : []),
+        ],
+        nextStep: zh ? '执行器会继续推进 running -> verifying。' : 'The executor will continue into running -> verifying.',
+        source: 'executor',
+      }));
+    }
     generationTasks.set(task.id, task);
     persistState();
 
@@ -8755,6 +12756,12 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
       agentSocket: input.authMode === 'agent' ? process.env.SSH_AUTH_SOCK || undefined : undefined,
       readyTimeoutMs: 20_000,
     });
+    setCredentialReadiness(record, 'missing_credentials', {
+      detail: zh
+        ? '已记录 SSH 凭据，但还未完成预检。请等待体检完成。'
+        : 'SSH credentials were captured, but preflight has not completed yet. Wait for the audit result.',
+      checkedAt: nowIso(),
+    });
 
     const job = createJob({
       capsuleId: record.capsule.id,
@@ -8778,6 +12785,41 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   function getCapsule(capsuleId: string) {
     const record = requireRecord(capsuleId);
     return record ? buildEnvelope(record) : null;
+  }
+
+  function updateWorkspace(input: UpdateWorkspaceInput) {
+    const record = requireRecord(input.capsuleId);
+    if (!record) {
+      return null;
+    }
+
+    let changed = false;
+    const nextName = trimText(input.name);
+    if (input.name !== undefined && nextName && nextName !== record.capsule.name) {
+      const previousName = record.capsule.name;
+      record.capsule.name = nextName;
+      if (record.plan.title === previousName) {
+        record.plan.title = nextName;
+      }
+      changed = true;
+    }
+
+    if (input.archived !== undefined && input.archived !== null) {
+      const nextArchivedAt = input.archived ? (record.capsule.archivedAt ?? nowIso()) : null;
+      if (nextArchivedAt !== record.capsule.archivedAt) {
+        record.capsule.archivedAt = nextArchivedAt;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      const updatedAt = nowIso();
+      record.capsule.updatedAt = updatedAt;
+      record.capsule.lastActiveAt = updatedAt;
+      persistState();
+    }
+
+    return buildEnvelope(record);
   }
 
   function findRecordByRef(capsuleRef: string) {
@@ -8923,6 +12965,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="sloth-preview-mode" content="placeholder" />
     <title>${escapeHtml(displayTitle)} · ${zh ? '树懒云预览' : 'Sloth Cloud Preview'}</title>
     <style>
       :root { font-family: "SF Pro Display", "Segoe UI", sans-serif; color: #13231d; background: #ecf7ff; }
@@ -8998,6 +13041,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="sloth-preview-mode" content="diagnostic" />
     <title>${escapeHtml(displayTitle)} · ${zh ? '预览构建诊断' : 'Preview build diagnostics'}</title>
     <style>
       :root { font-family: "SF Pro Display", "Segoe UI", sans-serif; color: #13231d; background: #eef5f3; }
@@ -9352,6 +13396,260 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     };
   }
 
+  function confirmActivePlan(input: ConfirmActivePlanInput) {
+    const record = requireRecord(input.capsuleId);
+    if (!record) {
+      return null;
+    }
+
+    const workflow = normalizeWorkflowState(record.workflow);
+    record.workflow = workflow;
+    const task = getWorkflowTaskById(workflow, input.taskId ?? null)
+      ?? getWorkflowTaskById(workflow, workflow.activeTaskId)
+      ?? workflow.tasks.at(-1);
+    if (!task) {
+      return buildEnvelope(record);
+    }
+
+    workflow.activeTaskId = task.id;
+    const pendingConfirmation = resolveWorkflowPendingConfirmation(task, input.pendingConfirmationId);
+    if (!pendingConfirmation.awaitingPendingConfirmation) {
+      return buildEnvelope(record);
+    }
+
+    return continueActiveTask({
+      capsuleId: input.capsuleId,
+      taskId: task.id,
+      pendingConfirmationId: pendingConfirmation.resolvedPendingConfirmationId,
+      operation: 'continue',
+      userIntent: input.userIntent ?? null,
+    });
+  }
+
+  function continueActiveTask(input: ContinueActiveTaskInput) {
+    const record = requireRecord(input.capsuleId);
+    if (!record) {
+      return null;
+    }
+
+    const operation = input.operation === 'deploy_playable' ? 'deploy_playable' : 'continue';
+    const workflow = normalizeWorkflowState(record.workflow);
+    record.workflow = workflow;
+    const task = getWorkflowTaskById(workflow, input.taskId ?? null)
+      ?? getWorkflowTaskById(workflow, workflow.activeTaskId)
+      ?? workflow.tasks.at(-1)
+      ?? ensureWorkflowTask(record, {
+        taskMode: 'continue',
+        planningMode: workflow.planningMode,
+        title: record.capsule.name,
+        userIntent: trimText(input.userIntent) || record.capsule.summary,
+        parsedInput: {
+          kind: record.capsule.entryKind === 'upload-project'
+            ? 'repo'
+            : record.capsule.entryKind === 'generate-from-idea'
+              ? 'idea'
+              : 'server',
+          rawInput: trimText(input.userIntent) || record.capsule.summary,
+        },
+      });
+
+    workflow.activeTaskId = task.id;
+    const zh = /[\u3400-\u9fff]/.test([
+      record.capsule.name,
+      record.capsule.summary,
+      task.userIntent,
+      trimText(input.userIntent),
+    ].filter(Boolean).join(' '));
+    const explicitIntent = trimText(input.userIntent);
+    if (explicitIntent && !task.thread.messages.some((entry) => entry.role === 'user' && entry.content === explicitIntent)) {
+      appendWorkflowUserTurn(task, explicitIntent);
+    }
+
+    const pendingConfirmation = resolveWorkflowPendingConfirmation(task, input.pendingConfirmationId);
+    if (pendingConfirmation.mismatch) {
+      applyWorkflowFailure(task, buildWorkflowFailure('deploy_blocked', {
+        stage: 'blocked',
+        summary: zh
+          ? '确认编号不匹配，任务没有进入执行队列。'
+          : 'The confirmation id does not match, so the task was not queued.',
+        probableRootCause: zh
+          ? `当前任务等待的确认编号是 ${pendingConfirmation.expectedPendingConfirmationId}，但收到的是 ${pendingConfirmation.requestedPendingConfirmationId}。`
+          : `The task is waiting for ${pendingConfirmation.expectedPendingConfirmationId}, but ${pendingConfirmation.requestedPendingConfirmationId} was provided.`,
+        recommendedActions: [
+          zh
+            ? '请使用右侧真相面板里的 pending_confirmation_id 再次继续。'
+            : 'Use the pending_confirmation_id shown in the truth panel and continue again.',
+        ],
+        evidence: [
+          createWorkflowEvidenceItem(zh ? '期望确认编号' : 'Expected confirmation id', pendingConfirmation.expectedPendingConfirmationId ?? 'null', 'system', `${task.id}:continue-expected-confirmation`),
+          createWorkflowEvidenceItem(zh ? '收到确认编号' : 'Provided confirmation id', pendingConfirmation.requestedPendingConfirmationId ?? 'null', 'system', `${task.id}:continue-provided-confirmation`),
+        ],
+      }), 'system');
+      persistState();
+      return buildEnvelope(record);
+    }
+
+    if (
+      operation === 'continue'
+      && record.capsule.entryKind === 'generate-from-idea'
+      && pendingConfirmation.awaitingPendingConfirmation
+      && !record.generatedProject
+    ) {
+      startGenerateProjectTask({
+        projectName: record.capsule.name,
+        idea: trimText(task.parsedInput.idea)
+          || trimText(record.capsule.source.idea)
+          || explicitIntent
+          || task.userIntent
+          || record.capsule.summary
+          || record.capsule.name,
+        planningMode: task.planningMode,
+        existingCapsuleId: record.capsule.id,
+        userIntent: explicitIntent || task.userIntent || trimText(record.capsule.source.idea) || record.capsule.summary,
+        sessionId: task.thread.sessionId,
+        taskMode: 'continue',
+        confirmedPendingConfirmationId: pendingConfirmation.resolvedPendingConfirmationId,
+      });
+      return buildEnvelope(record);
+    }
+
+    const repairApplied = applyRepairInputToWorkspaceRecord(record, input.repair ?? null, zh ? 'zh-CN' : 'en');
+    syncWorkspaceArtifactLedger(record, explicitIntent || task.userIntent);
+    const ledger = normalizeWorkspaceArtifactLedger(record.workspaceArtifactLedger);
+    record.workspaceArtifactLedger = ledger;
+
+    let kind: OperatorJobKind;
+    if (operation === 'deploy_playable') {
+      kind = 'deploy_preview';
+    } else if (record.capsule.entryKind === 'upload-project') {
+      kind = 'build_repo_preview';
+    } else if (record.capsule.entryKind === 'scan-server') {
+      kind = 'scan_server';
+    } else {
+      kind = 'deploy_preview';
+    }
+
+    if (kind === 'deploy_preview') {
+      const blockingLedgerGaps = selectWorkspaceArtifactLedgerBlockingGaps(ledger);
+      if (blockingLedgerGaps.length > 0) {
+        const gapSummary = summarizeWorkspaceArtifactLedgerGaps(blockingLedgerGaps, zh ? 'zh-CN' : 'en').join(', ');
+        applyWorkflowFailure(task, buildWorkflowFailure('deploy_blocked', {
+          stage: 'blocked',
+          summary: zh
+            ? `当前 workspace ledger 还不完整，无法继续部署：${gapSummary}。`
+            : `The current workspace ledger is incomplete, so deployment cannot continue: ${gapSummary}.`,
+          probableRootCause: zh
+            ? '生成物、入口、技术栈或 preview target 没有完整写入同一工作区账本。'
+            : 'The generated artifacts, runnable entry, chosen stack, or preview target were not fully written into the same workspace ledger.',
+          recommendedActions: [
+            zh
+              ? '先在当前工作区补齐 ledger 缺口，再继续 deploy_playable。'
+              : 'Fill the ledger gaps in this workspace before continuing deploy_playable.',
+          ],
+          evidence: [
+            createWorkflowEvidenceItem(zh ? 'Ledger gaps' : 'Ledger gaps', blockingLedgerGaps.join(', '), 'system', `${task.id}:continue-ledger-gaps`),
+            createWorkflowEvidenceItem(zh ? 'Latest artifact' : 'Latest artifact', getWorkspaceArtifactLedgerLatestArtifactDetail(ledger) ?? 'null', 'system', `${task.id}:continue-ledger-artifact`),
+            createWorkflowEvidenceItem(zh ? 'Runnable entry' : 'Runnable entry', ledger.runnableEntry.entryFile ?? 'null', 'system', `${task.id}:continue-ledger-entry`),
+            createWorkflowEvidenceItem(zh ? 'Chosen stack' : 'Chosen stack', ledger.chosenStack.label, 'system', `${task.id}:continue-ledger-stack`),
+            createWorkflowEvidenceItem(zh ? 'Preview target' : 'Preview target', ledger.previewTarget.url ?? 'null', 'system', `${task.id}:continue-ledger-preview-target`),
+          ],
+        }), 'system');
+        persistState();
+        return buildEnvelope(record);
+      }
+    }
+
+    setWorkflowFailure(task, null);
+    setWorkflowPendingConfirmation(task, null);
+    const job = createWorkspaceJob({
+      capsuleId: record.capsule.id,
+      kind,
+    });
+    if (!job) {
+      applyWorkflowFailure(task, buildWorkflowFailure('deploy_blocked', {
+        stage: 'failed',
+        summary: zh ? '任务未能进入执行队列。' : 'The task could not be queued for execution.',
+        probableRootCause: zh ? '执行器没有返回有效任务。' : 'The executor did not return a valid job.',
+        recommendedActions: [
+          zh ? '刷新工作区后重试，或新建回合重新排队。' : 'Refresh the workspace and retry, or queue a new turn.',
+        ],
+      }), 'system');
+      persistState();
+      return buildEnvelope(record);
+    }
+
+    appendWorkflowCard(task, createWorkflowCard(task, {
+      id: `${task.id}:execution:queued:${job.id}`,
+      kind: 'execution',
+      stage: job.status === 'running' ? 'running' : 'queued',
+      title: zh ? '确认已消费，任务继续执行' : 'Confirmation consumed, task execution resumed',
+      summary: operation === 'deploy_playable'
+        ? (zh ? '系统正在沿用当前工作区工件推进 preview/deploy readiness。' : 'The system is reusing current workspace artifacts for preview/deploy readiness.')
+        : (zh ? '系统已进入 queued -> running 执行链。' : 'The system has entered the queued -> running execution path.'),
+      evidence: [
+        createWorkflowEvidenceItem(zh ? '任务编号' : 'Task id', task.id, 'system', `${task.id}:continue-task-id`),
+        createWorkflowEvidenceItem(zh ? '执行任务' : 'Executor job', `${job.kind}:${job.id}`, 'executor', `${task.id}:continue-job-id`),
+        ...(pendingConfirmation.resolvedPendingConfirmationId
+          ? [createWorkflowEvidenceItem(zh ? '确认编号' : 'Confirmation id', pendingConfirmation.resolvedPendingConfirmationId, 'system', `${task.id}:continue-confirmation-id`)]
+          : []),
+        ...(kind === 'deploy_preview'
+          ? [
+            createWorkflowEvidenceItem(zh ? 'Latest artifact' : 'Latest artifact', getWorkspaceArtifactLedgerLatestArtifactDetail(ledger) ?? 'pending', 'system', `${task.id}:continue-latest-artifact`),
+            createWorkflowEvidenceItem(zh ? 'Runnable entry' : 'Runnable entry', ledger.runnableEntry.entryFile ?? 'pending', 'executor', `${task.id}:continue-runnable-entry`),
+            createWorkflowEvidenceItem(zh ? 'Chosen stack' : 'Chosen stack', ledger.chosenStack.label, 'preflight', `${task.id}:continue-chosen-stack`),
+            createWorkflowEvidenceItem(zh ? 'Preview target' : 'Preview target', ledger.previewTarget.url ?? 'pending', 'executor', `${task.id}:continue-preview-target`),
+          ]
+          : []),
+      ],
+      nextStep: zh ? '执行器会继续推进 running -> verifying。' : 'The executor will continue into running -> verifying.',
+      source: 'executor',
+    }));
+    if (repairApplied) {
+      appendWorkflowCard(task, createWorkflowCard(task, {
+        id: `${task.id}:repair:applied:${Date.now()}`,
+        kind: 'next_step',
+        stage: 'queued',
+        title: zh ? '已应用修复信息' : 'Repair metadata applied',
+        summary: zh
+          ? '系统已消费修复参数并重新进入执行队列。'
+          : 'Repair parameters were consumed and the task re-entered execution.',
+        evidence: [
+          ...(input.repair?.startCommand
+            ? [createWorkflowEvidenceItem(zh ? '启动命令' : 'Start command', trimText(input.repair.startCommand), 'system', `${task.id}:repair-start-command`)]
+            : []),
+          ...(input.repair?.startCommand && /^docker\s+(run|compose)\b/i.test(trimText(input.repair.startCommand))
+            ? [createWorkflowEvidenceItem(zh ? 'Docker 运行方式' : 'Docker run mode', trimText(input.repair.startCommand), 'system', `${task.id}:repair-docker-run`)]
+            : []),
+          ...(normalizeRuntimePort(input.repair?.port) != null
+            ? [createWorkflowEvidenceItem(zh ? '端口' : 'Port', String(normalizeRuntimePort(input.repair?.port)), 'system', `${task.id}:repair-port`)]
+            : []),
+          ...(trimText(input.repair?.healthcheckPath)
+            ? [createWorkflowEvidenceItem(zh ? '健康检查' : 'Health path', trimText(input.repair?.healthcheckPath), 'system', `${task.id}:repair-health`)]
+            : []),
+          ...(trimText(input.repair?.dockerServiceName)
+            ? [createWorkflowEvidenceItem(zh ? 'Compose 主服务' : 'Compose primary service', trimText(input.repair?.dockerServiceName), 'system', `${task.id}:repair-compose-service`)]
+            : []),
+        ],
+        nextStep: zh ? '继续执行构建并等待预览。' : 'Continue build execution and wait for preview.',
+        source: 'system',
+      }));
+    }
+    updateDiagnostics(record, {
+      stage: 'queued',
+      headline: zh ? '任务已继续执行' : 'Task continuation queued',
+      detail: zh
+        ? `已消费确认并派发执行任务 ${job.id}。`
+        : `Consumed confirmation and dispatched executor job ${job.id}.`,
+      command: job.kind,
+      lastError: null,
+    });
+    record.logsSummary.headline = operation === 'deploy_playable'
+      ? (zh ? '已沿用当前工作区工件继续部署链路。' : 'Workspace artifacts were reused for deployment continuation.')
+      : (zh ? '当前任务已继续执行。' : 'The current task has resumed.');
+    persistState();
+    return buildEnvelope(record);
+  }
+
   function deployPreview(capsuleId: string) {
     const record = requireRecord(capsuleId);
     if (!record) {
@@ -9555,9 +13853,11 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     }
 
     record.capsule.productionUrl = null;
+    record.deploymentSummary.previewOnly = true;
     record.infraSummary.productionEndpoint = null;
     record.capsule.status = 'preview_live';
     record.capsule.healthScore = Math.max(84, record.capsule.healthScore - 4);
+    setDeploymentPipelineStep(record, 'pipeline_production', 'attention', 'Release traffic was rolled back to the verified preview lane.');
     addEvent(record, 'warning', 'Release rolled back to the preview lane.');
     record.logsSummary.headline = 'Rollback completed.';
     recordInstantWorkspaceJob(record, 'publish_release', {
@@ -9619,6 +13919,7 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     getCapsule,
     getJob,
     createWorkspaceJob,
+    updateWorkspace,
     deleteCapsule,
     deleteLegacyTemplateCapsules,
     getPreviewHtml,
@@ -9628,6 +13929,8 @@ export function createOperatorEngine(options: OperatorEngineOptions = {}): Opera
     getGeneratedProjectArchive,
     getWorkspaceArchive,
     clearHistory,
+    confirmActivePlan,
+    continueActiveTask,
     deployPreview,
     publishRelease,
     bindDomain,

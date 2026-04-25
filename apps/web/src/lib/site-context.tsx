@@ -31,7 +31,12 @@ function defaultThemeForDomain(domain: ThemeDomain): Theme {
 }
 
 export function resolveThemeDomain(pathname: string): ThemeDomain {
-  return pathname.startsWith('/services') || pathname.startsWith('/affiliate')
+  return pathname.startsWith('/services')
+    || pathname.startsWith('/affiliate')
+    || pathname.startsWith('/operator')
+    || pathname.startsWith('/operator-lab')
+    || pathname.startsWith('/workspaces/')
+    || pathname.startsWith('/capsules/')
     ? 'console'
     : 'commerce';
 }

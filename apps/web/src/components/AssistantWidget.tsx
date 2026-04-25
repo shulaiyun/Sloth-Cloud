@@ -2252,7 +2252,7 @@ export function AssistantWidget() {
   }
 
   return (
-    <div className={`assistant-root ${open ? 'open' : ''} ${fullscreen ? 'assistant-root--fullscreen' : ''}`} style={rootStyle}>
+    <div className={`assistant-root ${open ? 'open' : ''} ${fullscreen ? 'assistant-root--fullscreen' : ''}`} data-testid="global-assistant-widget" style={rootStyle}>
       {open && fullscreen ? (
         <button
           aria-hidden="true"
