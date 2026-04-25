@@ -8,7 +8,7 @@ Run or verify:
 
 ```bash
 pnpm build
-pnpm test
+pnpm test:ci
 pnpm run secret:scan
 ```
 
@@ -34,6 +34,16 @@ Review especially carefully when a PR touches:
 - Preview verification, publishing, and health evidence
 - Dockerfiles and CI workflows
 
+## CI And Heavy Workflow Tests
+
+Public CI runs the regular test suite plus a small hosted-runner-safe Operator smoke subset. The full Operator workflow integration suite is still available as:
+
+```bash
+pnpm test:ci:operator
+```
+
+Run the full Operator suite before release, before changing deployment routing, or on a dedicated runner. It creates many temporary git repositories and polls async preview/workflow state, so it is intentionally not part of the default public hosted-runner CI gate.
+
 ## Release Flow
 
 1. Merge small, reviewed PRs into `main`.
@@ -50,4 +60,3 @@ If a contributor opens a PR with vendored upstream panel source or secrets:
 2. Ask them to remove the files from the branch history if secrets are involved.
 3. Rotate any exposed credentials.
 4. Point them to `docs/open-source-boundary.md` and `CONTRIBUTING.md`.
-

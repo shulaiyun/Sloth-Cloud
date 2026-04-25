@@ -7,8 +7,9 @@
     "build": "pnpm -r --filter @sloth-cloud/* build",
     "typecheck": "pnpm -r --filter @sloth-cloud/* typecheck",
     "test": "vitest run",
-    "test:ci": "pnpm test:ci:regular && pnpm test:ci:operator",
+    "test:ci": "pnpm test:ci:regular && pnpm test:ci:operator-smoke",
     "test:ci:regular": "vitest run --exclude apps/api/src/lib/operator-visible-workflow.test.ts",
+    "test:ci:operator-smoke": "vitest run apps/api/src/lib/operator-visible-workflow.test.ts -t \"confirm action advances task state|continue_current_task uses active pending id|generated artifact persists in workspace ledger\" --pool=forks --maxWorkers=1 --minWorkers=1 --testTimeout=60000",
     "test:ci:operator": "vitest run apps/api/src/lib/operator-visible-workflow.test.ts --pool=forks --maxWorkers=1 --minWorkers=1 --testTimeout=180000",
     "secret:scan": "bash scripts/secret-scan.sh"
   },
