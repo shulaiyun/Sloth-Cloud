@@ -7,6 +7,9 @@
     "build": "pnpm -r --filter @sloth-cloud/* build",
     "typecheck": "pnpm -r --filter @sloth-cloud/* typecheck",
     "test": "vitest run",
+    "test:ci": "pnpm test:ci:regular && pnpm test:ci:operator",
+    "test:ci:regular": "vitest run --exclude apps/api/src/lib/operator-visible-workflow.test.ts",
+    "test:ci:operator": "vitest run apps/api/src/lib/operator-visible-workflow.test.ts --pool=forks --maxWorkers=1 --minWorkers=1 --testTimeout=180000",
     "secret:scan": "bash scripts/secret-scan.sh"
   },
   "devDependencies": {
