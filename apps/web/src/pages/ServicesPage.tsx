@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { CountryFlagIcon } from '../components/FlagIcon';
 import { VisualIcon } from '../components/VisualIcon';
 import { requestJson, useApiData } from '../lib/api';
+import { useAuth } from '../lib/auth-context';
 import { toFriendlyError } from '../lib/friendly-error';
 import { localizeText } from '../lib/localized-text';
 import {
@@ -219,14 +220,20 @@ function operatorBusinessLabel(businessPath: string | null | undefined, locale: 
 
 export function ServicesPage() {
   const { text, locale, formatDate } = useSite();
+  const location = useLocation();
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const ui = getUiText(locale);
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const { data, error, loading } = useApiData<ServicesResponse>(`/api/v1/services?refresh=${refreshNonce}`);
+  const servicesPath = !authLoading && isAuthenticated
+    ? `/api/v1/services?refresh=${refreshNonce}`
+    : null;
+  const { data, error, loading } = useApiData<ServicesResponse>(servicesPath);
   const [runtimeSummaryMap, setRuntimeSummaryMap] = useState<Record<string, ServiceRowRuntimeSummary>>({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ServiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<ServiceSort>('status');
   const services = Array.isArray(data?.data) ? data.data : [];
+  const loginHref = `/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -388,8 +395,24 @@ export function ServicesPage() {
     };
   }, [visibleRuntimeServiceIds]);
 
-  if (loading) {
+  if (loading || authLoading) {
     return <div className="loading-card">{text.common.loading}</div>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <article className="empty-state">
+        <h3>{locale.startsWith('zh') ? '请先登录后查看服务' : 'Sign in to view your services'}</h3>
+        <p className="muted">
+          {locale.startsWith('zh')
+            ? '登录后即可查看实例状态、到期时间、运行状态和后续操作。'
+            : 'Sign in to access service status, renewal dates, runtime state, and follow-up actions.'}
+        </p>
+        <Link className="button primary" to={loginHref}>
+          {text.nav.login}
+        </Link>
+      </article>
+    );
   }
 
   if (error || !data) {
@@ -532,7 +555,7 @@ export function ServicesPage() {
                       {ui.services.viewRuntime}
                     </Link>
                     {operatorOrigin?.capsuleId ? (
-                      <Link className="button ghost" to={`/workspaces/${encodeURIComponent(operatorOrigin.capsuleId)}`}>
+                      <Link className="button ghost" to={`/operator/${encodeURIComponent(operatorOrigin.capsuleId)}`}>
                         {locale.startsWith('zh') ? '打开 AI 工作区' : 'Open AI workspace'}
                       </Link>
                     ) : null}

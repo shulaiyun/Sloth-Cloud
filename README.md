@@ -1,62 +1,90 @@
 # Sloth Cloud
 
-树懒云（Sloth Cloud）一期代码与文档工作区。
+Sloth Cloud is an AI-assisted cloud workbench for VPS storefronts, customer operations, and application deployment workflows.
 
-## 当前目标
+This public repository contains the Sloth Cloud-owned product shell:
 
-- 基于 `Paymenter` 管理 API 构建独立的 VPS 服务商客户端
-- 新代码全部放在 `apps/` 与 `docs/` 中，不改 Paymenter 主题
-- 一期只打通 Paymenter API 适配层，不接入 Proxmox 和真实 panel 控制逻辑
-- 先交付可运行原型，再逐步替换为真实接口与权限体系
+- `apps/web`: React/Vite customer console and AI workbench UI.
+- `apps/api`: Fastify BFF that normalizes upstream APIs and keeps provider credentials server-side.
+- `docs`: product, operator, readiness, and implementation notes.
+- `deploy/sloth-cloud/env/*.example`: safe configuration examples only.
 
-## 目录结构
+It does **not** vendor Paymenter, Convoy, OpenClaw, CLIProxyAPI, production databases, runtime workspaces, generated projects, backups, screenshots, or secrets.
 
-```text
-E:\vps
-├─ apps
-│  ├─ api               # Sloth Cloud BFF，隐藏 Paymenter token
-│  └─ web               # Sloth Cloud 客户端前端
-├─ docs                 # 项目说明、接口约定、实施计划
-├─ Paymenter-master     # 上游源码，保留参考
-└─ Convoy panel-develop # 上游源码，只读参考
-```
+## Open Source Boundary
 
-## 技术选型
+Sloth Cloud is designed as an integration layer. Upstream systems are external dependencies:
 
-- `apps/web`: React 19 + Vite 7 + TypeScript
-- `apps/api`: Fastify 5 + TypeScript
-- 共享策略: 一期先以清晰的 BFF contract 为核心，等接口稳定后再抽取共享 types package
-- 运行方式: `corepack pnpm`
-  说明: 若本机没有 `corepack`，直接使用 `pnpm` 即可
+- Paymenter: optional billing/storefront backend. If you deploy or modify Paymenter, keep its upstream license and notices.
+- Convoy: optional VPS/panel backend. Users must provide their own licensed Convoy deployment; this repository only contains a Convoy API adapter.
+- OpenClaw: optional always-on bot/orchestration layer. This repository only exposes connector surfaces.
+- CLI proxy / OpenAI-compatible APIs: optional model routing layer configured through environment variables.
 
-## 快速启动
+See [NOTICE.md](./NOTICE.md) and [docs/open-source-boundary.md](./docs/open-source-boundary.md) before publishing forks or production deployments.
 
-1. 安装依赖
+## Quick Start
 
 ```bash
 pnpm install
+pnpm build
+pnpm test
 ```
 
-2. 启动前端与 BFF
+For local development:
 
 ```bash
+cp apps/api/.env.example apps/api/.env
 pnpm dev
 ```
 
-3. 默认地址
+Default local ports:
 
-- Web: `http://localhost:3000`
+- Web: `http://localhost:3300`
 - API: `http://localhost:4000`
 
-## 环境变量
+## Configuration
 
-- API 示例: [apps/api/.env.example](E:\vps\apps\api\.env.example)
-- Web 示例: [apps/web/.env.example](E:\vps\apps\web\.env.example)
+Never commit real `.env` files. Start from examples:
 
-## 文档入口
+- API: [apps/api/.env.example](./apps/api/.env.example)
+- Web: [apps/web/.env.example](./apps/web/.env.example)
+- Deployment examples: [deploy/sloth-cloud/env](./deploy/sloth-cloud/env)
 
-- [项目说明](E:\vps\docs\project-overview.md)
-- [架构设计](E:\vps\docs\architecture.md)
-- [接口约定](E:\vps\docs\interface-contract.md)
-- [实施计划](E:\vps\docs\implementation-plan.md)
-- [Paymenter 接口缺口分析](E:\vps\docs\paymenter-gap-analysis.md)
+Assistant provider configuration is OpenAI-compatible:
+
+```env
+ASSISTANT_ENABLED=true
+ASSISTANT_PRIMARY_PROVIDER=openai
+ASSISTANT_OPENAI_BASE_URL=
+ASSISTANT_OPENAI_API_KEY=
+ASSISTANT_OPENAI_MODEL=gpt-5.4
+```
+
+In public/runtime mode, do not silently fall back to mock AI responses. If a provider is unavailable, the UI should state that execution is limited.
+
+## Repository Hygiene
+
+Before publishing or pushing changes:
+
+```bash
+pnpm run secret:scan
+```
+
+The scan blocks common high-risk leaks such as private keys, API keys, tokens, `.env` files, runtime workspaces, generated projects, and vendored upstream panel directories.
+
+## Community Maintenance
+
+Sloth Cloud is open to community maintenance around the public shell, BFF, operator workflow, adapter contracts, tests, and docs.
+
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR.
+- Read [GOVERNANCE.md](./GOVERNANCE.md) to understand maintainer decisions and repository boundaries.
+- Read [ROADMAP.md](./ROADMAP.md) for public maintenance priorities.
+- Read [docs/public-private-deployment.md](./docs/public-private-deployment.md) before wiring real production infrastructure.
+
+Please do not submit upstream panel source trees, production credentials, customer data, or private deployment state.
+
+## License
+
+Sloth Cloud-owned code in this repository is licensed under AGPL-3.0-or-later. See [LICENSE](./LICENSE).
+
+Third-party systems and dependencies keep their own licenses and are not relicensed by this repository.

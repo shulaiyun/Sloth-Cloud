@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an improvement that fits the public Sloth Cloud boundary.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please keep requests inside the public Sloth Cloud boundary. Do not request vendoring upstream panel source trees into this repository.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or maintainer problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Web UI
+        - API/BFF
+        - Operator
+        - Paymenter adapter
+        - Convoy adapter
+        - Assistant provider
+        - OpenClaw connector
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+

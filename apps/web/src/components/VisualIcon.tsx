@@ -1,53 +1,33 @@
-import { useMemo, useState } from 'react';
+import React from 'react';
 
 type VisualIconTone = 'teal' | 'blue' | 'violet' | 'amber' | 'emerald' | 'slate';
+type VisualIconSize = 'sm' | 'md' | 'lg';
 
 type VisualIconProps = {
+  glyph?: string | null;
+  label?: string | null;
+  size?: VisualIconSize;
   src?: string | null;
-  label: string;
-  glyph: string;
   tone?: VisualIconTone;
-  size?: 'sm' | 'md' | 'lg';
-  className?: string;
 };
 
-function isLikelyImageSource(src: string | null | undefined) {
-  if (!src) {
-    return false;
-  }
-
-  return /^(https?:)?\/\//.test(src) || src.startsWith('/') || src.startsWith('data:image/');
-}
-
 export function VisualIcon({
-  src = null,
-  label,
   glyph,
-  tone = 'slate',
+  label,
   size = 'md',
-  className,
+  src = null,
+  tone = 'teal',
 }: VisualIconProps) {
-  const [imageFailed, setImageFailed] = useState(false);
-  const canRenderImage = isLikelyImageSource(src) && !imageFailed;
-  const composedClassName = useMemo(() => {
-    const classes = ['visual-icon', `visual-icon--${tone}`, `visual-icon--${size}`];
-    if (className) {
-      classes.push(className);
-    }
-    return classes.join(' ');
-  }, [className, size, tone]);
+  const title = (label ?? '').trim();
 
   return (
-    <span aria-hidden="true" className={composedClassName} title={label}>
-      {canRenderImage ? (
-        <img
-          alt=""
-          className="visual-icon__image"
-          src={src ?? undefined}
-          onError={() => setImageFailed(true)}
-        />
+    <span className={`visual-icon visual-icon--${size} visual-icon--${tone}`} title={title || undefined}>
+      {src ? (
+        <img alt={title || 'icon'} className="visual-icon__image" loading="lazy" src={src} />
       ) : (
-        <span className="visual-icon__glyph">{glyph}</span>
+        <span aria-hidden="true" className="visual-icon__glyph">
+          {glyph || '◉'}
+        </span>
       )}
     </span>
   );

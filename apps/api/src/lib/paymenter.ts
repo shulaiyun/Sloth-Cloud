@@ -222,6 +222,95 @@ function readBoolean(value: unknown) {
   return false;
 }
 
+function createMockAuthToken(user: {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+}) {
+  const payload = Buffer.from(JSON.stringify({
+    email: user.email,
+    firstName: user.firstName ?? null,
+    lastName: user.lastName ?? null,
+  }), 'utf8').toString('base64url');
+
+  return `mock-access-token:${payload}`;
+}
+
+function parseMockAuthToken(token?: string) {
+  if (!token || !token.startsWith('mock-access-token:')) {
+    return null;
+  }
+
+  const encoded = token.slice('mock-access-token:'.length);
+  if (encoded.length === 0) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as {
+      email?: unknown;
+      firstName?: unknown;
+      lastName?: unknown;
+    };
+
+    const email = readNullableString(payload.email);
+    if (!email) {
+      return null;
+    }
+
+    return {
+      email,
+      firstName: readNullableString(payload.firstName),
+      lastName: readNullableString(payload.lastName),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function inferMockNamesFromEmail(email: string) {
+  const localPart = email.split('@')[0]?.trim() ?? '';
+  if (!localPart) {
+    return {
+      firstName: 'Local',
+      lastName: 'User',
+    };
+  }
+
+  const compact = localPart
+    .replace(/[._-]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  const [firstName, ...rest] = compact.length > 0 ? compact.split(' ') : [];
+
+  return {
+    firstName: firstName || 'Local',
+    lastName: rest.join(' ').trim() || 'User',
+  };
+}
+
+function createMockAuthUser(input: {
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+}): AuthUser {
+  const fallbackNames = inferMockNamesFromEmail(input.email);
+  const firstName = input.firstName?.trim() || fallbackNames.firstName;
+  const lastName = input.lastName?.trim() || fallbackNames.lastName;
+  const combinedName = `${firstName} ${lastName}`.trim();
+
+  return {
+    id: '1',
+    firstName,
+    lastName,
+    name: combinedName || input.email,
+    email: input.email,
+    emailVerifiedAt: null,
+    avatar: null,
+    properties: [],
+  };
+}
+
 function readArray<T>(value: unknown) {
   return Array.isArray(value) ? value as T[] : [];
 }
@@ -2131,21 +2220,19 @@ export function createGateway(config: GatewayConfig) {
 
     async login(input: LoginInput): Promise<SessionAuthResponse> {
       if (isMock) {
+        const user = createMockAuthUser({
+          email: input.email,
+        });
         return {
           message: 'Login successful (mock).',
           data: {
-            accessToken: 'mock-access-token',
+            accessToken: createMockAuthToken({
+              email: user.email,
+              firstName: user.firstName,
+              lastName: user.lastName,
+            }),
             tokenType: 'Bearer',
-            user: {
-              id: '1',
-              firstName: 'Sloth',
-              lastName: 'Cloud',
-              name: 'Sloth Cloud',
-              email: 'demo@slothcloud.test',
-              emailVerifiedAt: null,
-              avatar: null,
-              properties: [],
-            },
+            user,
           },
         };
       }
@@ -2174,21 +2261,21 @@ export function createGateway(config: GatewayConfig) {
 
     async register(input: RegisterInput): Promise<SessionAuthResponse> {
       if (isMock) {
+        const user = createMockAuthUser({
+          email: input.email,
+          firstName: input.firstName,
+          lastName: input.lastName,
+        });
         return {
           message: 'Registration successful (mock).',
           data: {
-            accessToken: 'mock-access-token',
+            accessToken: createMockAuthToken({
+              email: user.email,
+              firstName: user.firstName,
+              lastName: user.lastName,
+            }),
             tokenType: 'Bearer',
-            user: {
-              id: '1',
-              firstName: input.firstName,
-              lastName: input.lastName,
-              name: `${input.firstName} ${input.lastName}`.trim(),
-              email: input.email,
-              emailVerifiedAt: null,
-              avatar: null,
-              properties: [],
-            },
+            user,
           },
         };
       }
@@ -2220,18 +2307,14 @@ export function createGateway(config: GatewayConfig) {
 
     async me(token?: string): Promise<MeResponse> {
       if (isMock) {
+        const tokenUser = parseMockAuthToken(token);
         return {
           data: {
-            user: {
-              id: '1',
-              firstName: 'Sloth',
-              lastName: 'Cloud',
-              name: 'Sloth Cloud',
-              email: 'demo@slothcloud.test',
-              emailVerifiedAt: null,
-              avatar: null,
-              properties: [],
-            },
+            user: createMockAuthUser({
+              email: tokenUser?.email ?? 'demo@slothcloud.test',
+              firstName: tokenUser?.firstName ?? 'Sloth',
+              lastName: tokenUser?.lastName ?? 'Cloud',
+            }),
           },
         };
       }

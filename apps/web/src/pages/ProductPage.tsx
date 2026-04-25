@@ -668,7 +668,7 @@ export function ProductPage() {
   const shouldRedirectManagedProduct = productLineFor(undefined, productSlug) === 'managed-app'
     || productLine === 'managed-app';
   if (shouldRedirectManagedProduct) {
-    return <Navigate replace to="/operator" />;
+    return <Navigate replace to="/operator-lab" />;
   }
   const vpsMarketplaceCapability = product?.vpsAppMarketplace ?? null;
   const osFieldName = vpsMarketplaceCapability?.osFieldName ?? 'os';
@@ -1000,7 +1000,7 @@ export function ProductPage() {
       if (selected) {
         return {
           label: selected.name,
-          meta: parseNodeOption(selected),
+          meta: parseNodeOption(selected, locale),
         };
       }
     }
@@ -1010,7 +1010,7 @@ export function ProductPage() {
       if (selected) {
         return {
           label: selected.label,
-          meta: parseNodeOption(selected),
+          meta: parseNodeOption(selected, locale),
         };
       }
     }
@@ -1133,7 +1133,7 @@ export function ProductPage() {
         {option.children.length > 0 ? (
           <div className={`choice-grid ${variant === 'node' ? 'choice-grid--nodes' : ''}`}>
             {option.children.map((choice) => {
-              const nodeMeta = variant === 'node' ? parseNodeOption(choice) : null;
+              const nodeMeta = variant === 'node' ? parseNodeOption(choice, locale) : null;
 
               return (
                 <button
@@ -1184,7 +1184,7 @@ export function ProductPage() {
             </div>
             <div className={`choice-grid ${variant === 'node' ? 'choice-grid--nodes' : ''}`}>
               {field.options.map((option) => {
-                const nodeMeta = variant === 'node' ? parseNodeOption(option) : null;
+                const nodeMeta = variant === 'node' ? parseNodeOption(option, locale) : null;
                 const selected = checkoutStringValue(checkoutForm[field.name]) === option.value;
 
                 return (

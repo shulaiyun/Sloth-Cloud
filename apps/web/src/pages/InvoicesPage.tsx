@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { useApiData } from '../lib/api';
+import { useAuth } from '../lib/auth-context';
 import { toFriendlyError } from '../lib/friendly-error';
 import {
   getUiText,
@@ -17,12 +18,16 @@ type InvoiceSort = 'created-desc' | 'due-asc' | 'amount-desc' | 'amount-asc' | '
 
 export function InvoicesPage() {
   const { text, locale, formatDate } = useSite();
+  const location = useLocation();
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const ui = getUiText(locale);
-  const { data, error, loading } = useApiData<InvoicesResponse>('/api/v1/invoices');
+  const invoicesPath = !authLoading && isAuthenticated ? '/api/v1/invoices' : null;
+  const { data, error, loading } = useApiData<InvoicesResponse>(invoicesPath);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('all');
   const [sortBy, setSortBy] = useState<InvoiceSort>('created-desc');
   const invoices = data?.data ?? [];
+  const loginHref = `/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
 
   const statusOptions: Array<{ value: InvoiceStatusFilter; label: string }> = [
     { value: 'all', label: ui.common.allStatuses },
@@ -87,8 +92,24 @@ export function InvoicesPage() {
     });
   }, [invoices, search, sortBy, statusFilter]);
 
-  if (loading) {
+  if (loading || authLoading) {
     return <div className="loading-card">{text.common.loading}</div>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <article className="empty-state">
+        <h3>{locale.startsWith('zh') ? '请先登录后查看账单' : 'Sign in to view your invoices'}</h3>
+        <p className="muted">
+          {locale.startsWith('zh')
+            ? '登录后即可查看账单、付款状态、到期时间和支付入口。'
+            : 'Sign in to access invoices, payment status, due dates, and payment actions.'}
+        </p>
+        <Link className="button primary" to={loginHref}>
+          {text.nav.login}
+        </Link>
+      </article>
+    );
   }
 
   if (error || !data) {

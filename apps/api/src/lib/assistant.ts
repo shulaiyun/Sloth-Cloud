@@ -11,6 +11,7 @@ export type AssistantRole = 'system' | 'user' | 'assistant';
 
 export type AssistantActionKind =
   | 'create-launch-capsule'
+  | 'create-repo-workspace'
   | 'retry-provisioning'
   | 'restart-runtime'
   | 'stop-runtime'
@@ -29,6 +30,7 @@ export type AssistantActionRisk = 'low' | 'high';
 export interface AssistantContext {
   serviceId: string | null;
   invoiceId: string | null;
+  capsuleId: string | null;
   path: string | null;
   locale: string | null;
 }
@@ -53,10 +55,15 @@ export interface AssistantActionRequest {
   kind: AssistantActionKind;
   serviceId: string | null;
   invoiceId: string | null;
+  capsuleId?: string | null;
   projectName?: string | null;
+  repoUrl?: string | null;
+  notes?: string | null;
   idea?: string | null;
   audience?: string | null;
   businessGoal?: string | null;
+  planningMode?: 'on' | 'off';
+  taskMode?: 'continue' | 'new_turn';
   playbookId?: string | null;
   playbookName?: string | null;
   playbookScript?: string | null;
@@ -189,6 +196,7 @@ const defaultLogger = {
 
 const lowRiskActions = new Set<AssistantActionKind>([
   'create-launch-capsule',
+  'create-repo-workspace',
   'retry-provisioning',
   'restart-runtime',
   'sync-runtime',
@@ -276,6 +284,21 @@ function buildProposalText(
 ): Pick<AssistantActionProposal, 'title' | 'description'> {
   const sid = serviceId ?? '-';
   switch (kind) {
+    case 'create-repo-workspace':
+      return {
+        title: localize(locale, {
+          zh: '启动真实仓库部署工作区',
+          en: 'Start real repository deployment workspace',
+          ja: '実リポジトリ配備ワークスペースを開始',
+          ko: '실제 저장소 배포 작업 공간 시작',
+        }),
+        description: localize(locale, {
+          zh: '创建真实仓库工作区，自动识别技术栈、环境清单和预览链路；任何失败都会停在根因，不会伪造成功。',
+          en: 'Create a real repository workspace, infer the stack, render the environment checklist, and stop on the root cause if any step fails.',
+          ja: '実際のリポジトリ用ワークスペースを作成し、技術スタックと環境チェックリストを推論します。失敗時は根本原因で停止し、成功を偽装しません。',
+          ko: '실제 저장소 작업 공간을 만들고 기술 스택과 환경 체크리스트를 추론합니다. 실패 시 근본 원인에서 멈추며 가짜 성공을 보고하지 않습니다.',
+        }),
+      };
     case 'create-launch-capsule':
       return {
         title: localize(locale, {
@@ -659,6 +682,7 @@ async function requestLlm(
     `path=${input.context.path ?? '-'}`,
     `serviceId=${input.context.serviceId ?? '-'}`,
     `invoiceId=${input.context.invoiceId ?? '-'}`,
+    `capsuleId=${input.context.capsuleId ?? '-'}`,
     ...input.accountSummary.slice(0, 8),
     ...input.actionSummary.slice(0, 6),
     `proposals=${JSON.stringify(input.proposals.map((proposal) => ({
@@ -942,6 +966,7 @@ export class AssistantOrchestrator {
         context: {
           serviceId: null,
           invoiceId: null,
+          capsuleId: null,
           path: null,
           locale: null,
         },
@@ -1303,7 +1328,9 @@ export class AssistantOrchestrator {
 
     return ordered.map((provider) => ({
       ...provider,
-      model: resolvedModel,
+      model: selectedModel && provider.name === selectedModel.provider
+        ? resolvedModel
+        : provider.model,
     }));
   }
 
@@ -1501,6 +1528,7 @@ export class AssistantOrchestrator {
     const merged: AssistantContext = {
       serviceId: incoming.serviceId !== undefined ? normalizeServiceId(String(incoming.serviceId ?? '')) : current.serviceId,
       invoiceId: incoming.invoiceId !== undefined ? normalizeWhitespace(String(incoming.invoiceId ?? '')) || null : current.invoiceId,
+      capsuleId: incoming.capsuleId !== undefined ? normalizeWhitespace(String(incoming.capsuleId ?? '')) || null : current.capsuleId,
       path: incoming.path !== undefined ? normalizeWhitespace(String(incoming.path ?? '')) || null : current.path,
       locale: incoming.locale !== undefined ? normalizeWhitespace(String(incoming.locale ?? '')) || null : current.locale,
     };

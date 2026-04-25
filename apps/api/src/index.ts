@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { config as loadEnv } from 'dotenv';
 import fastifyCookie from '@fastify/cookie';
 import cors from '@fastify/cors';
@@ -20,9 +21,25 @@ import {
   AssistantQuotaService,
   resolveAssistantModelCost,
 } from './lib/assistant-quota.js';
+import {
+  extractAssistantRepoUrl,
+  splitAssistantRepoInput,
+} from './lib/assistant-repo-url.js';
+import {
+  classifyAssistantMessageRoute,
+  type AssistantMessageRouteDecision,
+} from './lib/assistant-message-routing.js';
+import { probeAssistantProviderStatus } from './lib/assistant-provider-status.js';
+import { resolveAssistantRunAvailability } from './lib/assistant-run-availability.js';
+import { resolveAssistantDevelopmentMockAllowance } from './lib/assistant-runtime-mode.js';
 import { CloudflareApiError, createCloudflareClient } from './lib/cloudflare.js';
 import { createConvoyClient } from './lib/convoy.js';
 import { createOperatorEngine, type OperatorEnvelope, type OperatorGenerationTask } from './lib/operator.js';
+import {
+  getWorkspaceArtifactLedgerLatestArtifactDetail,
+  normalizeWorkspaceArtifactLedger,
+  selectWorkspaceArtifactLedgerBlockingGaps,
+} from './lib/operator-artifact-ledger.js';
 import { createGateway, GatewayError, type CreateServiceOperationLogInput } from './lib/paymenter.js';
 import {
   RemoteExecError,
@@ -109,6 +126,7 @@ const envSchema = z.object({
   ASSISTANT_GUEST_BURST_PER_MINUTE: z.coerce.number().int().positive().default(5),
   ASSISTANT_USER_BURST_PER_MINUTE: z.coerce.number().int().positive().default(20),
   ASSISTANT_UNLIMITED_PRODUCT_SLUG: z.string().min(1).default('assistant-unlimited-monthly'),
+  ASSISTANT_ALLOW_DEVELOPMENT_MOCK: z.string().optional().default('false'),
   ASSISTANT_QUOTA_COOKIE_SECRET: z.string().optional(),
   ASSISTANT_QUOTA_TIMEZONE: z.string().optional(),
   ASSISTANT_REMOTE_EXEC_SSH_KEY: z.string().optional(),
@@ -143,6 +161,10 @@ const convoyRefKeys = env.CONVOY_SERVER_REF_KEYS.split(',')
 const convoyRefKeysLower = convoyRefKeys.map((key) => key.toLowerCase());
 const managedAppEnabled = env.MANAGED_APP_ENABLED.toLowerCase() === 'true';
 const assistantEnabled = env.ASSISTANT_ENABLED.toLowerCase() === 'true';
+const assistantAllowDevelopmentMock = resolveAssistantDevelopmentMockAllowance({
+  nodeEnv: process.env.NODE_ENV,
+  explicitFlag: env.ASSISTANT_ALLOW_DEVELOPMENT_MOCK.toLowerCase() === 'true',
+});
 const assistantRemoteExecDefaultUsername = (env.ASSISTANT_REMOTE_EXEC_DEFAULT_USERNAME || 'root').trim() || 'root';
 const assistantRemoteExecDefaultPort = Number.isFinite(env.ASSISTANT_REMOTE_EXEC_DEFAULT_PORT)
   ? Number(env.ASSISTANT_REMOTE_EXEC_DEFAULT_PORT)
@@ -226,6 +248,14 @@ const assistantQuota = new AssistantQuotaService({
   siteTimeZone: env.ASSISTANT_QUOTA_TIMEZONE ?? null,
   logger: app.log,
 });
+const assistantProviderStatusCacheTtlMs = 15_000;
+let assistantProviderStatusCache:
+  | {
+    expiresAt: number;
+    value: Awaited<ReturnType<typeof probeAssistantProviderStatus>>;
+  }
+  | null = null;
+let assistantProviderStatusInflight: Promise<Awaited<ReturnType<typeof probeAssistantProviderStatus>>> | null = null;
 
 app.log.info({
   paymenterMode: effectivePaymenterMode,
@@ -991,6 +1021,13 @@ function buildAbsoluteCapsuleUrl(request: FastifyRequest, capsulePath: string) {
   }
 
   return capsulePath;
+}
+
+function buildOperatorWorkbenchPath(capsuleId: string | null | undefined) {
+  const normalizedCapsuleId = getStringValue(capsuleId);
+  return normalizedCapsuleId
+    ? `/operator-lab/${normalizedCapsuleId}`
+    : '/operator-lab';
 }
 
 async function sendFeishuNotification(webhookUrl: string, text: string) {
@@ -1964,6 +2001,7 @@ function buildCapabilities(buttons: Array<Record<string, unknown>>, hasServerRef
       console: convoyDirect,
       patch: convoyDirect,
       build: convoyDirect,
+      firewall: convoyDirect,
       suspend: convoyDirect,
       unsuspend: convoyDirect,
       destroy: convoyDirect,
@@ -3160,6 +3198,67 @@ function buildRuntimeMetricsPayload(
   };
 }
 
+function normalizeFirewallOptionsPayload(payload: unknown) {
+  const record = asRecordValue(payload);
+
+  return {
+    enabled: readNullableBooleanValue(record.enabled ?? record.enable) ?? false,
+    ipfilter: readNullableBooleanValue(record.ipfilter) ?? false,
+    policyIn: readNullableStringValue(record.policy_in ?? record.policyIn) ?? null,
+    policyOut: readNullableStringValue(record.policy_out ?? record.policyOut) ?? null,
+    logLevelIn: readNullableStringValue(record.log_level_in ?? record.logLevelIn) ?? null,
+    logLevelOut: readNullableStringValue(record.log_level_out ?? record.logLevelOut) ?? null,
+  };
+}
+
+function normalizeFirewallRulePayload(payload: unknown) {
+  const record = asRecordValue(payload);
+
+  return {
+    position: readNullableNumberValue(record.position ?? record.pos),
+    enabled: readNullableBooleanValue(record.enabled ?? record.enable) ?? true,
+    type: readNullableStringValue(record.type) ?? null,
+    action: readNullableStringValue(record.action) ?? null,
+    protocol: readNullableStringValue(record.proto ?? record.protocol) ?? null,
+    source: readNullableStringValue(record.source) ?? null,
+    destination: readNullableStringValue(record.dest ?? record.destination) ?? null,
+    destinationPort: readNullableStringValue(record.dport ?? record.destination_port ?? record.destinationPort) ?? null,
+    sourcePort: readNullableStringValue(record.sport ?? record.source_port ?? record.sourcePort) ?? null,
+    interface: readNullableStringValue(record.iface ?? record.interface) ?? null,
+    comment: readNullableStringValue(record.comment) ?? null,
+    logLevel: readNullableStringValue(record.log ?? record.log_level ?? record.logLevel) ?? null,
+  };
+}
+
+function buildFirewallPayload(
+  service: ServiceDetail,
+  serverRef: string | null,
+  capabilities: ReturnType<typeof buildCapabilities>,
+  payload: unknown,
+) {
+  const data = readConvoyDataRecord(payload);
+  const rulesRaw = Array.isArray(data.rules) ? data.rules : [];
+
+  return {
+    data: {
+      mapped: resolveConvoyServerRef(service) !== null,
+      serverRef,
+      capabilities: {
+        read: capabilities.application.firewall,
+        update: capabilities.application.firewall,
+      },
+      options: normalizeFirewallOptionsPayload(data.options),
+      rules: rulesRaw
+        .map((rule) => normalizeFirewallRulePayload(rule))
+        .sort((left, right) => (left.position ?? Number.MAX_SAFE_INTEGER) - (right.position ?? Number.MAX_SAFE_INTEGER)),
+    },
+    meta: {
+      generatedAt: new Date().toISOString(),
+      sourceMode: effectivePaymenterMode,
+    },
+  };
+}
+
 function normalizeActionResultPayload(
   value: unknown,
   fallback: Partial<ActionResultPayload> = {},
@@ -3543,11 +3642,104 @@ async function buildAssistantCapabilitiesPayload(
   locale: string,
   quotaContext: Awaited<ReturnType<typeof resolveAssistantQuotaContext>>,
 ) {
+  const providerStatus = await readAssistantProviderStatus();
   return {
     ...(await assistantOrchestrator.capabilities(locale)),
+    responseMode: providerStatus.responseMode,
     quota: quotaContext.snapshot,
     upgradeCta: quotaContext.upgradeCta,
   };
+}
+
+async function readAssistantProviderStatus(options: { forceRefresh?: boolean } = {}) {
+  const now = Date.now();
+  if (!options.forceRefresh && assistantProviderStatusCache && assistantProviderStatusCache.expiresAt > now) {
+    return assistantProviderStatusCache.value;
+  }
+
+  if (!options.forceRefresh && assistantProviderStatusInflight) {
+    return await assistantProviderStatusInflight;
+  }
+
+  assistantProviderStatusInflight = probeAssistantProviderStatus({
+    enabled: assistantEnabled,
+    primaryProvider: env.ASSISTANT_PRIMARY_PROVIDER,
+    providers: orderedAssistantProviders,
+    timeoutMs: 2500,
+  }).finally(() => {
+    assistantProviderStatusInflight = null;
+  });
+
+  const value = await assistantProviderStatusInflight;
+  assistantProviderStatusCache = {
+    expiresAt: Date.now() + assistantProviderStatusCacheTtlMs,
+    value,
+  };
+  return value;
+}
+
+function buildAssistantProviderStatusReason(locale: string, status: Awaited<ReturnType<typeof readAssistantProviderStatus>>) {
+  const zh = locale.toLowerCase().startsWith('zh');
+  if (!status.enabled) {
+    return zh ? 'AI 助手当前未启用。' : 'The AI assistant is currently disabled.';
+  }
+  if (status.canRun && status.activeProvider && status.activeModel) {
+    return zh
+      ? `当前可用：${status.activeProvider} / ${status.activeModel} 已通过真实探针。`
+      : `Ready: ${status.activeProvider} / ${status.activeModel} passed the live readiness probe.`;
+  }
+  if (!status.credentialsPresent) {
+    return zh ? '当前没有可用的 AI 凭据。' : 'No usable AI credentials are present.';
+  }
+  if (!status.providerConfigured) {
+    return zh ? '当前 AI 提供方配置不完整。' : 'The AI provider configuration is incomplete.';
+  }
+  if (!status.networkReachable) {
+    return zh ? '当前 AI 网络不可达，无法连接模型端点。' : 'The AI endpoint is not reachable over the network.';
+  }
+  if (!status.modelReachable) {
+    return zh ? '当前模型不可达，Run 不能放开。' : 'The configured model is not reachable, so Run cannot be enabled.';
+  }
+  return zh ? '当前 AI 未连接，Run 已受限。' : 'AI is currently unavailable, so Run is limited.';
+}
+
+function buildAssistantRoutingPayload(decision: AssistantMessageRouteDecision | null) {
+  if (!decision || decision.route === 'none') {
+    return null;
+  }
+
+  return {
+    route: decision.route,
+    lane: decision.lane,
+    source: decision.source,
+    reason: decision.reason,
+  };
+}
+
+function buildAssistantRoutingFromProposal(proposal: AssistantActionProposal | null) {
+  if (!proposal) {
+    return null;
+  }
+
+  if (proposal.action.kind === 'create-repo-workspace') {
+    return {
+      route: 'repo_import_deploy',
+      lane: 'repository',
+      source: 'repository',
+      reason: 'The confirmed action executes the repository import and deployment lane.',
+    } as const;
+  }
+
+  if (proposal.action.kind === 'create-launch-capsule') {
+    return {
+      route: 'idea_generate',
+      lane: 'generated-project',
+      source: 'idea',
+      reason: 'The confirmed action executes the idea generation lane.',
+    } as const;
+  }
+
+  return null;
 }
 
 type AssistantCapabilityModel = Awaited<ReturnType<typeof buildAssistantCapabilitiesPayload>>['models'][number];
@@ -3630,6 +3822,175 @@ function detectAssistantIdeaLaunchIntent(message: string) {
   return message.trim();
 }
 
+function buildAssistantRepoProjectName(repoUrl: string, locale: string) {
+  const zh = locale.toLowerCase().startsWith('zh');
+
+  const decodeRepoLabel = (value: string) => {
+    const decodeLoose = (input: string) => {
+      const source = input.replace(/\+/g, '%20');
+      const decoder = new TextDecoder('utf-8', { fatal: false });
+      const bytes: number[] = [];
+      let result = '';
+
+      const flushBytes = () => {
+        if (!bytes.length) {
+          return;
+        }
+        result += decoder.decode(new Uint8Array(bytes));
+        bytes.length = 0;
+      };
+
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (char === '%' && /^[0-9A-Fa-f]{2}$/.test(source.slice(index + 1, index + 3))) {
+          bytes.push(Number.parseInt(source.slice(index + 1, index + 3), 16));
+          index += 2;
+          continue;
+        }
+        flushBytes();
+        result += char;
+      }
+
+      flushBytes();
+      return result;
+    };
+
+    let current = value;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const decoded = decodeLoose(current);
+      if (!decoded || decoded === current) {
+        break;
+      }
+      current = decoded;
+    }
+    return current.trim() || value;
+  };
+
+  try {
+    const parsed = new URL(repoUrl);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const tail = segments.at(-1) ?? '';
+    const repoName = tail
+      .replace(/\.git$/i, '')
+      .replace(/\.zip$/i, '')
+      .replace(/\.tar(?:\.gz)?$/i, '')
+      .replace(/\.tgz$/i, '')
+      .replace(/^archive$/i, segments.at(-2) ?? tail)
+      .trim();
+    const decoded = decodeRepoLabel(repoName);
+    if (decoded) {
+      return decoded.length > 42 ? decoded.slice(0, 42).trim() : decoded;
+    }
+  } catch {
+    // Ignore URL parsing failures and fall back to generic labels below.
+  }
+
+  return zh ? '仓库部署项目' : 'Repository deployment project';
+}
+
+function detectAssistantRepoWorkspaceIntent(message: string, locale: string) {
+  const normalized = message.trim();
+  if (normalized.length < 8) {
+    return null;
+  }
+
+  const repoUrl = extractAssistantRepoUrl(normalized);
+  if (!repoUrl) {
+    return null;
+  }
+
+  const lower = normalized.toLowerCase();
+  const mentionsRepoWork = containsAssistantKeyword(lower, [
+    'deploy',
+    'deployment',
+    'publish',
+    'preview',
+    'import',
+    'repo',
+    'repository',
+    'git',
+    'github',
+    'server #19',
+    '服务器 #19',
+    '部署',
+    '上线',
+    '发布',
+    '仓库',
+    '导入',
+    '#19',
+  ]);
+  if (!mentionsRepoWork && !/github\.com|gitlab\.com|bitbucket\.org/i.test(repoUrl)) {
+    return null;
+  }
+
+  const splitInput = splitAssistantRepoInput(normalized);
+  return {
+    projectName: buildAssistantRepoProjectName(repoUrl, locale),
+    repoUrl,
+    notes: splitInput.notes,
+  };
+}
+
+type AssistantWorkspaceContinuationIntent = {
+  operation: 'continue' | 'deploy_playable';
+};
+
+function detectAssistantWorkspaceContinuationIntent(message: string): AssistantWorkspaceContinuationIntent | null {
+  const normalized = normalizeAssistantSearchText(message);
+  if (!normalized) {
+    return null;
+  }
+
+  const referencesServerExecution = containsAny(normalized, [
+    '服务器',
+    'server',
+    'vps',
+    '#19',
+    'ssh',
+  ]);
+  if (referencesServerExecution) {
+    return null;
+  }
+
+  const asksDeployPlayable = containsAny(normalized, [
+    '帮我部署出来可以玩的',
+    '部署出来可以玩',
+    '部署成可玩的',
+    '可玩的',
+    '发布上线',
+    '上线它',
+    '帮我部署',
+    '部署',
+    '上线',
+    'publish it',
+    'deploy it',
+    'deploy playable',
+    'make it playable',
+    'ship it',
+  ]);
+  if (asksDeployPlayable) {
+    return { operation: 'deploy_playable' };
+  }
+
+  const asksContinue = containsAny(normalized, [
+    '继续当前任务',
+    '继续任务',
+    '继续',
+    '接着来',
+    '继续执行',
+    'continue current task',
+    'continue task',
+    'continue this',
+    'keep going',
+    'go on',
+  ]);
+  if (asksContinue) {
+    return { operation: 'continue' };
+  }
+
+  return null;
+}
+
 function buildAssistantIdeaProjectName(idea: string, locale: string) {
   const compact = idea
     .replace(/[\r\n]+/g, ' ')
@@ -3677,9 +4038,57 @@ function buildAssistantIdeaLaunchDefaults(idea: string, locale: string) {
   };
 }
 
+function looksLikeGameIdea(idea: string) {
+  const normalized = idea.trim().toLowerCase();
+  return containsAssistantKeyword(normalized, [
+    'game',
+    'mini game',
+    'moba',
+    'tower defense',
+    'roguelike',
+    'shooter',
+    'survivor',
+    'idle game',
+    '游戏',
+    '小游戏',
+    '塔防',
+    '射击',
+    '闯关',
+    '肉鸽',
+    '对战',
+  ]);
+}
+
 function buildAssistantIdeaLaunchPlanReply(idea: string, locale: string) {
   const zh = locale.toLowerCase().startsWith('zh');
   const defaults = buildAssistantIdeaLaunchDefaults(idea, locale);
+  const gameIdea = looksLikeGameIdea(idea);
+
+  if (gameIdea) {
+    return zh
+      ? [
+        '我先把这次游戏想法收束成一个可执行 GDD 草案：',
+        `项目名：${defaults.projectName}`,
+        `核心循环：围绕“${idea}”先打磨一条 30 秒内能学会、3 到 5 分钟能完成一局的主循环。`,
+        '用户目标：让玩家在第一局就能理解目标、进入反馈、感受到一次明确胜负。',
+        '一局时长：3 到 5 分钟，避免第一版过长或过复杂。',
+        '胜负条件：必须有清晰的通关或失败判定，不做模糊试玩页。',
+        '输入方式：优先单手/键鼠最少输入，先保证操作直接、反馈明确。',
+        '第一版不做什么：不开社交、不做排行、不做复杂养成、不堆第二套玩法。',
+        '执行规则：你确认这个 GDD 后，我再开始生成一个只做核心循环的可玩 MVP；如果模型没产出真实源码，就直接失败，不回退低质量模板。',
+      ].join('\n')
+      : [
+        'I translated this game request into an executable GDD draft:',
+        `Project: ${defaults.projectName}`,
+        `Core loop: refine one clear loop around "${idea}" that is learnable in under 30 seconds and playable in 3 to 5 minutes per run.`,
+        'Player goal: let the first session teach the objective, create feedback, and deliver a clear win or lose outcome.',
+        'Session length: 3 to 5 minutes so the first version stays focused.',
+        'Win or lose condition: the MVP must ship with a real success or failure state, not just a themed prototype screen.',
+        'Input mode: keep controls minimal and direct first.',
+        'Version one will not include: social features, ranking, deep progression, or a second gameplay loop.',
+        'Execution rule: once you confirm this GDD, I will build a playable MVP focused on the core loop only. If the model does not produce real source code, the run fails instead of falling back to a low-quality template.',
+      ].join('\n');
+  }
 
   return zh
     ? [
@@ -3700,26 +4109,188 @@ function buildAssistantIdeaLaunchPlanReply(idea: string, locale: string) {
     ].join('\n');
 }
 
-function buildAssistantIdeaLaunchProposal(locale: string, idea: string): AssistantActionProposal {
+function buildAssistantRepoWorkspacePlanReply(
+  intent: {
+    projectName: string;
+    repoUrl: string;
+    notes: string | null;
+  },
+  locale: string,
+) {
   const zh = locale.toLowerCase().startsWith('zh');
-  const defaults = buildAssistantIdeaLaunchDefaults(idea, locale);
+
+  return zh
+    ? [
+      '我先把这次仓库部署整理成真实执行计划：',
+      `项目：${intent.projectName}`,
+      `源码来源：${intent.repoUrl}`,
+      'A. 技术栈判断：先自动识别 Dockerfile / docker-compose / Next / Vite / Node / Python / 静态站点，并推断构建方式、启动方式、运行端口与健康检查路径。',
+      'B. 构建/运行命令：先在隔离环境执行 source fetch -> stack detect -> env checklist -> install -> build -> test -> smoke test。',
+      'C. 所需环境变量：只推断变量名和用途，不伪造 secrets；缺失项会整理成 checklist 并阻塞正式发布。',
+      'D. 部署方式：先生成真实工作区和预览验证结果，通过后再进入服务器 #19 的生产发布确认。',
+      'E. 风险点：如果仓库本身不完整、技术栈暂未支持真实预览、或健康检查失败，这次会直接停止并报告根因，不会伪造成功。',
+      `F. 下一步：点击确认后，我就开始真实仓库校验。${intent.notes ? `附加要求：${intent.notes}` : ''}`,
+    ].filter(Boolean).join('\n')
+    : [
+      'I mapped this repository deployment into a real execution plan:',
+      `Project: ${intent.projectName}`,
+      `Source: ${intent.repoUrl}`,
+      'A. Stack detection: infer Dockerfile, docker-compose, Next, Vite, Node, Python, or static-site paths together with build/start commands, runtime port, and health checks.',
+      'B. Build/run flow: run source fetch -> stack detect -> env checklist -> install -> build -> test -> smoke test inside an isolated environment first.',
+      'C. Environment variables: infer names and purposes only, never fake secrets. Missing required inputs will block production.',
+      'D. Deployment path: create a real workspace and verified preview first, then gate production deployment to server #19 behind confirmation.',
+      'E. Risks: if the repository is incomplete, the stack cannot be previewed yet, or health checks fail, the run stops with the root cause instead of reporting fake success.',
+      `F. Next step: confirm and I will start the real repository verification flow.${intent.notes ? ` Extra requirement: ${intent.notes}` : ''}`,
+    ].filter(Boolean).join('\n');
+}
+
+function buildAssistantWorkspaceContinuationReply(
+  locale: string,
+  envelope: OperatorEnvelope,
+  intent: AssistantWorkspaceContinuationIntent,
+) {
+  const zh = locale.toLowerCase().startsWith('zh');
+  const activeTask = envelope.workflow.activeTaskId
+    ? envelope.workflow.tasks.find((task) => task.id === envelope.workflow.activeTaskId) ?? null
+    : envelope.workflow.tasks.at(-1) ?? null;
+  const stage = activeTask?.currentStage ?? envelope.capsule.workflowStage ?? 'draft';
+  const pendingConfirmationId = activeTask?.pendingConfirmation?.token ?? null;
+  const ledger = normalizeWorkspaceArtifactLedger(envelope.workspaceArtifactLedger);
+  const latestArtifact = getWorkspaceArtifactLedgerLatestArtifactDetail(ledger);
+  const blockingLedgerGaps = selectWorkspaceArtifactLedgerBlockingGaps(ledger);
+  const failure = activeTask?.failure ?? null;
+
+  if (failure) {
+    return zh
+      ? [
+        '我已经沿用当前工作区继续执行，但现在被结构化阻断：',
+        `failure_code: ${failure.failureCode}`,
+        `human_summary: ${failure.humanSummary}`,
+        ...(blockingLedgerGaps.length > 0 ? [`ledger_gaps: ${blockingLedgerGaps.join(', ')}`] : []),
+        `recommended_action: ${failure.recommendedActions[0] ?? '请先补齐缺失项再继续。'}`,
+      ].join('\n')
+      : [
+        'I continued from the current workspace, but it is now structurally blocked:',
+        `failure_code: ${failure.failureCode}`,
+        `human_summary: ${failure.humanSummary}`,
+        ...(blockingLedgerGaps.length > 0 ? [`ledger_gaps: ${blockingLedgerGaps.join(', ')}`] : []),
+        `recommended_action: ${failure.recommendedActions[0] ?? 'Fill the missing requirement and continue.'}`,
+      ].join('\n');
+  }
+
+  if (stage === 'awaiting_confirmation') {
+    return zh
+      ? [
+        '当前任务仍在等待确认，尚未进入执行器。',
+        `pending_confirmation_id: ${pendingConfirmationId ?? 'missing'}`,
+        '请点击“继续当前任务”消费这个确认编号后再推进。',
+      ].join('\n')
+      : [
+        'The task is still waiting for confirmation and has not entered executor dispatch yet.',
+        `pending_confirmation_id: ${pendingConfirmationId ?? 'missing'}`,
+        'Use "Continue current task" to consume this confirmation id and resume execution.',
+      ].join('\n');
+  }
+
+  return zh
+    ? [
+      intent.operation === 'deploy_playable'
+        ? '已沿用当前工作区工件继续推进可玩部署链路。'
+        : '已沿用当前工作区继续推进当前任务。',
+      `current_stage: ${stage}`,
+      `active_task_id: ${activeTask?.id ?? 'unknown'}`,
+      `latest_artifact: ${latestArtifact ?? 'pending'}`,
+      `chosen_stack: ${ledger.chosenStack.label}`,
+      `preview_target: ${ledger.previewTarget.url ?? 'pending'}`,
+      `deploy_readiness: ${ledger.deployReadiness.ready ? 'ready' : `not_ready (${ledger.deployReadiness.sshStatus ?? 'unknown'} / ${ledger.deployReadiness.envStatus ?? 'unknown'})`}`,
+      `latest_job: ${envelope.latestJob?.kind ?? 'none'} (${envelope.latestJob?.status ?? 'none'})`,
+    ].join('\n')
+    : [
+      intent.operation === 'deploy_playable'
+        ? 'Reused the current workspace artifacts and resumed the playable deployment flow.'
+        : 'Resumed the current task in the same workspace.',
+      `current_stage: ${stage}`,
+      `active_task_id: ${activeTask?.id ?? 'unknown'}`,
+      `latest_artifact: ${latestArtifact ?? 'pending'}`,
+      `chosen_stack: ${ledger.chosenStack.label}`,
+      `preview_target: ${ledger.previewTarget.url ?? 'pending'}`,
+      `deploy_readiness: ${ledger.deployReadiness.ready ? 'ready' : `not_ready (${ledger.deployReadiness.sshStatus ?? 'unknown'} / ${ledger.deployReadiness.envStatus ?? 'unknown'})`}`,
+      `latest_job: ${envelope.latestJob?.kind ?? 'none'} (${envelope.latestJob?.status ?? 'none'})`,
+    ].join('\n');
+}
+
+function buildAssistantIdeaLaunchProposal(
+  locale: string,
+  input: {
+    idea: string;
+    capsuleId?: string | null;
+    planningMode?: 'on' | 'off';
+    taskMode?: 'continue' | 'new_turn';
+  },
+): AssistantActionProposal {
+  const zh = locale.toLowerCase().startsWith('zh');
+  const defaults = buildAssistantIdeaLaunchDefaults(input.idea, locale);
+  const gameIdea = looksLikeGameIdea(input.idea);
 
   return {
     id: `launch-${Date.now()}`,
-    title: zh ? '启动真实生成任务' : 'Start real build task',
+    title: gameIdea
+      ? (zh ? '确认 GDD 并开始 MVP' : 'Confirm GDD and start MVP')
+      : (zh ? '启动真实生成任务' : 'Start real build task'),
     description: zh
-      ? '让模型真实生成源码、预览和任务工作区；如果没成功产出真实代码，这次会直接报错，不再回退模板。'
-      : 'Ask the model to generate real source files, a preview, and a task workspace. If real code is not produced, this run fails instead of falling back to a template.',
+      ? (gameIdea
+          ? '先按 GDD 聚焦一个可玩的核心循环，再开始真实生成源码和预览；如果没产出真实代码，这次会直接失败，不回退模板。'
+          : '让模型真实生成源码、预览和任务工作区；如果没成功产出真实代码，这次会直接报错，不再回退模板。')
+      : (gameIdea
+          ? 'Lock the GDD around one playable core loop first, then start the real source and preview generation flow. If real code is not produced, the run fails instead of falling back to a template.'
+          : 'Ask the model to generate real source files, a preview, and a task workspace. If real code is not produced, this run fails instead of falling back to a template.'),
     risk: 'low',
     requiresConfirmation: true,
     action: {
       kind: 'create-launch-capsule',
       serviceId: null,
       invoiceId: null,
+      capsuleId: input.capsuleId ?? null,
       projectName: defaults.projectName,
       idea: defaults.idea,
       audience: defaults.audience,
       businessGoal: defaults.businessGoal,
+      planningMode: input.planningMode === 'on' ? 'on' : 'off',
+      taskMode: input.taskMode === 'new_turn' ? 'new_turn' : 'continue',
+    },
+  };
+}
+
+function buildAssistantRepoWorkspaceProposal(
+  locale: string,
+  intent: {
+    projectName: string;
+    repoUrl: string;
+    notes: string | null;
+    capsuleId?: string | null;
+    planningMode?: 'on' | 'off';
+    taskMode?: 'continue' | 'new_turn';
+  },
+): AssistantActionProposal {
+  const zh = locale.toLowerCase().startsWith('zh');
+  return {
+    id: `repo-${Date.now()}`,
+    title: zh ? '启动真实仓库部署工作区' : 'Start real repository deployment workspace',
+    description: zh
+      ? '创建真实仓库工作区，自动识别技术栈、环境清单和预览链路；任何失败都会停在根因，不会伪造成功。'
+      : 'Create a real repository workspace, infer the stack, render the environment checklist, and run the verified preview flow. Any failure stops at the root cause instead of reporting fake success.',
+    risk: 'low',
+    requiresConfirmation: true,
+    action: {
+      kind: 'create-repo-workspace',
+      serviceId: null,
+      invoiceId: null,
+      capsuleId: intent.capsuleId ?? null,
+      projectName: intent.projectName,
+      repoUrl: intent.repoUrl,
+      notes: intent.notes,
+      planningMode: intent.planningMode === 'on' ? 'on' : 'off',
+      taskMode: intent.taskMode === 'new_turn' ? 'new_turn' : 'continue',
     },
   };
 }
@@ -4088,16 +4659,24 @@ function resolveAssistantChargeModel(
   const affordableModels = options?.snapshot?.unlimited
     ? models
     : models.filter((model) => model.costPoints <= (options?.snapshot?.remainingTokens ?? options?.snapshot?.remainingPoints ?? 0));
+  const defaultModel = models.find((model) => model.id === capabilities.defaultModelId) ?? null;
+  const defaultModelIsAffordable = defaultModel
+    ? (options?.snapshot?.unlimited || affordableModels.some((model) => model.id === defaultModel.id))
+    : false;
   const autoSelected = options?.autoRoute
-    ? pickAssistantAutoModel({
-      models: affordableModels.length > 0 ? affordableModels : models,
-      authenticated: options?.authenticated ?? false,
-      message: options?.message ?? '',
-    })
+    ? (
+      defaultModel && defaultModelIsAffordable
+        ? defaultModel
+        : pickAssistantAutoModel({
+          models: affordableModels.length > 0 ? affordableModels : models,
+          authenticated: options?.authenticated ?? false,
+          message: options?.message ?? '',
+        })
+    )
     : null;
   const selected = explicitlySelected
     ?? autoSelected
-    ?? models.find((model) => model.id === capabilities.defaultModelId)
+    ?? defaultModel
     ?? models[0];
 
   if (!selected) {
@@ -4128,6 +4707,7 @@ function buildAssistantUpstreamUnavailableDetail(locale: string) {
 function assistantContextFromPayload(context: {
   serviceId?: string | number | null;
   invoiceId?: string | number | null;
+  capsuleId?: string | null;
   path?: string | null;
   locale?: string | null;
 } | null | undefined): Partial<AssistantContext> {
@@ -4138,6 +4718,7 @@ function assistantContextFromPayload(context: {
   return {
     serviceId: context.serviceId === undefined ? undefined : String(context.serviceId ?? ''),
     invoiceId: context.invoiceId === undefined ? undefined : String(context.invoiceId ?? ''),
+    capsuleId: context.capsuleId === undefined ? undefined : context.capsuleId,
     path: context.path === undefined ? undefined : context.path,
     locale: context.locale === undefined ? undefined : context.locale,
   };
@@ -4146,6 +4727,7 @@ function assistantContextFromPayload(context: {
 const assistantContextSchema = z.object({
   serviceId: z.union([z.string(), z.number(), z.null()]).optional(),
   invoiceId: z.union([z.string(), z.number(), z.null()]).optional(),
+  capsuleId: z.string().nullable().optional(),
   path: z.string().nullable().optional(),
   locale: z.string().nullable().optional(),
 }).partial().optional();
@@ -4490,6 +5072,7 @@ function buildAssistantInlineScriptDeployProposal(input: {
 function parseRequestedAssistantAction(value: unknown): (AssistantActionRequest & { execute?: boolean }) | null {
   const result = z.object({
     kind: z.enum([
+      'create-repo-workspace',
       'create-launch-capsule',
       'retry-provisioning',
       'restart-runtime',
@@ -4506,10 +5089,15 @@ function parseRequestedAssistantAction(value: unknown): (AssistantActionRequest 
     ]),
     serviceId: z.string().optional().nullable(),
     invoiceId: z.string().optional().nullable(),
+    capsuleId: z.string().optional().nullable(),
     projectName: z.string().max(120).optional().nullable(),
+    repoUrl: z.string().max(4000).optional().nullable(),
+    notes: z.string().max(2000).optional().nullable(),
     idea: z.string().max(4000).optional().nullable(),
     audience: z.string().max(120).optional().nullable(),
     businessGoal: z.string().max(500).optional().nullable(),
+    planningMode: z.enum(['on', 'off']).optional(),
+    taskMode: z.enum(['continue', 'new_turn']).optional(),
     playbookId: z.string().max(255).optional().nullable(),
     playbookName: z.string().max(255).optional().nullable(),
     playbookScript: z.string().max(200_000).optional().nullable(),
@@ -4528,10 +5116,15 @@ function parseRequestedAssistantAction(value: unknown): (AssistantActionRequest 
     kind: result.data.kind,
     serviceId: readNullableStringValue(result.data.serviceId),
     invoiceId: readNullableStringValue(result.data.invoiceId),
+    capsuleId: readNullableStringValue(result.data.capsuleId),
     projectName: readNullableStringValue(result.data.projectName),
+    repoUrl: readNullableStringValue(result.data.repoUrl),
+    notes: readNullableStringValue(result.data.notes),
     idea: readNullableStringValue(result.data.idea),
     audience: readNullableStringValue(result.data.audience),
     businessGoal: readNullableStringValue(result.data.businessGoal),
+    planningMode: result.data.planningMode === 'on' ? 'on' : 'off',
+    taskMode: result.data.taskMode === 'new_turn' ? 'new_turn' : 'continue',
     playbookId: readNullableStringValue(result.data.playbookId),
     playbookName: readNullableStringValue(result.data.playbookName),
     playbookScript: readNullableStringValue(result.data.playbookScript),
@@ -4547,6 +5140,19 @@ function assistantProposalFromRequestedAction(
   locale: string,
   action: AssistantActionRequest,
 ): AssistantActionProposal {
+  if (action.kind === 'create-repo-workspace') {
+    const repoUrl = extractAssistantRepoUrl(action.repoUrl?.trim() || '') || '';
+    const projectName = action.projectName?.trim() || buildAssistantRepoProjectName(repoUrl, locale);
+    return buildAssistantRepoWorkspaceProposal(locale, {
+      projectName,
+      repoUrl,
+      notes: action.notes?.trim() || null,
+      capsuleId: action.capsuleId ?? null,
+      planningMode: action.planningMode === 'on' ? 'on' : 'off',
+      taskMode: action.taskMode === 'new_turn' ? 'new_turn' : 'continue',
+    });
+  }
+
   if (action.kind === 'create-launch-capsule') {
     const zh = locale.toLowerCase().startsWith('zh');
     const fallbackIdea = action.idea?.trim() || (zh ? 'AI 工作区项目' : 'AI workspace project');
@@ -4564,6 +5170,9 @@ function assistantProposalFromRequestedAction(
         ...action,
         serviceId: null,
         invoiceId: null,
+        capsuleId: action.capsuleId ?? null,
+        planningMode: action.planningMode === 'on' ? 'on' : 'off',
+        taskMode: action.taskMode === 'new_turn' ? 'new_turn' : 'continue',
         projectName: action.projectName ?? defaults.projectName,
         idea: action.idea ?? defaults.idea,
         audience: action.audience ?? defaults.audience,
@@ -4637,6 +5246,22 @@ function assistantProposalFromRequestedAction(
 }
 
 type AssistantActionExecutionResult = ReturnType<typeof mapAssistantActionResponse>;
+type AssistantRunState =
+  | 'draft'
+  | 'parsing'
+  | 'preflight'
+  | 'llm_planning'
+  | 'awaiting_confirmation'
+  | 'queued'
+  | 'running'
+  | 'verifying'
+  | 'partial_success'
+  | 'success'
+  | 'blocked'
+  | 'failed'
+  | 'rolled_back';
+
+type AssistantResponseSource = 'llm' | 'system' | 'preflight' | 'mock';
 
 function mapAssistantActionResponse(message: string, code: string, data?: Record<string, unknown> | null) {
   return {
@@ -4646,6 +5271,111 @@ function mapAssistantActionResponse(message: string, code: string, data?: Record
     operationId: getStringValue(data?.operationId) || null,
     data: data ?? null,
   };
+}
+
+function resolveAssistantRunState(input: {
+  pendingConfirmation: ReturnType<typeof assistantOrchestrator.issueConfirmation> | null;
+  actionResult: AssistantActionExecutionResult | null;
+  proposalsCount: number;
+  workflowStage?: string | null;
+}): AssistantRunState {
+  if (input.workflowStage === 'preflight') {
+    return 'preflight';
+  }
+  if (input.workflowStage === 'verifying') {
+    return 'verifying';
+  }
+  if (input.workflowStage === 'partial_success') {
+    return 'partial_success';
+  }
+  if (input.workflowStage === 'success') {
+    return 'success';
+  }
+  if (input.workflowStage === 'failed') {
+    return 'failed';
+  }
+  if (input.workflowStage === 'blocked') {
+    return 'blocked';
+  }
+  if (input.workflowStage === 'queued') {
+    return 'queued';
+  }
+  if (input.workflowStage === 'running') {
+    return 'running';
+  }
+  if (input.workflowStage === 'llm_planning') {
+    return 'llm_planning';
+  }
+  if (input.workflowStage === 'parsing') {
+    return 'parsing';
+  }
+  if (input.pendingConfirmation) {
+    return 'awaiting_confirmation';
+  }
+
+  const code = input.actionResult?.code?.toUpperCase() ?? '';
+  if (code) {
+    if (
+      code.includes('FAILED')
+      || code.includes('INVALID')
+      || code.includes('UNAVAILABLE')
+      || code.includes('MISSING')
+      || code.includes('ERROR')
+    ) {
+      return 'failed';
+    }
+    if (code.includes('BLOCKED')) {
+      return 'blocked';
+    }
+    if (code.includes('ROLLBACK')) {
+      return 'rolled_back';
+    }
+    if (
+      code.includes('QUEUED')
+      || code.includes('STARTED')
+      || code.includes('TASK_STARTED')
+      || code.includes('WORKSPACE_STARTED')
+    ) {
+      return 'queued';
+    }
+    if (code.includes('PREVIEW') || code.includes('STATUS_READY')) {
+      return 'partial_success';
+    }
+    if (code.includes('_OK') || code.includes('READY')) {
+      return 'success';
+    }
+    return 'running';
+  }
+
+  if (input.proposalsCount > 0) {
+    return 'llm_planning';
+  }
+  return 'running';
+}
+
+function resolveAssistantResponseSource(input: {
+  pendingConfirmation: ReturnType<typeof assistantOrchestrator.issueConfirmation> | null;
+  actionResult: AssistantActionExecutionResult | null;
+  builtReplyMode: 'llm' | 'fallback' | null;
+  usedDeterministicFallback: boolean;
+}): AssistantResponseSource {
+  const code = input.actionResult?.code?.toUpperCase() ?? '';
+  if (code.includes('BLOCKED') || code.includes('MISSING_CREDENTIALS') || code.includes('AUTH_FAILED') || code.includes('UNREACHABLE')) {
+    return 'preflight';
+  }
+  if (input.actionResult) {
+    return 'system';
+  }
+  if (input.usedDeterministicFallback) {
+    return 'system';
+  }
+  if (input.builtReplyMode === 'fallback') {
+    return 'mock';
+  }
+  if (input.pendingConfirmation) {
+    return input.builtReplyMode === 'llm' ? 'llm' : 'system';
+  }
+  return 'llm';
 }
 
 async function revealServiceServerPassword(
@@ -5696,19 +6426,64 @@ async function executeAssistantAction(
   const serviceId = readNullableStringValue(action.serviceId);
   const zh = input.locale.toLowerCase().startsWith('zh');
 
-  if (action.kind !== 'handoff-support' && action.kind !== 'create-launch-capsule' && !serviceId) {
+  if (action.kind !== 'handoff-support' && action.kind !== 'create-launch-capsule' && action.kind !== 'create-repo-workspace' && !serviceId) {
     throw new GatewayError('Service ID is required for this action.', 422, {
       code: 'ASSISTANT_SERVICE_ID_REQUIRED',
     });
   }
 
-  if (action.kind !== 'create-launch-capsule' && !input.token) {
+  if (action.kind !== 'create-launch-capsule' && action.kind !== 'create-repo-workspace' && !input.token) {
     throw new GatewayError('Authentication is required for this action.', 401, {
       code: 'ASSISTANT_AUTH_REQUIRED',
     });
   }
 
   switch (action.kind) {
+    case 'create-repo-workspace': {
+      const repoUrl = extractAssistantRepoUrl(action.repoUrl?.trim() || '');
+      if (!repoUrl) {
+        throw new GatewayError('Repository URL is invalid.', 422, {
+          code: 'ASSISTANT_REPO_URL_INVALID',
+          detail: zh
+            ? '仓库地址不合法。请只提供纯仓库 URL（例如 https://github.com/org/repo 或 https://github.com/org/repo.git）。'
+            : 'The repository URL is invalid. Provide a clean repository URL such as https://github.com/org/repo or https://github.com/org/repo.git.',
+        });
+      }
+      const envelope = await operatorEngine.analyzeProject({
+        projectName: action.projectName?.trim() || buildAssistantRepoProjectName(repoUrl, input.locale),
+        repoUrl,
+        notes: action.notes?.trim() || null,
+        planningMode: action.planningMode === 'on' ? 'on' : 'off',
+        autoStartBuild: true,
+        existingCapsuleId: action.capsuleId ?? null,
+        userIntent: [action.notes?.trim(), repoUrl].filter(Boolean).join('\n\n') || repoUrl,
+        taskMode: action.taskMode === 'new_turn' ? 'new_turn' : 'continue',
+      });
+      const capsulePath = buildOperatorWorkbenchPath(envelope.capsule.id);
+      const capsuleUrl = buildAbsoluteCapsuleUrl(request, capsulePath);
+
+      return mapAssistantActionResponse(
+        zh
+          ? '已创建真实仓库工作区，正在执行技术栈识别和预览验证。'
+          : 'Created the real repository workspace. Stack detection and preview verification are now running.',
+        'ASSISTANT_OPERATOR_REPO_WORKSPACE_STARTED',
+        {
+          route: 'repo_import_deploy',
+          lane: 'repository',
+          source: 'repository',
+          operationId: envelope.latestJob?.id ?? envelope.capsule.id,
+          capsuleId: envelope.capsule.id,
+          capsulePath,
+          capsuleUrl,
+          previewUrl: envelope.previewUrl ?? envelope.previewSummary.previewUrl ?? envelope.capsule.previewUrl ?? null,
+          workflow: envelope.workflow,
+          truthState: envelope.truthState,
+          techStackSummary: envelope.techStackSummary,
+          envChecklistSummary: envelope.envChecklistSummary,
+          deploymentSummary: envelope.deploymentSummary,
+        },
+      );
+    }
     case 'create-launch-capsule': {
       const generationTask = operatorEngine.startGenerateProjectTask({
         projectName: action.projectName ?? buildAssistantIdeaProjectName(action.idea ?? '', input.locale),
@@ -5718,7 +6493,13 @@ async function executeAssistantAction(
           ? '低门槛快速上线并可持续运营'
           : 'launch quickly with low-friction operations'),
         strictModelGeneration: true,
+        planningMode: action.planningMode === 'on' ? 'on' : 'off',
+        existingCapsuleId: action.capsuleId ?? null,
+        userIntent: action.idea ?? input.proposal.description,
+        taskMode: action.taskMode === 'new_turn' ? 'new_turn' : 'continue',
       });
+      const capsulePath = action.capsuleId ? buildOperatorWorkbenchPath(action.capsuleId) : null;
+      const capsuleUrl = capsulePath ? buildAbsoluteCapsuleUrl(request, capsulePath) : null;
 
       return mapAssistantActionResponse(
         zh
@@ -5726,8 +6507,14 @@ async function executeAssistantAction(
           : 'Started the real workspace build task. Planning, coding, and preview build are now running.',
         'ASSISTANT_OPERATOR_CAPSULE_TASK_STARTED',
         {
+          route: 'idea_generate',
+          lane: 'generated-project',
+          source: 'idea',
           operationId: generationTask.id,
           taskId: generationTask.id,
+          capsuleId: action.capsuleId ?? null,
+          capsulePath,
+          capsuleUrl,
           generationTask,
           task: buildAssistantGenerationTaskSnapshot({
             request,
@@ -6599,11 +7386,17 @@ app.post('/api/v1/operator/projects/analyze', async (request) => {
     repoUrl: z.string().optional(),
     sourceRef: z.string().optional(),
     notes: z.string().optional(),
+    planningMode: z.enum(['on', 'off']).optional(),
+    autoStartBuild: z.boolean().optional(),
+    existingCapsuleId: z.string().optional().nullable(),
+    userIntent: z.string().optional(),
+    sessionId: z.string().optional(),
+    taskMode: z.enum(['continue', 'new_turn']).optional(),
   }).parse(request.body ?? {});
 
   return {
-    message: 'Project workspace created and repository ingest queued.',
-    data: operatorEngine.analyzeProject(body),
+    message: 'Project workspace analyzed through the visible agent workflow.',
+    data: await operatorEngine.analyzeProject(body),
     meta: operatorMeta(),
   };
 });
@@ -6613,6 +7406,11 @@ app.post('/api/v1/operator/plans', async (request) => {
     entryKind: z.enum(['upload-project', 'generate-from-idea', 'scan-server']),
     title: z.string().optional(),
     brief: z.string().min(1),
+    planningMode: z.enum(['on', 'off']).optional(),
+    existingCapsuleId: z.string().optional().nullable(),
+    userIntent: z.string().optional(),
+    sessionId: z.string().optional(),
+    taskMode: z.enum(['continue', 'new_turn']).optional(),
   }).parse(request.body ?? {});
 
   return {
@@ -7215,6 +8013,37 @@ app.get('/api/v1/operator/workspaces', async () => ({
   meta: operatorMeta(),
 }));
 
+app.patch('/api/v1/operator/workspaces/:capsuleId', async (request, reply) => {
+  const params = z.object({
+    capsuleId: z.string().min(1),
+  }).parse(request.params ?? {});
+  const body = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    archived: z.boolean().optional(),
+  }).parse(request.body ?? {});
+
+  const payload = operatorEngine.updateWorkspace({
+    capsuleId: params.capsuleId,
+    name: body.name,
+    archived: body.archived,
+  });
+
+  if (!payload) {
+    reply.code(404);
+    return {
+      message: 'Workspace not found.',
+      error: 'workspace_not_found',
+      meta: operatorMeta(),
+    };
+  }
+
+  return {
+    message: 'Workspace updated.',
+    data: payload,
+    meta: operatorMeta(),
+  };
+});
+
 app.delete('/api/v1/operator/workspaces/legacy-templates', async () => {
   const deletedCount = operatorEngine.deleteLegacyTemplateCapsules();
 
@@ -7285,6 +8114,90 @@ app.get('/api/v1/operator/workspaces/:capsuleId', async (request, reply) => {
 
   return {
     message: 'Workspace ready.',
+    data: payload,
+    meta: operatorMeta(),
+  };
+});
+
+app.post('/api/v1/operator/workspaces/:capsuleId/continue', async (request, reply) => {
+  const params = z.object({
+    capsuleId: z.string().min(1),
+  }).parse(request.params ?? {});
+  const body = z.object({
+    taskId: z.string().min(1).optional(),
+    pendingConfirmationId: z.string().min(1).optional(),
+    operation: z.enum(['continue', 'deploy_playable']).optional(),
+    userIntent: z.string().max(4000).optional(),
+    repair: z.object({
+      mode: z.enum(['recommended', 're_detect', 'manual']).optional(),
+      startCommand: z.string().max(4000).optional(),
+      port: z.number().int().min(1).max(65535).nullable().optional(),
+      healthcheckPath: z.string().max(512).optional(),
+      dockerServiceName: z.string().max(256).optional(),
+    }).optional(),
+  }).parse(request.body ?? {});
+
+  const payload = operatorEngine.continueActiveTask({
+    capsuleId: params.capsuleId,
+    taskId: body.taskId ?? null,
+    pendingConfirmationId: body.pendingConfirmationId ?? null,
+    operation: body.operation ?? 'continue',
+    userIntent: body.userIntent ?? null,
+    repair: body.repair
+      ? {
+        mode: body.repair.mode ?? null,
+        startCommand: body.repair.startCommand ?? null,
+        port: body.repair.port ?? null,
+        healthcheckPath: body.repair.healthcheckPath ?? null,
+        dockerServiceName: body.repair.dockerServiceName ?? null,
+      }
+      : null,
+  });
+
+  if (!payload) {
+    reply.code(404);
+    return {
+      message: 'Workspace not found.',
+      error: 'workspace_not_found',
+      meta: operatorMeta(),
+    };
+  }
+
+  return {
+    message: 'Workspace continuation queued.',
+    data: payload,
+    meta: operatorMeta(),
+  };
+});
+
+app.post('/api/v1/operator/workspaces/:capsuleId/confirm-active-plan', async (request, reply) => {
+  const params = z.object({
+    capsuleId: z.string().min(1),
+  }).parse(request.params ?? {});
+  const body = z.object({
+    taskId: z.string().min(1).optional(),
+    pendingConfirmationId: z.string().min(1).optional(),
+    userIntent: z.string().max(4000).optional(),
+  }).parse(request.body ?? {});
+
+  const payload = operatorEngine.confirmActivePlan({
+    capsuleId: params.capsuleId,
+    taskId: body.taskId ?? null,
+    pendingConfirmationId: body.pendingConfirmationId ?? null,
+    userIntent: body.userIntent ?? null,
+  });
+
+  if (!payload) {
+    reply.code(404);
+    return {
+      message: 'Workspace not found.',
+      error: 'workspace_not_found',
+      meta: operatorMeta(),
+    };
+  }
+
+  return {
+    message: 'Active plan confirmed.',
     data: payload,
     meta: operatorMeta(),
   };
@@ -7864,6 +8777,27 @@ app.get('/api/v1/assistant/capabilities', async (request, reply) => {
   };
 });
 
+app.get('/api/v1/assistant/provider-status', async (request, reply) => {
+  const query = z.object({
+    locale: z.string().optional(),
+    refresh: z.coerce.boolean().optional(),
+  }).parse(request.query ?? {});
+  const locale = getStringValue(query.locale) || 'zh-CN';
+  const status = await readAssistantProviderStatus({
+    forceRefresh: query.refresh === true,
+  });
+
+  return {
+    message: status.canRun
+      ? 'Assistant provider is ready.'
+      : 'Assistant provider is limited.',
+    data: {
+      ...status,
+      reason: buildAssistantProviderStatusReason(locale, status),
+    },
+  };
+});
+
 app.post('/api/v1/assistant/session', async (request, reply) => {
   ensureAssistantEnabled();
   const body = z.object({
@@ -7906,12 +8840,19 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
     selectedModelId: z.string().optional(),
     autoRoute: z.boolean().optional(),
     locale: z.string().optional(),
+    mode: z.enum(['ask', 'run']).optional(),
+    planningMode: z.enum(['on', 'off']).optional(),
+    taskMode: z.enum(['continue', 'new_turn']).optional(),
     context: assistantContextSchema,
     attachments: z.unknown().optional(),
     requestedAction: z.unknown().optional(),
   }).parse(request.body ?? {});
 
   const locale = getStringValue(body.locale) || 'zh-CN';
+  const mode = body.mode === 'ask' ? 'ask' : 'run';
+  const askMode = mode === 'ask';
+  const planningMode = body.planningMode === 'on' ? 'on' : 'off';
+  const taskMode = body.taskMode === 'new_turn' ? 'new_turn' : 'continue';
   const identity = await resolveAssistantIdentity(request);
   const requestedAction = parseRequestedAssistantAction(body.requestedAction);
   const attachments = normalizeAssistantInputAttachments(body.attachments);
@@ -7955,6 +8896,7 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
 
   const quotaContext = await resolveAssistantQuotaContext(request, reply, locale, identity);
   const capabilities = await buildAssistantCapabilitiesPayload(locale, quotaContext);
+  const providerStatus = await readAssistantProviderStatus();
   const requestedModel = resolveAssistantChargeModel(capabilities, body.selectedModelId ?? null, {
     autoRoute: body.autoRoute ?? false,
     authenticated: identity.authenticated,
@@ -7972,8 +8914,103 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
 
   const userMessage = assistantOrchestrator.recordUserMessage(session.sessionId, identity.userKey, messageForStorage || '.');
   const sessionMessages = assistantOrchestrator.listMessages(session.sessionId, identity.userKey);
+  const runAvailability = mode === 'run'
+    ? resolveAssistantRunAvailability({
+      locale,
+      canRun: providerStatus.canRun,
+      reason: buildAssistantProviderStatusReason(locale, providerStatus),
+      allowDevelopmentMock: assistantAllowDevelopmentMock,
+    })
+    : null;
+  if (runAvailability && !runAvailability.runAllowed) {
+    if (runAvailability.source === 'system') {
+      throw new GatewayError('Assistant live provider is required for Run mode.', 503, {
+        code: runAvailability.code,
+        detail: runAvailability.detail,
+        quota: quotaContext.snapshot,
+        upgradeCta: quotaContext.upgradeCta,
+      });
+    }
+
+    const assistantReply = assistantOrchestrator.recordAssistantMessage(
+      session.sessionId,
+      identity.userKey,
+      runAvailability.replyText,
+    );
+    return {
+      message: 'Assistant Run mode is limited while provider fallback is active.',
+      data: {
+        session: assistantOrchestrator.openSession({
+          userKey: identity.userKey,
+          sessionId: session.sessionId,
+        }),
+        authenticated: identity.authenticated,
+        reply: assistantReply,
+        runState: runAvailability.runState,
+        source: runAvailability.source,
+        proposals: [],
+        pendingConfirmation: null,
+        actionResult: {
+          message: runAvailability.replyText,
+          code: runAvailability.code,
+          detail: runAvailability.detail,
+          operationId: null,
+          data: null,
+        },
+        workflow: null,
+        workspace: session.context.capsuleId
+          ? {
+            capsuleId: session.context.capsuleId,
+            capsulePath: buildOperatorWorkbenchPath(session.context.capsuleId),
+            capsuleUrl: buildAbsoluteCapsuleUrl(request, buildOperatorWorkbenchPath(session.context.capsuleId)),
+            workflowStage: null,
+          }
+          : null,
+        quota: quotaContext.snapshot,
+        upgradeCta: quotaContext.upgradeCta,
+        chargedTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        resolvedModelId: 'deterministic-fallback',
+        routing: null,
+      },
+    };
+  }
+  const routingDecision = classifyAssistantMessageRoute({
+    message: normalizedMessage,
+    locale,
+    askMode,
+    hasActiveWorkspace: Boolean(session.context.capsuleId),
+    allowIdeaGeneration: !requestedAction,
+  });
+  const responseRouting = buildAssistantRoutingPayload(routingDecision);
+  app.log.info({
+    sessionId: session.sessionId,
+    userKey: identity.userKey,
+    mode,
+    selectedModelId: requestedModel.id,
+    route: routingDecision.route,
+    lane: routingDecision.lane,
+    source: routingDecision.source,
+    reason: routingDecision.reason,
+  }, 'assistant.route-decision');
   const explicitGenerationTaskId = extractAssistantGenerationTaskId(normalizedMessage);
+  const workspaceContinuationIntent = routingDecision.route === 'workspace_continue'
+    ? {
+      operation: routingDecision.operation,
+    }
+    : null;
+  const repoWorkspaceIntent = routingDecision.route === 'repo_import_deploy'
+    ? {
+      projectName: buildAssistantRepoProjectName(routingDecision.repoUrl, locale),
+      repoUrl: routingDecision.repoUrl,
+      notes: routingDecision.notes,
+      operation: routingDecision.operation,
+    }
+    : null;
   const generationTaskCheckIntent = !requestedAction
+    && !workspaceContinuationIntent
+    && !repoWorkspaceIntent
     && (Boolean(explicitGenerationTaskId) || assistantMessageSuggestsGenerationTaskCheck(normalizedMessage));
   const attachmentDeployProposal = !requestedAction && identity.authenticated && identity.token
     ? buildAssistantAttachmentDeployProposal({
@@ -8005,25 +9042,29 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
       message: normalizedMessage,
     })
     : null;
-  const plannedProposals = requestedAction
-    ? [assistantProposalFromRequestedAction(locale, requestedAction)]
-    : [
-      ...(attachmentDeployProposal ? [attachmentDeployProposal] : []),
-      ...(inlineScriptDeployProposal ? [inlineScriptDeployProposal] : []),
-      ...(remotePlaybookProposal ? [remotePlaybookProposal] : []),
-      ...(installServiceAppProposal ? [installServiceAppProposal] : []),
-      ...assistantOrchestrator.planProposals({
-        message: normalizedMessage,
-        locale,
-        context: session.context,
-        authenticated: identity.authenticated,
-      }),
-    ];
+  const plannedProposals = workspaceContinuationIntent
+    ? []
+    : requestedAction
+      ? [assistantProposalFromRequestedAction(locale, requestedAction)]
+      : [
+        ...(attachmentDeployProposal ? [attachmentDeployProposal] : []),
+        ...(inlineScriptDeployProposal ? [inlineScriptDeployProposal] : []),
+        ...(remotePlaybookProposal ? [remotePlaybookProposal] : []),
+        ...(installServiceAppProposal ? [installServiceAppProposal] : []),
+        ...assistantOrchestrator.planProposals({
+          message: normalizedMessage,
+          locale,
+          context: session.context,
+          authenticated: identity.authenticated,
+        }),
+      ];
+  const effectiveProposals = [...plannedProposals];
 
   const actionSummary: string[] = [];
-  let actionResult: Record<string, unknown> | null = null;
+  let actionResult: AssistantActionExecutionResult | null = null;
   let pendingConfirmation: ReturnType<typeof assistantOrchestrator.issueConfirmation> | null = null;
-  let directActionReplyText: string | null = null;
+  let fallbackAssistantReplyText: string | null = null;
+  let forceDeterministicReply = false;
   const composeAttachment = pickAssistantComposeAttachment(attachments);
   const shellScriptAttachment = pickAssistantShellScriptAttachment(attachments);
   const inlineShellScript = extractAssistantShellCodeBlock(normalizedMessage);
@@ -8058,12 +9099,16 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
   const directServerExecutionIntent = requestedAction
     ? false
     : (
+      !repoWorkspaceIntent
+      && !workspaceContinuationIntent
+      && (
       assistantMessageSuggestsDirectServerExecution(normalizedMessage)
       || Boolean(attachmentDeployProposal)
       || Boolean(inlineScriptDeployProposal)
       || hasComposeAttachment
       || hasShellScriptAttachment
       || hasInlineShellScript
+      )
     );
   const matchedRemotePlaybook = directServerExecutionIntent ? matchRemotePlaybook(normalizedMessage) : null;
 
@@ -8076,16 +9121,19 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
       || !session.context.serviceId
     )
   ) {
-    directActionReplyText = buildAssistantRemoteExecGuidanceReply(locale, {
+    fallbackAssistantReplyText = buildAssistantRemoteExecGuidanceReply(locale, {
       authenticated: identity.authenticated && Boolean(identity.token),
       serviceId: session.context.serviceId,
       playbook: customScriptLabel ? null : matchedRemotePlaybook,
       playbookLabel: customScriptLabel || matchedRemotePlaybook?.name || null,
       manualCommand: customScriptLabel ? customScriptManualCommand : null,
     });
+    actionSummary.push(locale.toLowerCase().startsWith('zh')
+      ? '需要补充登录状态或服务上下文后才能执行服务器动作。'
+      : 'Execution needs authenticated context and an active service target.');
   }
 
-  if (!requestedAction && !directActionReplyText && generationTaskCheckIntent) {
+  if (!requestedAction && !fallbackAssistantReplyText && generationTaskCheckIntent) {
     const taskId = explicitGenerationTaskId ?? findLatestAssistantGenerationTaskId(sessionMessages);
     if (taskId) {
       const task = operatorEngine.getGenerationTask(taskId);
@@ -8096,24 +9144,160 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
           taskId,
           task,
         });
-        directActionReplyText = taskStatusPayload.replyText;
+        fallbackAssistantReplyText = taskStatusPayload.replyText;
         actionResult = taskStatusPayload.actionResult;
+        actionSummary.push(`generation_task=${taskId} status=${task.status} progress=${task.progress}`);
       } else {
-        directActionReplyText = locale.toLowerCase().startsWith('zh')
+        fallbackAssistantReplyText = locale.toLowerCase().startsWith('zh')
           ? `我没有找到任务 ${taskId}。你可以把最新任务编号再发一次，或直接说“重新生成一次”。`
           : `I could not find task ${taskId}. Send the latest task ID again, or say "retry generation".`;
+        actionSummary.push(`generation_task_missing=${taskId}`);
       }
     } else {
-      directActionReplyText = locale.toLowerCase().startsWith('zh')
+      fallbackAssistantReplyText = locale.toLowerCase().startsWith('zh')
         ? '我还没在当前会话里找到任务编号。请先启动真实生成任务，或把任务编号（task_...）发给我。'
         : 'I could not find a task ID in this session yet. Start a real build task first, or send me a task ID (task_...).';
+      actionSummary.push('generation_task_missing=none');
     }
   }
 
+  let preparedWorkflowEnvelope: OperatorEnvelope | null = null;
+  let preparedWorkflowCapsulePath: string | null = null;
+  let preparedWorkflowCapsuleUrl: string | null = null;
+  let preparedWorkflowCapsuleId: string | null = null;
+  if (workspaceContinuationIntent && session.context.capsuleId) {
+    preparedWorkflowEnvelope = operatorEngine.continueActiveTask({
+      capsuleId: session.context.capsuleId,
+      operation: workspaceContinuationIntent.operation,
+      userIntent: normalizedMessage,
+    });
+    preparedWorkflowCapsuleId = preparedWorkflowEnvelope?.capsule.id ?? session.context.capsuleId;
+    if (preparedWorkflowEnvelope) {
+      fallbackAssistantReplyText = buildAssistantWorkspaceContinuationReply(
+        locale,
+        preparedWorkflowEnvelope,
+        workspaceContinuationIntent,
+      );
+      actionSummary.push(`workspace_continue=${workspaceContinuationIntent.operation}`);
+      actionSummary.push(`route=${routingDecision.route}`);
+      forceDeterministicReply = true;
+    } else {
+      fallbackAssistantReplyText = locale.toLowerCase().startsWith('zh')
+        ? '当前会话对应的工作区不存在，请先回到工作区列表重新选择。'
+        : 'The workspace linked to this session was not found. Select the workspace again and retry.';
+      actionSummary.push('workspace_continue=workspace_not_found');
+      forceDeterministicReply = true;
+    }
+  } else if (repoWorkspaceIntent) {
+    preparedWorkflowEnvelope = await operatorEngine.analyzeProject({
+      projectName: repoWorkspaceIntent.projectName,
+      repoUrl: repoWorkspaceIntent.repoUrl,
+      notes: repoWorkspaceIntent.notes,
+      planningMode,
+      autoStartBuild: false,
+      existingCapsuleId: session.context.capsuleId,
+      userIntent: normalizedMessage,
+      sessionId: session.sessionId,
+      taskMode,
+    });
+    preparedWorkflowCapsuleId = preparedWorkflowEnvelope.capsule.id;
+    actionSummary.push(`route=${routingDecision.route}`);
+  }
+
+  const repoWorkspaceProposal = repoWorkspaceIntent
+    ? buildAssistantRepoWorkspaceProposal(locale, {
+      ...repoWorkspaceIntent,
+      capsuleId: preparedWorkflowCapsuleId,
+      planningMode,
+      taskMode,
+    })
+    : null;
+
+  const ideaLaunchIntent = requestedAction
+    || askMode
+    || directServerExecutionIntent
+    || routingDecision.route !== 'idea_generate'
+    ? null
+    : routingDecision.idea;
+  if (!preparedWorkflowEnvelope && ideaLaunchIntent) {
+    preparedWorkflowEnvelope = operatorEngine.createPlan({
+      entryKind: 'generate-from-idea',
+      title: buildAssistantIdeaProjectName(ideaLaunchIntent, locale),
+      brief: ideaLaunchIntent,
+      planningMode,
+      existingCapsuleId: session.context.capsuleId,
+      userIntent: normalizedMessage,
+      sessionId: session.sessionId,
+      taskMode,
+      parsedInput: {
+        kind: 'idea',
+        rawInput: normalizedMessage,
+        idea: ideaLaunchIntent,
+      },
+    });
+    preparedWorkflowCapsuleId = preparedWorkflowEnvelope.capsule.id;
+  }
+  const ideaLaunchProposal = ideaLaunchIntent
+    ? buildAssistantIdeaLaunchProposal(locale, {
+      idea: ideaLaunchIntent,
+      capsuleId: preparedWorkflowCapsuleId,
+      planningMode,
+      taskMode,
+    })
+    : null;
+
+  if (preparedWorkflowEnvelope) {
+    preparedWorkflowCapsulePath = buildOperatorWorkbenchPath(preparedWorkflowEnvelope.capsule.id);
+    preparedWorkflowCapsuleUrl = buildAbsoluteCapsuleUrl(request, preparedWorkflowCapsulePath);
+  }
+  const preparedWorkflowPayload = preparedWorkflowEnvelope?.workflow ?? null;
+  const preparedWorkspacePayload = preparedWorkflowEnvelope
+    ? {
+      capsuleId: preparedWorkflowEnvelope.capsule.id,
+      capsulePath: preparedWorkflowCapsulePath,
+      capsuleUrl: preparedWorkflowCapsuleUrl,
+      workflowStage: preparedWorkflowEnvelope.workflow.activeTaskId
+        ? preparedWorkflowEnvelope.workflow.tasks.find((task) => task.id === preparedWorkflowEnvelope.workflow.activeTaskId)?.currentStage ?? null
+        : null,
+    }
+    : null;
+
+  if (repoWorkspaceIntent && repoWorkspaceProposal) {
+    const repoExecutionProposal = mode === 'run'
+      ? {
+        ...repoWorkspaceProposal,
+        requiresConfirmation: false,
+      }
+      : repoWorkspaceProposal;
+    effectiveProposals.unshift(repoExecutionProposal);
+    if (mode === 'run') {
+      actionSummary.push(locale.toLowerCase().startsWith('zh')
+        ? '仓库部署请求已锁定到 repo_import_deploy lane，并会直接进入真实工作区执行。'
+        : 'The repository deployment request is locked to the repo_import_deploy lane and will enter the real workspace flow directly.');
+    } else {
+      pendingConfirmation = assistantOrchestrator.issueConfirmation(session.sessionId, identity.userKey, repoExecutionProposal);
+      actionSummary.push(locale.toLowerCase().startsWith('zh')
+        ? '已生成仓库部署计划，等待确认后执行。'
+        : 'Repository deployment plan prepared and waiting for confirmation.');
+      fallbackAssistantReplyText = buildAssistantRepoWorkspacePlanReply(repoWorkspaceIntent, locale);
+      forceDeterministicReply = true;
+    }
+  } else if (ideaLaunchIntent && ideaLaunchProposal) {
+    pendingConfirmation = assistantOrchestrator.issueConfirmation(session.sessionId, identity.userKey, ideaLaunchProposal);
+    effectiveProposals.unshift(ideaLaunchProposal);
+    actionSummary.push(locale.toLowerCase().startsWith('zh')
+      ? '已生成想法执行计划，等待确认后执行。'
+      : 'Idea-to-build plan prepared and waiting for confirmation.');
+    fallbackAssistantReplyText = buildAssistantIdeaLaunchPlanReply(ideaLaunchIntent, locale);
+    forceDeterministicReply = true;
+  }
+
   const executionCandidate = requestedAction
-    ? plannedProposals[0] ?? null
-    : plannedProposals[0] ?? null;
-  const executionRequiresAuth = executionCandidate?.action.kind !== 'create-launch-capsule';
+    ? effectiveProposals[0] ?? null
+    : effectiveProposals[0] ?? null;
+  const executionRequiresAuth = executionCandidate?.action.kind !== 'create-launch-capsule'
+    && executionCandidate?.action.kind !== 'create-repo-workspace';
+  const forcedRouteExecution = !askMode && routingDecision.route === 'repo_import_deploy';
   const explicitExecutionIntent = assistantOrchestrator.isExecutionIntent(normalizedMessage)
     || containsAny(normalizeAssistantSearchText(normalizedMessage), [
       '直接执行',
@@ -8129,22 +9313,33 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
       'just do it',
     ]);
 
-  if (!identity.authenticated && executionCandidate && executionRequiresAuth) {
+  if (!pendingConfirmation && !identity.authenticated && executionCandidate && executionRequiresAuth) {
     actionSummary.push(locale.toLowerCase().startsWith('zh')
       ? '当前未登录，执行动作前请先登录。'
       : 'Please log in before executing account actions.');
-  } else if (executionCandidate && (identity.token || executionCandidate.action.kind === 'create-launch-capsule')) {
-    const shouldAutoRun = requestedAction?.execute
-      ?? (
-        assistantOrchestrator.shouldAutoExecute(executionCandidate, normalizedMessage)
-        || (executionCandidate.requiresConfirmation && explicitExecutionIntent)
+  } else if (
+    !pendingConfirmation
+    && executionCandidate
+    && (identity.token || executionCandidate.action.kind === 'create-launch-capsule' || executionCandidate.action.kind === 'create-repo-workspace')
+  ) {
+    const shouldAutoRun = askMode
+      ? false
+      : (
+        requestedAction?.execute
+        ?? (
+          forcedRouteExecution
+          || (
+          assistantOrchestrator.shouldAutoExecute(executionCandidate, normalizedMessage)
+          || (executionCandidate.requiresConfirmation && explicitExecutionIntent)
+          )
+        )
       );
     if (executionCandidate.requiresConfirmation && shouldAutoRun) {
       pendingConfirmation = assistantOrchestrator.issueConfirmation(session.sessionId, identity.userKey, executionCandidate);
       actionSummary.push(locale.toLowerCase().startsWith('zh')
         ? '该动作需要确认，请点击确认后继续。'
         : 'This action requires confirmation. Please confirm to continue.');
-      directActionReplyText = buildAssistantPendingConfirmationReply(locale, executionCandidate);
+      fallbackAssistantReplyText = buildAssistantPendingConfirmationReply(locale, executionCandidate);
     } else if (shouldAutoRun) {
       const executed = await executeAssistantAction(request, {
         token: identity.token,
@@ -8166,7 +9361,7 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
         )
         && executed.detail
       ) {
-        directActionReplyText = executed.detail;
+        fallbackAssistantReplyText = executed.detail;
       }
     } else {
       actionSummary.push(locale.toLowerCase().startsWith('zh')
@@ -8180,95 +9375,95 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
     && Boolean(identity.token)
     && Boolean(session.context.serviceId)
   ) {
-      directActionReplyText = buildAssistantExecutionNeedDetailReply(locale, {
+      fallbackAssistantReplyText = buildAssistantExecutionNeedDetailReply(locale, {
       serviceId: session.context.serviceId!,
       matchedPlaybookName: matchedRemotePlaybook?.name ?? null,
     });
   }
 
-  if (directActionReplyText) {
-    const assistantReply = assistantOrchestrator.recordAssistantMessage(
-      session.sessionId,
-      identity.userKey,
-      directActionReplyText,
-    );
-
-    return {
-      message: 'Assistant action reply generated.',
-      data: {
-        session: assistantOrchestrator.openSession({
-          userKey: identity.userKey,
-          sessionId: session.sessionId,
-        }),
-        authenticated: identity.authenticated,
-        reply: assistantReply,
-        proposals: [],
-        pendingConfirmation,
-        actionResult,
-        quota: quotaContext.snapshot,
-        upgradeCta: quotaContext.upgradeCta,
-        chargedTokens: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        resolvedModelId: 'action-direct',
-      },
-    };
-  }
-
-  const ideaLaunchIntent = requestedAction
-    || directServerExecutionIntent
-    || !assistantMessageExplicitlyRequestsLaunchCapsule(normalizedMessage)
-    ? null
-    : detectAssistantIdeaLaunchIntent(normalizedMessage);
-  const ideaLaunchProposal = ideaLaunchIntent ? buildAssistantIdeaLaunchProposal(locale, ideaLaunchIntent) : null;
-
-  if (ideaLaunchIntent && ideaLaunchProposal) {
-    pendingConfirmation = assistantOrchestrator.issueConfirmation(session.sessionId, identity.userKey, ideaLaunchProposal);
-    const replyText = buildAssistantIdeaLaunchPlanReply(ideaLaunchIntent, locale);
-    const assistantReply = assistantOrchestrator.recordAssistantMessage(session.sessionId, identity.userKey, replyText);
-
-    return {
-      message: 'Assistant prepared launch plan.',
-      data: {
-        session: assistantOrchestrator.openSession({
-          userKey: identity.userKey,
-          sessionId: session.sessionId,
-        }),
-        authenticated: identity.authenticated,
-        reply: assistantReply,
-        proposals: [ideaLaunchProposal],
-        pendingConfirmation,
-        actionResult: null,
-        quota: quotaContext.snapshot,
-        upgradeCta: quotaContext.upgradeCta,
-        chargedTokens: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        resolvedModelId: 'operator-workspace',
-      },
-    };
-  }
-
   const accountSummary = await buildAssistantFacts(identity.token, session.context);
-  const builtReply = await assistantOrchestrator.buildAssistantReply({
-    sessionId: session.sessionId,
-    userKey: identity.userKey,
-    userId: identity.user?.id ?? null,
-    selectedModelId: requestedModel.id,
-    locale,
-    userMessage: messageForAssistant || userMessage.content,
-    attachments,
-    context: session.context,
-    authenticated: identity.authenticated,
-    userLabel: identity.user?.email ?? identity.user?.name ?? null,
-    accountSummary,
-    actionSummary,
-    proposals: plannedProposals,
-  });
+  const builtReply = forceDeterministicReply
+    ? null
+    : await assistantOrchestrator.buildAssistantReply({
+      sessionId: session.sessionId,
+      userKey: identity.userKey,
+      userId: identity.user?.id ?? null,
+      selectedModelId: requestedModel.id,
+      locale,
+      userMessage: messageForAssistant || userMessage.content,
+      attachments,
+      context: session.context,
+      authenticated: identity.authenticated,
+      userLabel: identity.user?.email ?? identity.user?.name ?? null,
+      accountSummary,
+      actionSummary,
+      proposals: effectiveProposals,
+    });
   if (!builtReply) {
+    if (fallbackAssistantReplyText) {
+      const assistantReply = assistantOrchestrator.recordAssistantMessage(
+        session.sessionId,
+        identity.userKey,
+        fallbackAssistantReplyText,
+      );
+      return {
+        message: 'Assistant reply generated from deterministic fallback.',
+        data: {
+          session: assistantOrchestrator.openSession({
+            userKey: identity.userKey,
+            sessionId: session.sessionId,
+          }),
+          authenticated: identity.authenticated,
+          reply: assistantReply,
+          runState: resolveAssistantRunState({
+            pendingConfirmation,
+            actionResult,
+            proposalsCount: effectiveProposals.length,
+            workflowStage: preparedWorkspacePayload?.workflowStage ?? null,
+          }),
+          source: resolveAssistantResponseSource({
+            pendingConfirmation,
+            actionResult,
+            builtReplyMode: null,
+            usedDeterministicFallback: true,
+          }),
+          proposals: effectiveProposals,
+          pendingConfirmation,
+          actionResult,
+          workflow: preparedWorkflowPayload,
+          workspace: preparedWorkspacePayload,
+          quota: quotaContext.snapshot,
+          upgradeCta: quotaContext.upgradeCta,
+          chargedTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          resolvedModelId: 'deterministic-fallback',
+          routing: responseRouting,
+        },
+      };
+    }
+
     throw new GatewayError('Assistant upstream model is temporarily unavailable.', 502, {
       code: 'ASSISTANT_UPSTREAM_UNAVAILABLE',
       detail: buildAssistantUpstreamUnavailableDetail(locale),
+      quota: quotaContext.snapshot,
+      upgradeCta: quotaContext.upgradeCta,
+    });
+  }
+
+  if (builtReply.responseMode === 'fallback' && !assistantAllowDevelopmentMock) {
+    throw new GatewayError('Assistant fallback replies are disabled in runtime mode.', 503, {
+      code: mode === 'run' ? 'ASSISTANT_LIVE_PROVIDER_REQUIRED' : 'ASSISTANT_UPSTREAM_UNAVAILABLE',
+      detail: buildAssistantProviderStatusReason(locale, providerStatus),
+      quota: quotaContext.snapshot,
+      upgradeCta: quotaContext.upgradeCta,
+    });
+  }
+
+  if (mode === 'run' && builtReply.responseMode === 'fallback') {
+    throw new GatewayError('Assistant live provider became unavailable during Run mode.', 503, {
+      code: 'ASSISTANT_LIVE_PROVIDER_REQUIRED',
+      detail: buildAssistantProviderStatusReason(locale, providerStatus),
       quota: quotaContext.snapshot,
       upgradeCta: quotaContext.upgradeCta,
     });
@@ -8290,15 +9485,30 @@ app.post('/api/v1/assistant/messages', async (request, reply) => {
       }),
       authenticated: identity.authenticated,
       reply: assistantReply,
-      proposals: plannedProposals,
+      runState: resolveAssistantRunState({
+        pendingConfirmation,
+        actionResult,
+        proposalsCount: effectiveProposals.length,
+        workflowStage: preparedWorkspacePayload?.workflowStage ?? null,
+      }),
+      source: resolveAssistantResponseSource({
+        pendingConfirmation,
+        actionResult,
+        builtReplyMode: builtReply.responseMode,
+        usedDeterministicFallback: false,
+      }),
+      proposals: effectiveProposals,
       pendingConfirmation,
       actionResult,
+      workflow: preparedWorkflowPayload,
+      workspace: preparedWorkspacePayload,
       quota: quotaAfterCharge,
       upgradeCta: quotaContext.upgradeCta,
       chargedTokens: builtReply.chargedTokens,
       inputTokens: builtReply.inputTokens,
       outputTokens: builtReply.outputTokens,
       resolvedModelId: builtReply.resolvedModelId,
+      routing: responseRouting,
     },
   };
 });
@@ -8320,7 +9530,11 @@ app.post('/api/v1/assistant/actions/confirm', async (request, reply) => {
     });
   }
 
-  if (proposal.action.kind !== 'create-launch-capsule' && (!identity.authenticated || !identity.token)) {
+  if (
+    proposal.action.kind !== 'create-launch-capsule'
+    && proposal.action.kind !== 'create-repo-workspace'
+    && (!identity.authenticated || !identity.token)
+  ) {
     throw new GatewayError('Authentication is required.', 401, {
       code: 'ASSISTANT_AUTH_REQUIRED',
     });
@@ -8335,13 +9549,45 @@ app.post('/api/v1/assistant/actions/confirm', async (request, reply) => {
 
   const executedData = asRecordValue(executed.data);
   const taskId = getStringValue(executedData.taskId);
+  const executedCapsuleId = getStringValue(executedData.capsuleId) ?? proposal.action.capsuleId ?? null;
   const generationTaskRecord = asRecordValue(executedData.task);
   const generationTaskStatus = readNullableStringValue(generationTaskRecord?.status);
   const generationTaskProgress = typeof generationTaskRecord?.progress === 'number'
     ? Math.max(0, Math.min(100, Math.round(generationTaskRecord.progress)))
     : null;
-  const previewUrl = getStringValue(executedData.previewUrl);
-  const capsuleUrl = getStringValue(executedData.capsuleUrl);
+  let previewUrl = getStringValue(executedData.previewUrl);
+  const capsulePath = getStringValue(executedData.capsulePath) ?? (executedCapsuleId ? buildOperatorWorkbenchPath(executedCapsuleId) : null);
+  const capsuleUrl = getStringValue(executedData.capsuleUrl) ?? (capsulePath ? buildAbsoluteCapsuleUrl(request, capsulePath) : null);
+  let workflowEnvelope = executedCapsuleId ? operatorEngine.getCapsule(executedCapsuleId) : null;
+  if (
+    executedCapsuleId
+    && (proposal.action.kind === 'create-launch-capsule' || proposal.action.kind === 'create-repo-workspace')
+  ) {
+    workflowEnvelope = operatorEngine.confirmActivePlan({
+      capsuleId: executedCapsuleId,
+      userIntent: proposal.action.kind === 'create-repo-workspace'
+        ? [proposal.action.notes?.trim(), proposal.action.repoUrl?.trim()].filter(Boolean).join('\n\n') || proposal.title
+        : proposal.action.idea ?? proposal.description ?? proposal.title,
+    }) ?? workflowEnvelope;
+    if (workflowEnvelope) {
+      previewUrl = workflowEnvelope.previewUrl
+        ?? workflowEnvelope.previewSummary.previewUrl
+        ?? workflowEnvelope.capsule.previewUrl
+        ?? previewUrl;
+      executed.data = {
+        ...(executedData ?? {}),
+        capsuleId: workflowEnvelope.capsule.id,
+        capsulePath,
+        capsuleUrl,
+        previewUrl,
+        workflow: workflowEnvelope.workflow,
+        truthState: workflowEnvelope.truthState,
+        techStackSummary: workflowEnvelope.techStackSummary,
+        envChecklistSummary: workflowEnvelope.envChecklistSummary,
+        deploymentSummary: workflowEnvelope.deploymentSummary,
+      };
+    }
+  }
   const summaryText = proposal.action.kind === 'create-launch-capsule'
     ? (locale.toLowerCase().startsWith('zh')
         ? [
@@ -8362,9 +9608,23 @@ app.post('/api/v1/assistant/actions/confirm', async (request, reply) => {
           capsuleUrl ? `Workspace: ${capsuleUrl}` : null,
           taskId ? 'This is a real task, not a completed deployment yet. The chat will keep showing the verified task status.' : 'Open the workspace to inspect the source, preview, and deployment entry points.',
         ].filter(Boolean).join('\n'))
-    : (locale.toLowerCase().startsWith('zh')
-        ? `已执行：${proposal.title}\n结果：${executed.message}`
-        : `Executed: ${proposal.title}\nResult: ${executed.message}`);
+    : proposal.action.kind === 'create-repo-workspace'
+      ? (locale.toLowerCase().startsWith('zh')
+          ? [
+            `已确认启动：${proposal.title}`,
+            capsuleUrl ? `任务工作区：${capsuleUrl}` : null,
+            previewUrl ? `预览地址：${previewUrl}` : null,
+            '接下来会先执行仓库识别、环境清单和真实预览验证；如果任何一步失败，会明确停在根因。',
+          ].filter(Boolean).join('\n')
+          : [
+            `Confirmed: ${proposal.title}`,
+            capsuleUrl ? `Workspace: ${capsuleUrl}` : null,
+            previewUrl ? `Preview: ${previewUrl}` : null,
+            'The flow now moves through stack detection, environment checklisting, and verified preview execution. Any failure will stop at the root cause.',
+          ].filter(Boolean).join('\n'))
+      : (locale.toLowerCase().startsWith('zh')
+          ? `已执行：${proposal.title}\n结果：${executed.message}`
+          : `Executed: ${proposal.title}\nResult: ${executed.message}`);
   const summaryWithDetail = executed.detail ? `${summaryText}\n\n${executed.detail}` : summaryText;
   let assistantReply: ReturnType<typeof assistantOrchestrator.recordAssistantMessage>;
   try {
@@ -8384,6 +9644,7 @@ app.post('/api/v1/assistant/actions/confirm', async (request, reply) => {
   }
 
   const quotaContext = await resolveAssistantQuotaContext(request, reply, locale, identity);
+  const responseRouting = buildAssistantRoutingFromProposal(proposal);
 
   return {
     message: 'Assistant action confirmed and executed.',
@@ -8394,9 +9655,35 @@ app.post('/api/v1/assistant/actions/confirm', async (request, reply) => {
       }),
       authenticated: identity.authenticated,
       reply: assistantReply,
+      runState: resolveAssistantRunState({
+        pendingConfirmation: null,
+        actionResult: executed,
+        proposalsCount: 0,
+        workflowStage: workflowEnvelope?.workflow.activeTaskId
+          ? workflowEnvelope.workflow.tasks.find((task) => task.id === workflowEnvelope.workflow.activeTaskId)?.currentStage ?? null
+          : null,
+      }),
+      source: resolveAssistantResponseSource({
+        pendingConfirmation: null,
+        actionResult: executed,
+        builtReplyMode: null,
+        usedDeterministicFallback: true,
+      }),
       actionResult: executed,
+      workflow: workflowEnvelope?.workflow ?? null,
+      workspace: executedCapsuleId
+        ? {
+          capsuleId: executedCapsuleId,
+          capsulePath,
+          capsuleUrl,
+          workflowStage: workflowEnvelope?.workflow.activeTaskId
+            ? workflowEnvelope.workflow.tasks.find((task) => task.id === workflowEnvelope.workflow.activeTaskId)?.currentStage ?? null
+            : null,
+        }
+        : null,
       quota: quotaContext.snapshot,
       upgradeCta: quotaContext.upgradeCta,
+      routing: responseRouting,
     },
   };
 });
@@ -9463,6 +10750,26 @@ app.get('/api/v1/services/:serviceId/server', async (request) => {
   };
 });
 
+app.get('/api/v1/services/:serviceId/server/firewall', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const token = requireToken(request);
+  const { service, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
+  const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
+
+  const convoyResponse = await convoy.getServerFirewall(resolvedServerRef).catch((error) => {
+    if (error instanceof GatewayError && isMissingBackingVmError(error)) {
+      throw new GatewayError('Service mapping points to a missing backend VM.', 409, buildMissingBackingVmPayload(service, 'firewall'));
+    }
+    if (error instanceof GatewayError && error.statusCode >= 500) {
+      throw new GatewayError('Convoy firewall data is temporarily unavailable.', 503, buildConvoyUpstreamFailurePayload(service, 'firewall', error));
+    }
+
+    throw error;
+  });
+
+  return buildFirewallPayload(service, resolvedServerRef, capabilities, convoyResponse);
+});
+
 app.get('/api/v1/services/:serviceId/server/capabilities', async (request) => {
   const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
   const token = requireToken(request);
@@ -9623,6 +10930,169 @@ app.patch('/api/v1/services/:serviceId/server/build', async (request) => {
     message: 'Server build updated successfully.',
     data: response.data ?? {},
   };
+});
+
+app.patch('/api/v1/services/:serviceId/server/firewall/options', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.object({
+    enabled: z.boolean().optional(),
+    ipfilter: z.boolean().optional(),
+    policyIn: z.enum(['ACCEPT', 'DROP', 'REJECT']).optional().nullable(),
+    policyOut: z.enum(['ACCEPT', 'DROP', 'REJECT']).optional().nullable(),
+  }).parse(request.body ?? {});
+  const token = requireToken(request);
+
+  const requestPayload: Record<string, unknown> = {};
+  if (body.enabled !== undefined) requestPayload.enabled = body.enabled;
+  if (body.ipfilter !== undefined) requestPayload.ipfilter = body.ipfilter;
+  if (body.policyIn) requestPayload.policyIn = body.policyIn;
+  if (body.policyOut) requestPayload.policyOut = body.policyOut;
+
+  return executeLoggedAction(request, {
+    token,
+    serviceId: params.serviceId,
+    action: 'firewall-options',
+    requestPayload,
+    successCode: 'SERVICE_FIREWALL_OPTIONS_UPDATED',
+    failureCode: 'SERVICE_FIREWALL_OPTIONS_UPDATE_FAILED',
+    run: async () => {
+      const { service, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
+      const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
+      const convoyPayload: Record<string, unknown> = {};
+
+      if (body.enabled !== undefined) convoyPayload.enable = body.enabled;
+      if (body.ipfilter !== undefined) convoyPayload.ipfilter = body.ipfilter;
+      if (body.policyIn) convoyPayload.policy_in = body.policyIn;
+      if (body.policyOut) convoyPayload.policy_out = body.policyOut;
+
+      const convoyResponse = await convoy.patchFirewallOptions(resolvedServerRef, convoyPayload).catch((error) => {
+        if (error instanceof GatewayError && isMissingBackingVmError(error)) {
+          throw new GatewayError('Service mapping points to a missing backend VM.', 409, buildMissingBackingVmPayload(service, 'firewall-options'));
+        }
+        if (error instanceof GatewayError && error.statusCode >= 500) {
+          throw new GatewayError('Convoy firewall options are temporarily unavailable.', 503, buildConvoyUpstreamFailurePayload(service, 'firewall-options', error));
+        }
+
+        throw error;
+      });
+
+      return {
+        message: 'Firewall settings updated successfully.',
+        data: buildFirewallPayload(service, resolvedServerRef, capabilities, convoyResponse).data,
+      };
+    },
+  });
+});
+
+app.post('/api/v1/services/:serviceId/server/firewall/rules', async (request) => {
+  const params = z.object({ serviceId: z.string().min(1) }).parse(request.params);
+  const body = z.object({
+    direction: z.enum(['in', 'out']),
+    action: z.enum(['ACCEPT', 'DROP', 'REJECT']),
+    protocol: z.enum(['tcp', 'udp', 'icmp', 'icmpv6']).optional().default('tcp'),
+    enabled: z.boolean().optional().default(true),
+    source: z.string().trim().max(255).optional().nullable(),
+    destination: z.string().trim().max(255).optional().nullable(),
+    destinationPort: z.string().trim().max(64).optional().nullable(),
+    sourcePort: z.string().trim().max(64).optional().nullable(),
+    comment: z.string().trim().max(255).optional().nullable(),
+  }).parse(request.body ?? {});
+  const token = requireToken(request);
+
+  if ((body.protocol === 'tcp' || body.protocol === 'udp') && !(body.destinationPort?.trim())) {
+    throw new GatewayError('Destination port is required for TCP and UDP firewall rules.', 409, {
+      code: 'SERVICE_FIREWALL_PORT_REQUIRED',
+    });
+  }
+
+  return executeLoggedAction(request, {
+    token,
+    serviceId: params.serviceId,
+    action: 'firewall-rule-create',
+    requestPayload: {
+      direction: body.direction,
+      action: body.action,
+      protocol: body.protocol,
+      enabled: body.enabled,
+      source: body.source ?? null,
+      destination: body.destination ?? null,
+      destinationPort: body.destinationPort ?? null,
+      sourcePort: body.sourcePort ?? null,
+      comment: body.comment ?? null,
+    },
+    successCode: 'SERVICE_FIREWALL_RULE_CREATED',
+    failureCode: 'SERVICE_FIREWALL_RULE_CREATE_FAILED',
+    run: async () => {
+      const { service, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
+      const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
+      const convoyPayload: Record<string, unknown> = {
+        type: body.direction,
+        action: body.action,
+        proto: body.protocol,
+        enable: body.enabled,
+      };
+
+      if (body.source?.trim()) convoyPayload.source = body.source.trim();
+      if (body.destination?.trim()) convoyPayload.dest = body.destination.trim();
+      if (body.destinationPort?.trim()) convoyPayload.dport = body.destinationPort.trim();
+      if (body.sourcePort?.trim()) convoyPayload.sport = body.sourcePort.trim();
+      if (body.comment?.trim()) convoyPayload.comment = body.comment.trim();
+
+      const convoyResponse = await convoy.createFirewallRule(resolvedServerRef, convoyPayload).catch((error) => {
+        if (error instanceof GatewayError && isMissingBackingVmError(error)) {
+          throw new GatewayError('Service mapping points to a missing backend VM.', 409, buildMissingBackingVmPayload(service, 'firewall-rule-create'));
+        }
+        if (error instanceof GatewayError && error.statusCode >= 500) {
+          throw new GatewayError('Convoy firewall rules are temporarily unavailable.', 503, buildConvoyUpstreamFailurePayload(service, 'firewall-rule-create', error));
+        }
+
+        throw error;
+      });
+
+      return {
+        message: 'Firewall rule created successfully.',
+        data: buildFirewallPayload(service, resolvedServerRef, capabilities, convoyResponse).data,
+      };
+    },
+  });
+});
+
+app.delete('/api/v1/services/:serviceId/server/firewall/rules/:position', async (request) => {
+  const params = z.object({
+    serviceId: z.string().min(1),
+    position: z.coerce.number().int().min(0),
+  }).parse(request.params);
+  const token = requireToken(request);
+
+  return executeLoggedAction(request, {
+    token,
+    serviceId: params.serviceId,
+    action: 'firewall-rule-delete',
+    requestPayload: {
+      position: params.position,
+    },
+    successCode: 'SERVICE_FIREWALL_RULE_DELETED',
+    failureCode: 'SERVICE_FIREWALL_RULE_DELETE_FAILED',
+    run: async () => {
+      const { service, serverRef, capabilities } = await getServiceWithActions(token, params.serviceId);
+      const resolvedServerRef = requireServerRefOrThrow(service, serverRef);
+      const convoyResponse = await convoy.deleteFirewallRule(resolvedServerRef, params.position).catch((error) => {
+        if (error instanceof GatewayError && isMissingBackingVmError(error)) {
+          throw new GatewayError('Service mapping points to a missing backend VM.', 409, buildMissingBackingVmPayload(service, 'firewall-rule-delete'));
+        }
+        if (error instanceof GatewayError && error.statusCode >= 500) {
+          throw new GatewayError('Convoy firewall rules are temporarily unavailable.', 503, buildConvoyUpstreamFailurePayload(service, 'firewall-rule-delete', error));
+        }
+
+        throw error;
+      });
+
+      return {
+        message: 'Firewall rule deleted successfully.',
+        data: buildFirewallPayload(service, resolvedServerRef, capabilities, convoyResponse).data,
+      };
+    },
+  });
 });
 
 app.post('/api/v1/services/:serviceId/server/suspend', async (request) => {

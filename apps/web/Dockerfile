@@ -24,7 +24,7 @@ RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set fetch-timeout 600000 \
     && npm config set maxsockets 5 \
-    && npm install -g pnpm@9
+    && npm install -g pnpm@10.33.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/web/package.json apps/web/tsconfig.json apps/web/vite.config.ts apps/web/index.html ./apps/web/
@@ -33,7 +33,7 @@ RUN pnpm install --frozen-lockfile
 
 COPY apps/web ./apps/web
 
-ARG VITE_API_BASE_URL=http://localhost:4000
+ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN pnpm --filter @sloth-cloud/web build
@@ -45,12 +45,14 @@ WORKDIR /app
 COPY --from=builder /workspace/apps/web/dist ./dist
 
 RUN cat > /app/server.mjs <<'EOF'
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 import { extname, join, normalize } from 'node:path';
 
 const port = Number(process.env.PORT || 80);
 const root = '/app/dist';
+const apiProxyUrl = String(process.env.API_PROXY_URL || 'http://sloth-cloud-api:4000').trim();
 
 const mime = {
   '.html': 'text/html; charset=utf-8',
@@ -81,8 +83,54 @@ function sendFile(reply, path) {
   createReadStream(path).pipe(reply);
 }
 
+function proxyApi(request, reply) {
+  let target;
+  try {
+    target = new URL(request.url || '/', apiProxyUrl);
+  } catch {
+    reply.statusCode = 502;
+    reply.setHeader('Content-Type', 'application/json; charset=utf-8');
+    reply.end(JSON.stringify({
+      message: 'API proxy target is invalid.',
+    }));
+    return;
+  }
+
+  const forward = target.protocol === 'https:' ? httpsRequest : httpRequest;
+  const proxy = forward({
+    protocol: target.protocol,
+    hostname: target.hostname,
+    port: target.port || (target.protocol === 'https:' ? 443 : 80),
+    method: request.method,
+    path: `${target.pathname}${target.search}`,
+    headers: {
+      ...request.headers,
+      host: target.host,
+    },
+  }, (response) => {
+    reply.writeHead(response.statusCode || 502, response.headers);
+    response.pipe(reply);
+  });
+
+  proxy.on('error', (error) => {
+    reply.statusCode = 502;
+    reply.setHeader('Content-Type', 'application/json; charset=utf-8');
+    reply.end(JSON.stringify({
+      message: 'API upstream is temporarily unavailable.',
+      detail: error.message,
+    }));
+  });
+
+  request.pipe(proxy);
+}
+
 createServer((req, res) => {
   const requestPath = req.url ? req.url.split('?')[0] : '/';
+  if (requestPath === '/api' || requestPath.startsWith('/api/')) {
+    proxyApi(req, res);
+    return;
+  }
+
   const filePath = resolvePath(requestPath === '/' ? '/index.html' : requestPath);
 
   if (existsSync(filePath) && statSync(filePath).isFile()) {

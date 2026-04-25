@@ -7,7 +7,7 @@ import { useApiData } from '../lib/api';
 import { localizeText } from '../lib/localized-text';
 import { billingCycleLabel, getUiText, productLineFor, productLineLabel } from '../lib/ui-text';
 import { useSite } from '../lib/site-context';
-import { getCountryMeta, getOsVisual, inferCountryCode } from '../lib/visual-metadata';
+import { getCountryMeta, getCountryName, getOsVisual, inferCountryCode } from '../lib/visual-metadata';
 import type { CatalogCategoriesResponse, CatalogProductsResponse } from '../lib/types';
 
 function productCountryCode(
@@ -37,7 +37,7 @@ function productMatchesCategorySlug(
 export function CatalogPage() {
   const { categorySlug } = useParams();
   if (categorySlug === 'app-hosting') {
-    return <Navigate replace to="/operator" />;
+    return <Navigate replace to="/operator-lab" />;
   }
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -77,7 +77,7 @@ export function CatalogPage() {
 
       const existing = map.get(code) ?? {
         code,
-        countryName: country.name,
+        countryName: getCountryName(code, locale),
         count: 0,
         productSlug: null,
         sampleTitle: localizeText(product.name, locale, ui.common.unnamedProduct),
@@ -163,7 +163,7 @@ export function CatalogPage() {
                   {countryCode && country ? (
                     <span className="chip chip--visual">
                       <CountryFlagIcon countryCode={countryCode} />
-                      <span>{country.name}</span>
+                      <span>{getCountryName(countryCode, locale)}</span>
                     </span>
                   ) : null}
                   {osVisual?.family ? (

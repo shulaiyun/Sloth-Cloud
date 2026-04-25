@@ -18,7 +18,7 @@ import {
   serviceStatusLabel as uiServiceStatusLabel,
   statusClassName as uiStatusClassName,
 } from '../lib/ui-text';
-import { getAppVisual, getCountryMeta, getOsVisual, inferCountryCode } from '../lib/visual-metadata';
+import { getAppVisual, getCountryMeta, getCountryName, getOsVisual, inferCountryCode } from '../lib/visual-metadata';
 import type {
   ActionResponse,
   ProductDetailResponse,
@@ -43,6 +43,7 @@ type ConvoyCapabilities = {
     console: boolean;
     patch: boolean;
     build: boolean;
+    firewall: boolean;
     suspend: boolean;
     unsuspend: boolean;
     destroy: boolean;
@@ -72,6 +73,45 @@ type ManagedRuntimeLogsResponse = {
     runtimeKind: string;
     podName: string | null;
     logs: Array<{ line: string }>;
+  };
+};
+
+type FirewallRuleDirection = 'in' | 'out';
+type FirewallRuleAction = 'ACCEPT' | 'DROP' | 'REJECT';
+type FirewallRuleProtocol = 'tcp' | 'udp' | 'icmp' | 'icmpv6';
+
+type ServiceFirewallRule = {
+  position: number | null;
+  enabled: boolean;
+  type: string | null;
+  action: string | null;
+  protocol: string | null;
+  source: string | null;
+  destination: string | null;
+  destinationPort: string | null;
+  sourcePort: string | null;
+  interface: string | null;
+  comment: string | null;
+  logLevel: string | null;
+};
+
+type ServiceFirewallResponse = {
+  data: {
+    mapped: boolean;
+    serverRef: string | null;
+    capabilities: {
+      read: boolean;
+      update: boolean;
+    };
+    options: {
+      enabled: boolean;
+      ipfilter: boolean;
+      policyIn: string | null;
+      policyOut: string | null;
+      logLevelIn: string | null;
+      logLevelOut: string | null;
+    };
+    rules: ServiceFirewallRule[];
   };
 };
 
@@ -143,6 +183,20 @@ type OperatorServiceOrigin = {
   repoUrl: string | null;
   bundleUrl: string | null;
   manifestUrl: string | null;
+};
+
+type CompactOperationLog = {
+  id: string;
+  actionLabel: string;
+  outcomeLabel: string;
+  outcomeClassName: string;
+  timestampLabel: string;
+  operationId: string | null;
+  message: string | null;
+  detail: string | null;
+  code: string | null;
+  showCode: boolean;
+  success: boolean | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -291,6 +345,15 @@ function localizeBackendMessage(rawMessage: string | null | undefined, locale: s
       },
     },
     {
+      pattern: /server power action submitted/,
+      message: {
+        zh: '电源指令已提交。',
+        en: 'Power action submitted.',
+        ja: '電源操作リクエストを送信しました。',
+        ko: '전원 작업 요청이 제출되었습니다.',
+      },
+    },
+    {
       pattern: /service label updated/,
       message: {
         zh: '服务标签已更新。',
@@ -326,6 +389,19 @@ function localizeBackendMessage(rawMessage: string | null | undefined, locale: s
   }
 
   return rawMessage;
+}
+
+function shouldHideOperationCodeOnSuccess(code: string | null | undefined, success: boolean | null | undefined) {
+  if (success !== true) {
+    return false;
+  }
+
+  const normalized = (code ?? '').trim().toUpperCase();
+  if (normalized === '') {
+    return false;
+  }
+
+  return normalized === 'SERVICE_POWER_SUBMITTED' || normalized.endsWith('_SUBMITTED');
 }
 
 function localizeCancellationReason(reason: string | null | undefined, locale: string) {
@@ -657,6 +733,95 @@ function serverRuntimeStatusClassName(status: string | null | undefined) {
   }
 
   return uiStatusClassName(normalized || 'unknown');
+}
+
+function firewallDirectionLabel(direction: string | null | undefined, locale: string) {
+  if ((direction ?? '').trim().toLowerCase() === 'out') {
+    return localizeMessage(locale, {
+      zh: '出站',
+      en: 'Outbound',
+      ja: '送信',
+      ko: '출력',
+    });
+  }
+
+  return localizeMessage(locale, {
+    zh: '入站',
+    en: 'Inbound',
+    ja: '受信',
+    ko: '입력',
+  });
+}
+
+function firewallActionLabel(action: string | null | undefined, locale: string) {
+  const normalized = (action ?? '').trim().toUpperCase();
+
+  if (normalized === 'DROP') {
+    return localizeMessage(locale, {
+      zh: '丢弃',
+      en: 'Drop',
+      ja: '破棄',
+      ko: '드롭',
+    });
+  }
+
+  if (normalized === 'REJECT') {
+    return localizeMessage(locale, {
+      zh: '拒绝',
+      en: 'Reject',
+      ja: '拒否',
+      ko: '거부',
+    });
+  }
+
+  return localizeMessage(locale, {
+    zh: '允许',
+    en: 'Allow',
+    ja: '許可',
+    ko: '허용',
+  });
+}
+
+function firewallPolicyLabel(policy: string | null | undefined, locale: string) {
+  const normalized = (policy ?? '').trim().toUpperCase();
+
+  if (normalized === 'DROP') {
+    return localizeMessage(locale, {
+      zh: '默认丢弃',
+      en: 'Default drop',
+      ja: '既定で破棄',
+      ko: '기본 드롭',
+    });
+  }
+
+  if (normalized === 'REJECT') {
+    return localizeMessage(locale, {
+      zh: '默认拒绝',
+      en: 'Default reject',
+      ja: '既定で拒否',
+      ko: '기본 거부',
+    });
+  }
+
+  return localizeMessage(locale, {
+    zh: '默认允许',
+    en: 'Default allow',
+    ja: '既定で許可',
+    ko: '기본 허용',
+  });
+}
+
+function firewallProtocolLabel(protocol: string | null | undefined) {
+  const normalized = (protocol ?? '').trim().toLowerCase();
+  if (normalized === '') {
+    return '-';
+  }
+
+  if (normalized === 'icmpv6') {
+    return 'ICMPv6';
+  }
+
+  return normalized.toUpperCase();
 }
 
 function friendlyRuntimeTelemetryStatus(
@@ -1339,6 +1504,10 @@ export function ServiceDetailPage() {
   const { data: serverData, error: serverError, loading: serverLoading } = useApiData<ServiceServerResponse>(
     shouldFetchServer ? `/api/v1/services/${serviceId}/server?refresh=${refreshNonce}` : null,
   );
+  const { data: firewallData, error: firewallError, loading: firewallLoading } = useApiData<ServiceFirewallResponse>(
+    shouldFetchServer ? `/api/v1/services/${serviceId}/server/firewall?refresh=${refreshNonce}` : null,
+    { preserveData: true, preserveDataOnError: false },
+  );
   const {
     data: provisioningData,
     error: provisioningError,
@@ -1390,6 +1559,19 @@ export function ServiceDetailPage() {
   const [serverBusy, setServerBusy] = useState<ServerAction | null>(null);
   const [serverMessage, setServerMessage] = useState<string | null>(null);
   const [serverActionError, setServerActionError] = useState<string | null>(null);
+  const [firewallBusy, setFirewallBusy] = useState<string | null>(null);
+  const [firewallMessage, setFirewallMessage] = useState<string | null>(null);
+  const [firewallActionError, setFirewallActionError] = useState<string | null>(null);
+  const [firewallEnabledDraft, setFirewallEnabledDraft] = useState(false);
+  const [firewallIpFilterDraft, setFirewallIpFilterDraft] = useState(false);
+  const [firewallPolicyInDraft, setFirewallPolicyInDraft] = useState<'ACCEPT' | 'DROP' | 'REJECT'>('ACCEPT');
+  const [firewallPolicyOutDraft, setFirewallPolicyOutDraft] = useState<'ACCEPT' | 'DROP' | 'REJECT'>('ACCEPT');
+  const [firewallDirectionDraft, setFirewallDirectionDraft] = useState<FirewallRuleDirection>('in');
+  const [firewallRuleActionDraft, setFirewallRuleActionDraft] = useState<FirewallRuleAction>('ACCEPT');
+  const [firewallProtocolDraft, setFirewallProtocolDraft] = useState<FirewallRuleProtocol>('tcp');
+  const [firewallSourceDraft, setFirewallSourceDraft] = useState('');
+  const [firewallDestinationPortDraft, setFirewallDestinationPortDraft] = useState('');
+  const [firewallCommentDraft, setFirewallCommentDraft] = useState('');
   const [consoleType, setConsoleType] = useState<ConsoleSessionType>('novnc');
   const [consoleBusy, setConsoleBusy] = useState(false);
   const [consoleMessage, setConsoleMessage] = useState<string | null>(null);
@@ -1431,6 +1613,23 @@ export function ServiceDetailPage() {
     setVisibleInstallPasswords({});
     setExpandedInstallLogs({});
   }, [serviceId]);
+
+  useEffect(() => {
+    const options = firewallData?.data.options;
+    if (!options) {
+      return;
+    }
+
+    setFirewallEnabledDraft(Boolean(options.enabled));
+    setFirewallIpFilterDraft(Boolean(options.ipfilter));
+    setFirewallPolicyInDraft((options.policyIn === 'DROP' || options.policyIn === 'REJECT') ? options.policyIn : 'ACCEPT');
+    setFirewallPolicyOutDraft((options.policyOut === 'DROP' || options.policyOut === 'REJECT') ? options.policyOut : 'ACCEPT');
+  }, [
+    firewallData?.data.options.enabled,
+    firewallData?.data.options.ipfilter,
+    firewallData?.data.options.policyIn,
+    firewallData?.data.options.policyOut,
+  ]);
 
   function refreshPageState(delayMs = 0) {
     window.setTimeout(() => {
@@ -1789,6 +1988,164 @@ export function ServiceDetailPage() {
       setConsoleError(toFriendlyError(caughtError as ApiError, locale));
     } finally {
       setConsoleBusy(false);
+    }
+  }
+
+  function resetFirewallRuleComposer() {
+    setFirewallDirectionDraft('in');
+    setFirewallRuleActionDraft('ACCEPT');
+    setFirewallProtocolDraft('tcp');
+    setFirewallSourceDraft('');
+    setFirewallDestinationPortDraft('');
+    setFirewallCommentDraft('');
+  }
+
+  async function saveFirewallOptions() {
+    if (!serviceId) return;
+
+    setFirewallBusy('options');
+    setFirewallMessage(null);
+    setFirewallActionError(null);
+
+    try {
+      const response = await requestJson<ActionResponse<ServiceFirewallResponse['data']>>(
+        `/api/v1/services/${serviceId}/server/firewall/options`,
+        {
+          method: 'PATCH',
+          body: {
+            enabled: firewallEnabledDraft,
+            ipfilter: firewallIpFilterDraft,
+            policyIn: firewallPolicyInDraft,
+            policyOut: firewallPolicyOutDraft,
+          },
+        },
+      );
+
+      setFirewallMessage(localizeBackendMessage(response.message, locale) || localizeMessage(locale, {
+        zh: '防火墙设置已保存。',
+        en: 'Firewall settings saved.',
+        ja: 'ファイアウォール設定を保存しました。',
+        ko: '방화벽 설정을 저장했습니다.',
+      }));
+      refreshPageState();
+      refreshPageState(1200);
+    } catch (caughtError) {
+      setFirewallActionError(toFriendlyError(caughtError as ApiError, locale));
+      refreshPageState();
+    } finally {
+      setFirewallBusy(null);
+    }
+  }
+
+  async function createFirewallRule(
+    overrides?: Partial<{
+      direction: FirewallRuleDirection;
+      action: FirewallRuleAction;
+      protocol: FirewallRuleProtocol;
+      source: string;
+      destinationPort: string;
+      comment: string;
+      enabled: boolean;
+    }>,
+  ) {
+    if (!serviceId) return;
+
+    const direction = overrides?.direction ?? firewallDirectionDraft;
+    const action = overrides?.action ?? firewallRuleActionDraft;
+    const protocol = overrides?.protocol ?? firewallProtocolDraft;
+    const source = (overrides?.source ?? firewallSourceDraft).trim();
+    const destinationPort = (overrides?.destinationPort ?? firewallDestinationPortDraft).trim();
+    const comment = (overrides?.comment ?? firewallCommentDraft).trim();
+    const enabled = overrides?.enabled ?? true;
+
+    if ((protocol === 'tcp' || protocol === 'udp') && destinationPort === '') {
+      setFirewallActionError(localizeMessage(locale, {
+        zh: 'TCP/UDP 规则需要填写目标端口。',
+        en: 'TCP and UDP rules require a destination port.',
+        ja: 'TCP/UDP ルールには宛先ポートが必要です。',
+        ko: 'TCP/UDP 규칙에는 대상 포트가 필요합니다.',
+      }));
+      return;
+    }
+
+    setFirewallBusy('create-rule');
+    setFirewallMessage(null);
+    setFirewallActionError(null);
+
+    try {
+      const response = await requestJson<ActionResponse<ServiceFirewallResponse['data']>>(
+        `/api/v1/services/${serviceId}/server/firewall/rules`,
+        {
+          method: 'POST',
+          body: {
+            direction,
+            action,
+            protocol,
+            enabled,
+            source: source || null,
+            destinationPort: destinationPort || null,
+            comment: comment || null,
+          },
+        },
+      );
+
+      setFirewallMessage(localizeBackendMessage(response.message, locale) || localizeMessage(locale, {
+        zh: '防火墙规则已新增。',
+        en: 'Firewall rule created.',
+        ja: 'ファイアウォールルールを追加しました。',
+        ko: '방화벽 규칙을 추가했습니다.',
+      }));
+      if (!overrides) {
+        resetFirewallRuleComposer();
+      }
+      refreshPageState();
+      refreshPageState(1200);
+    } catch (caughtError) {
+      setFirewallActionError(toFriendlyError(caughtError as ApiError, locale));
+      refreshPageState();
+    } finally {
+      setFirewallBusy(null);
+    }
+  }
+
+  async function deleteFirewallRule(position: number | null) {
+    if (!serviceId || position === null) return;
+
+    const confirmed = window.confirm(localizeMessage(locale, {
+      zh: `确定要删除第 ${position} 条防火墙规则吗？`,
+      en: `Delete firewall rule #${position}?`,
+      ja: `ファイアウォールルール #${position} を削除しますか？`,
+      ko: `방화벽 규칙 #${position} 을 삭제하시겠습니까?`,
+    }));
+    if (!confirmed) {
+      return;
+    }
+
+    setFirewallBusy(`delete-rule:${position}`);
+    setFirewallMessage(null);
+    setFirewallActionError(null);
+
+    try {
+      const response = await requestJson<ActionResponse<ServiceFirewallResponse['data']>>(
+        `/api/v1/services/${serviceId}/server/firewall/rules/${position}`,
+        {
+          method: 'DELETE',
+        },
+      );
+
+      setFirewallMessage(localizeBackendMessage(response.message, locale) || localizeMessage(locale, {
+        zh: '防火墙规则已删除。',
+        en: 'Firewall rule deleted.',
+        ja: 'ファイアウォールルールを削除しました。',
+        ko: '방화벽 규칙을 삭제했습니다.',
+      }));
+      refreshPageState();
+      refreshPageState(1200);
+    } catch (caughtError) {
+      setFirewallActionError(toFriendlyError(caughtError as ApiError, locale));
+      refreshPageState();
+    } finally {
+      setFirewallBusy(null);
     }
   }
 
@@ -2545,6 +2902,7 @@ export function ServiceDetailPage() {
           console: false,
           patch: false,
           build: false,
+          firewall: false,
           suspend: false,
           unsuspend: false,
           destroy: false,
@@ -2559,6 +2917,10 @@ export function ServiceDetailPage() {
 
     return serverData.data.capabilities;
   }, [serverData]);
+  const firewallOptions = firewallData?.data.options ?? null;
+  const firewallRules = firewallData?.data.rules ?? [];
+  const firewallRuleCount = firewallRules.length;
+  const canManageFirewall = Boolean(serverCapabilities.application.firewall && (firewallData?.data.capabilities.update ?? true));
   const runtimeOverview = runtimeOverviewData?.data.overview ?? null;
   const runtimeMetrics = runtimeMetricsData?.data.metrics ?? null;
   const runtimeOverviewStatus = runtimeOverviewData?.data.status ?? null;
@@ -2753,6 +3115,43 @@ export function ServiceDetailPage() {
     }
     setSelectedUpgradeConfig(defaults);
   }, [selectedUpgradeProductId, upgradeOptionsData?.data.products]);
+
+  const recentOperationLogs = asArray<ServiceOperationLogSummary>(operationLogData?.data.logs);
+  const compactOperationLogs = useMemo<CompactOperationLog[]>(() => recentOperationLogs.map((log) => {
+    const localizedMessage = localizeBackendMessage(log.message, locale) || log.message || null;
+    const localizedDetail = log.detail && log.detail !== log.message
+      ? (localizeBackendMessage(log.detail, locale) || log.detail)
+      : null;
+    const showCode = Boolean(log.code) && !shouldHideOperationCodeOnSuccess(log.code, log.success ?? null);
+    const message = localizedMessage
+      ?? (showCode
+        ? null
+        : localizeMessage(locale, {
+          zh: '命令已提交，系统正在执行。',
+          en: 'Command submitted and queued for execution.',
+          ja: 'コマンドを送信し、実行待ちになっています。',
+          ko: '명령이 제출되어 실행 대기 중입니다.',
+        }));
+
+    return {
+      id: log.operationId || log.id,
+      actionLabel: uiOperationActionLabel(log.action, locale),
+      outcomeLabel: uiOperationOutcomeLabel(log.success ?? null, locale),
+      outcomeClassName: log.success === true ? 'status-active' : log.success === false ? 'status-cancelled' : 'status-pending',
+      timestampLabel: formatDate(log.createdAt),
+      operationId: log.operationId ?? null,
+      message,
+      detail: localizedDetail,
+      code: log.code ?? null,
+      showCode,
+      success: log.success ?? null,
+    };
+  }), [formatDate, locale, recentOperationLogs]);
+  const highlightedOperationLogs = useMemo<CompactOperationLog[]>(() => {
+    const failed = compactOperationLogs.filter((log) => log.success === false);
+    const others = compactOperationLogs.filter((log) => log.success !== false);
+    return [...failed, ...others].slice(0, 3);
+  }, [compactOperationLogs]);
 
   if (loading) {
     return <div className="loading-card">{text.common.loading}</div>;
@@ -3062,7 +3461,6 @@ export function ServiceDetailPage() {
       tone: 'network',
     },
   ];
-  const recentOperationLogs = asArray<ServiceOperationLogSummary>(operationLogData?.data.logs);
   const primaryInstallPanelUrl = pickString(currentPrimaryInstall?.responsePayload, ['panel_url', 'panelUrl']);
   const primaryInstallPanelLabel = pickString(currentPrimaryInstall?.responsePayload, ['panel_label', 'panelLabel'])
     ?? currentPrimaryInstall?.recipe?.panelLabel
@@ -3097,7 +3495,7 @@ export function ServiceDetailPage() {
     : isMeaningfulNodeValue(propertyRegionLabelCandidate)
       ? propertyRegionLabelCandidate
       : derivedNodeLabel
-        ?? getCountryMeta(service.countryCode)?.name
+        ?? getCountryName(service.countryCode, locale)
         ?? localizeText(service.label || service.baseLabel, locale, ui.common.unnamedService);
   const runtimeNodeLabel = convoyState.node && convoyState.node.trim() !== '' ? convoyState.node : null;
   const serviceCountryCode = service.countryCode
@@ -3113,6 +3511,23 @@ export function ServiceDetailPage() {
     ?? serviceApps?.selectedOs
     ?? effectiveReinstallOs
     ?? '-';
+  const topSummaryItems = [
+    {
+      key: 'node',
+      label: locale.startsWith('zh') ? '节点' : 'Node',
+      value: displayNodeLabel,
+    },
+    {
+      key: 'os',
+      label: 'OS',
+      value: serviceOsLabel,
+    },
+    {
+      key: 'expires',
+      label: locale.startsWith('zh') ? '到期时间' : 'Expires',
+      value: service.expiresAt ? formatDate(service.expiresAt) : '-',
+    },
+  ];
   const serviceOsVisual = getOsVisual(serviceOsLabel);
   const primaryPanelVisual = getAppVisual(currentPrimaryInstall?.app ?? (servicePanelLabel
     ? {
@@ -3203,6 +3618,13 @@ export function ServiceDetailPage() {
         }),
     },
   ];
+  const firewallSummaryLabel = locale.startsWith('zh')
+    ? `防火墙 · ${firewallOptions ? (firewallOptions.enabled ? '已启用' : '已关闭') : (firewallLoading ? '同步中' : (firewallError ? '暂不可用' : '等待映射'))} · ${firewallRuleCount} 条规则`
+    : `Firewall · ${firewallOptions ? (firewallOptions.enabled ? 'Enabled' : 'Disabled') : (firewallLoading ? 'Syncing' : (firewallError ? 'Unavailable' : 'Waiting for mapping'))} · ${firewallRuleCount} rules`;
+  const advancedControlsSummaryLabel = locale.startsWith('zh')
+    ? '深度操作（重装 / 密码 / 暂停 / 销毁）'
+    : 'Deep controls (reinstall / password / suspend / destroy)';
+  const firewallDetailsDefaultOpen = Boolean(firewallMessage || firewallActionError || firewallError);
 
   return (
     <div className="stack-24">
@@ -3219,33 +3641,6 @@ export function ServiceDetailPage() {
             ) : null}
             {operatorOrigin ? (
               <span className="chip">{locale.startsWith('zh') ? 'AI 商业闭环' : 'AI operator linked'}</span>
-            ) : null}
-          </div>
-          <div className="summary-list summary-list--hero">
-            {serviceCountryCode ? (
-              <div className="summary-line">
-                <CountryFlagIcon countryCode={serviceCountryCode} />
-                <div>
-                  <span>{locale.startsWith('zh') ? '节点' : 'Node'}</span>
-                  <strong>{displayNodeLabel}</strong>
-                </div>
-              </div>
-            ) : null}
-            <div className="summary-line">
-              <VisualIcon glyph={serviceOsVisual.glyph} label={serviceOsLabel} size="sm" src={serviceOsVisual.src} tone={serviceOsVisual.tone} />
-              <div>
-                <span>OS</span>
-                <strong>{serviceOsLabel}</strong>
-              </div>
-            </div>
-            {service.expiresAt ? (
-              <div className="summary-line">
-                <span className="summary-line__marker" />
-                <div>
-                  <span>{locale.startsWith('zh') ? '到期' : 'Expires'}</span>
-                  <strong>{formatDate(service.expiresAt)}</strong>
-                </div>
-              </div>
             ) : null}
           </div>
         </div>
@@ -3335,7 +3730,7 @@ export function ServiceDetailPage() {
           </div>
           <div className="action-row">
             {operatorOrigin.capsuleId ? (
-              <Link className="button primary" to={`/workspaces/${encodeURIComponent(operatorOrigin.capsuleId)}`}>
+              <Link className="button primary" to={`/operator/${encodeURIComponent(operatorOrigin.capsuleId)}`}>
                 {locale.startsWith('zh') ? '打开 AI 工作区' : 'Open AI workspace'}
               </Link>
             ) : null}
@@ -3363,6 +3758,507 @@ export function ServiceDetailPage() {
               {locale.startsWith('zh') ? '进入 AI 工作台' : 'Open AI workspace hub'}
             </Link>
           </div>
+        </section>
+      ) : null}
+
+      {!isManagedRuntime ? (
+        <section className="service-command-deck">
+          <article className="panel stack-16 service-summary-panel">
+            <div className="service-section-intro">
+              <div className="stack-8">
+                <p className="eyebrow">{locale.startsWith('zh') ? '状态摘要' : 'Status summary'}</p>
+                <h3>{locale.startsWith('zh') ? '一眼看懂服务状态和接管信息' : 'Understand service state and takeover info at a glance'}</h3>
+                <p className="muted">
+                  {localizeMessage(locale, {
+                    zh: '这里只保留最关键的状态、接管信息和入口，避免和监控面板重复。',
+                    en: 'Only the most important state and takeover details stay here, without repeating the monitoring panel.',
+                    ja: 'ここでは重要な状態と引き継ぎ情報だけを表示し、監視パネルとの重複を避けます。',
+                    ko: '이 영역에는 핵심 상태와 인수 정보만 남겨 모니터링 패널과의 중복을 줄였습니다.',
+                  })}
+                </p>
+              </div>
+            </div>
+            <div className="service-meta-grid service-summary-panel__grid">
+              {topSummaryItems.map((item) => (
+                <div className="service-meta-card" key={item.key}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="summary-glance service-summary-panel__glance">
+              {supportSummaryItems.map((item) => (
+                <div className="summary-glance__item" key={item.key}>
+                  <span className={`summary-glance__dot${item.tone === 'network' ? ' summary-glance__dot--network' : item.tone === 'secure' ? ' summary-glance__dot--secure' : ''}`} />
+                  <div>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="callout compact service-summary-panel__network">
+              <div className="stack-8">
+                <strong>{ui.runtime.ipAddress}</strong>
+                <div className="chip-row">
+                  {displayIpList.map((address) => (
+                    <span className="chip" key={address}>{address}</span>
+                  ))}
+                </div>
+                <p className="muted">
+                  {localizeMessage(locale, {
+                    zh: `本月流量 ${trafficUsageValue}，入站 ${telemetryDisplayBandwidth} / 出站 ${telemetryDisplayTraffic}`,
+                    en: `Traffic this month ${trafficUsageValue}, RX ${telemetryDisplayBandwidth} / TX ${telemetryDisplayTraffic}`,
+                    ja: `今月の転送量 ${trafficUsageValue}、受信 ${telemetryDisplayBandwidth} / 送信 ${telemetryDisplayTraffic}`,
+                    ko: `이번 달 트래픽 ${trafficUsageValue}, 수신 ${telemetryDisplayBandwidth} / 송신 ${telemetryDisplayTraffic}`,
+                  })}
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article className="panel stack-16 service-command-center">
+            <div className="service-section-intro">
+              <div className="stack-8">
+                <p className="eyebrow">{ui.runtime.serverOperations}</p>
+                <h3>{locale.startsWith('zh') ? '操作中心' : 'Control center'}</h3>
+              </div>
+            </div>
+            <div className="service-command-group">
+              <div className="service-command-group__head">
+                <div className="stack-8">
+                  <strong>{ui.services.runtimeConsole}</strong>
+                  <p className="muted">
+                    {localizeMessage(locale, {
+                      zh: '控制台适合处理开机异常、网络配置错误和忘记放行端口时的紧急登录。',
+                      en: 'Use the runtime console for boot issues, bad network settings, or emergency access when SSH is blocked.',
+                      ja: 'ランタイムコンソールは、起動障害やネットワーク設定ミス、SSH が塞がれた緊急時の復旧に適しています。',
+                      ko: '런타임 콘솔은 부팅 오류, 네트워크 설정 문제, SSH 차단 시 긴급 복구에 적합합니다.',
+                    })}
+                  </p>
+                </div>
+              </div>
+              <div className="action-grid action-grid--premium">
+                  <select
+                    className="text-input select-input service-command-select"
+                    disabled={consoleBusy || !canOpenServerConsole}
+                    value={consoleType}
+                    onChange={(event) => setConsoleType(event.target.value as ConsoleSessionType)}
+                  >
+                    <option value="novnc">{locale.startsWith('zh') ? '网页控制台（noVNC）' : 'Web console (noVNC)'}</option>
+                    <option value="xtermjs">{locale.startsWith('zh') ? '终端控制台（xtermjs）' : 'Terminal console (xtermjs)'}</option>
+                  </select>
+                  <button
+                    className="button secondary"
+                    disabled={consoleBusy || !canOpenServerConsole}
+                    type="button"
+                    onClick={() => void openServerConsole()}
+                  >
+                    {consoleBusy ? `${text.common.pending}...` : localizeMessage(locale, {
+                      zh: '打开控制台',
+                      en: 'Open console',
+                      ja: 'コンソールを開く',
+                      ko: '콘솔 열기',
+                      })}
+                  </button>
+              </div>
+              {consoleMessage ? <div className="callout compact">{consoleMessage}</div> : null}
+              {consoleError ? <div className="error-card">{consoleError}</div> : null}
+              {!canOpenServerConsole ? (
+                <div className="callout compact">
+                  {isArchivedService
+                    ? localizeMessage(locale, {
+                      zh: '该服务已归档，控制台入口不再开放。',
+                      en: 'This service is archived, so console access is no longer available.',
+                      ja: 'このサービスはアーカイブ済みのため、コンソールは利用できません。',
+                      ko: '이 서비스는 보관 상태라 콘솔 접근이 제공되지 않습니다.',
+                    })
+                    : runtimeTelemetryMessage
+                      ? runtimeTelemetryMessage
+                      : localizeMessage(locale, {
+                        zh: '当前服务还没有可用的控制台映射。等服务器映射完成后，这里会开放浏览器控制台。',
+                        en: 'Console access is not ready for this service yet. The browser console will become available once the server mapping is ready.',
+                        ja: 'このサービスではまだコンソールを利用できません。サーバーマッピング完了後にブラウザコンソールが有効になります。',
+                        ko: '이 서비스는 아직 콘솔에 접근할 수 없습니다. 서버 매핑이 완료되면 브라우저 콘솔을 사용할 수 있습니다.',
+                      })}
+                </div>
+              ) : null}
+            </div>
+            <div className="service-command-group">
+              <div className="service-command-group__head">
+                <div className="stack-8">
+                  <strong>{locale.startsWith('zh') ? '电源操作' : 'Power actions'}</strong>
+                  <p className="muted">
+                    {localizeMessage(locale, {
+                      zh: '开机、关机和重启保持在最显眼的位置，方便客户直接操作。',
+                      en: 'Start, stop, and restart stay in the most visible spot for quick self-service control.',
+                      ja: '起動・停止・再起動は、すぐ操作できるよう一番見つけやすい位置に残します。',
+                      ko: '시작, 종료, 재시작은 고객이 바로 찾을 수 있게 가장 눈에 띄는 위치에 둡니다.',
+                    })}
+                  </p>
+                </div>
+              </div>
+              <div className="action-grid action-grid--premium">
+                <button
+                  className="button secondary"
+                  disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
+                  type="button"
+                  onClick={() => void runServerAction('start')}
+                >
+                  {serverBusy === 'start' ? `${text.common.pending}...` : ui.runtime.start}
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
+                  type="button"
+                  onClick={() => void runServerAction('stop')}
+                >
+                  {serverBusy === 'stop' ? `${text.common.pending}...` : ui.runtime.stop}
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
+                  type="button"
+                  onClick={() => void runServerAction('restart')}
+                >
+                  {serverBusy === 'restart' ? `${text.common.pending}...` : ui.runtime.restart}
+                </button>
+              </div>
+              {serverMessage ? <div className="callout compact">{serverMessage}</div> : null}
+              {serverActionError ? <div className="error-card">{serverActionError}</div> : null}
+            </div>
+            <details className="service-command-group service-command-group--firewall service-inline-drawer" open={firewallDetailsDefaultOpen || undefined}>
+              <summary>
+                <div className="service-command-group__head">
+                  <div className="stack-8">
+                    <strong>{firewallSummaryLabel}</strong>
+                    <p className="muted">
+                      {locale.startsWith('zh')
+                        ? '直接在这里放行常用端口、调整默认策略和维护规则，不再跳到下面单独设置。'
+                        : 'Open ports, tune default policies, and maintain rules directly here without jumping to another section.'}
+                    </p>
+                  </div>
+                </div>
+              </summary>
+              <div className="service-drawer__body">
+                <div className="firewall-quick-actions firewall-quick-actions--premium">
+                  <button
+                    className="button ghost"
+                    disabled={firewallBusy !== null || !canManageFirewall}
+                    type="button"
+                    onClick={() => void createFirewallRule({
+                      direction: 'in',
+                      action: 'ACCEPT',
+                      protocol: 'tcp',
+                      destinationPort: '22',
+                      comment: 'Allow SSH',
+                    })}
+                  >
+                    {locale.startsWith('zh') ? '放行 SSH 22' : 'Allow SSH 22'}
+                  </button>
+                  <button
+                    className="button ghost"
+                    disabled={firewallBusy !== null || !canManageFirewall}
+                    type="button"
+                    onClick={() => void createFirewallRule({
+                      direction: 'in',
+                      action: 'ACCEPT',
+                      protocol: 'tcp',
+                      destinationPort: '80',
+                      comment: 'Allow HTTP',
+                    })}
+                  >
+                    {locale.startsWith('zh') ? '放行 HTTP 80' : 'Allow HTTP 80'}
+                  </button>
+                  <button
+                    className="button ghost"
+                    disabled={firewallBusy !== null || !canManageFirewall}
+                    type="button"
+                    onClick={() => void createFirewallRule({
+                      direction: 'in',
+                      action: 'ACCEPT',
+                      protocol: 'tcp',
+                      destinationPort: '443',
+                      comment: 'Allow HTTPS',
+                    })}
+                  >
+                    {locale.startsWith('zh') ? '放行 HTTPS 443' : 'Allow HTTPS 443'}
+                  </button>
+                  <button
+                    className="button ghost"
+                    disabled={firewallBusy !== null || !canManageFirewall}
+                    type="button"
+                    onClick={() => void createFirewallRule({
+                      direction: 'in',
+                      action: 'ACCEPT',
+                      protocol: 'icmp',
+                      comment: 'Allow ICMP ping',
+                    })}
+                  >
+                    {locale.startsWith('zh') ? '放行 Ping' : 'Allow Ping'}
+                  </button>
+                </div>
+                {firewallLoading && !firewallOptions ? <div className="loading-card">{text.common.loading}</div> : null}
+                {firewallError ? <div className="error-card compact">{toFriendlyError(new Error(firewallError), locale)}</div> : null}
+                {firewallMessage ? <div className="callout compact">{firewallMessage}</div> : null}
+                {firewallActionError ? <div className="error-card compact">{firewallActionError}</div> : null}
+                {firewallOptions ? (
+                  <>
+                    <div className="firewall-grid">
+                      <div className="summary-line">
+                        <span className={`summary-line__marker ${firewallOptions.enabled ? 'status-active' : 'status-unknown'}`} />
+                        <div>
+                          <span>{locale.startsWith('zh') ? '状态' : 'Status'}</span>
+                          <strong>{firewallOptions.enabled
+                            ? (locale.startsWith('zh') ? '防火墙已启用' : 'Firewall enabled')
+                            : (locale.startsWith('zh') ? '防火墙已关闭' : 'Firewall disabled')}</strong>
+                        </div>
+                      </div>
+                      <div className="summary-line">
+                        <span className="summary-line__marker summary-line__marker--secure" />
+                        <div>
+                          <span>{locale.startsWith('zh') ? '入站策略' : 'Inbound policy'}</span>
+                          <strong>{firewallPolicyLabel(firewallOptions.policyIn, locale)}</strong>
+                        </div>
+                      </div>
+                      <div className="summary-line">
+                        <span className="summary-line__marker summary-line__marker--secure" />
+                        <div>
+                          <span>{locale.startsWith('zh') ? '出站策略' : 'Outbound policy'}</span>
+                          <strong>{firewallPolicyLabel(firewallOptions.policyOut, locale)}</strong>
+                        </div>
+                      </div>
+                      <div className="summary-line">
+                        <span className="summary-line__marker summary-line__marker--secure" />
+                        <div>
+                          <span>{locale.startsWith('zh') ? 'IP 过滤' : 'IP filter'}</span>
+                          <strong>{firewallOptions.ipfilter
+                            ? (locale.startsWith('zh') ? '已开启' : 'Enabled')
+                            : (locale.startsWith('zh') ? '已关闭' : 'Disabled')}</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="firewall-form-grid">
+                      <label className="checkbox-row">
+                        <input
+                          checked={firewallEnabledDraft}
+                          type="checkbox"
+                          onChange={(event) => setFirewallEnabledDraft(event.target.checked)}
+                        />
+                        <span>{locale.startsWith('zh') ? '启用 PVE 防火墙' : 'Enable PVE firewall'}</span>
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          checked={firewallIpFilterDraft}
+                          type="checkbox"
+                          onChange={(event) => setFirewallIpFilterDraft(event.target.checked)}
+                        />
+                        <span>{locale.startsWith('zh') ? '启用 IP Filter' : 'Enable IP filter'}</span>
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '默认入站策略' : 'Default inbound policy'}</span>
+                        <select
+                          className="text-input select-input"
+                          value={firewallPolicyInDraft}
+                          onChange={(event) => setFirewallPolicyInDraft(event.target.value as 'ACCEPT' | 'DROP' | 'REJECT')}
+                        >
+                          <option value="ACCEPT">{locale.startsWith('zh') ? '允许' : 'Allow'}</option>
+                          <option value="DROP">{locale.startsWith('zh') ? '丢弃' : 'Drop'}</option>
+                          <option value="REJECT">{locale.startsWith('zh') ? '拒绝' : 'Reject'}</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '默认出站策略' : 'Default outbound policy'}</span>
+                        <select
+                          className="text-input select-input"
+                          value={firewallPolicyOutDraft}
+                          onChange={(event) => setFirewallPolicyOutDraft(event.target.value as 'ACCEPT' | 'DROP' | 'REJECT')}
+                        >
+                          <option value="ACCEPT">{locale.startsWith('zh') ? '允许' : 'Allow'}</option>
+                          <option value="DROP">{locale.startsWith('zh') ? '丢弃' : 'Drop'}</option>
+                          <option value="REJECT">{locale.startsWith('zh') ? '拒绝' : 'Reject'}</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="firewall-form-grid">
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '方向' : 'Direction'}</span>
+                        <select
+                          className="text-input select-input"
+                          value={firewallDirectionDraft}
+                          onChange={(event) => setFirewallDirectionDraft(event.target.value as FirewallRuleDirection)}
+                        >
+                          <option value="in">{locale.startsWith('zh') ? '入站' : 'Inbound'}</option>
+                          <option value="out">{locale.startsWith('zh') ? '出站' : 'Outbound'}</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '动作' : 'Action'}</span>
+                        <select
+                          className="text-input select-input"
+                          value={firewallRuleActionDraft}
+                          onChange={(event) => setFirewallRuleActionDraft(event.target.value as FirewallRuleAction)}
+                        >
+                          <option value="ACCEPT">{locale.startsWith('zh') ? '允许' : 'Allow'}</option>
+                          <option value="DROP">{locale.startsWith('zh') ? '丢弃' : 'Drop'}</option>
+                          <option value="REJECT">{locale.startsWith('zh') ? '拒绝' : 'Reject'}</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '协议' : 'Protocol'}</span>
+                        <select
+                          className="text-input select-input"
+                          value={firewallProtocolDraft}
+                          onChange={(event) => setFirewallProtocolDraft(event.target.value as FirewallRuleProtocol)}
+                        >
+                          <option value="tcp">TCP</option>
+                          <option value="udp">UDP</option>
+                          <option value="icmp">ICMP</option>
+                          <option value="icmpv6">ICMPv6</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '目标端口' : 'Destination port'}</span>
+                        <input
+                          className="text-input"
+                          placeholder={locale.startsWith('zh') ? '例如 22, 80, 443 或 10000:10100' : '22, 80, 443, or 10000:10100'}
+                          value={firewallDestinationPortDraft}
+                          onChange={(event) => setFirewallDestinationPortDraft(event.target.value)}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '来源 CIDR（可选）' : 'Source CIDR (optional)'}</span>
+                        <input
+                          className="text-input"
+                          placeholder={locale.startsWith('zh') ? '留空表示任意来源，例如 1.2.3.4/32' : 'Leave blank for any source, e.g. 1.2.3.4/32'}
+                          value={firewallSourceDraft}
+                          onChange={(event) => setFirewallSourceDraft(event.target.value)}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>{locale.startsWith('zh') ? '备注（可选）' : 'Comment (optional)'}</span>
+                        <input
+                          className="text-input"
+                          placeholder={locale.startsWith('zh') ? '例如 放行 SSH 管理' : 'For example: allow SSH admin'}
+                          value={firewallCommentDraft}
+                          onChange={(event) => setFirewallCommentDraft(event.target.value)}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="action-grid action-grid--tight action-grid--premium">
+                      <button
+                        className="button secondary"
+                        disabled={firewallBusy !== null || !canManageFirewall}
+                        type="button"
+                        onClick={() => void saveFirewallOptions()}
+                      >
+                        {firewallBusy === 'options'
+                          ? `${text.common.pending}...`
+                          : (locale.startsWith('zh') ? '保存防火墙设置' : 'Save firewall settings')}
+                      </button>
+                      <button
+                        className="button primary"
+                        disabled={firewallBusy !== null || !canManageFirewall}
+                        type="button"
+                        onClick={() => void createFirewallRule()}
+                      >
+                        {firewallBusy === 'create-rule'
+                          ? `${text.common.pending}...`
+                          : (locale.startsWith('zh') ? '新增规则' : 'Add rule')}
+                      </button>
+                    </div>
+
+                    <div className="stack-10">
+                      <strong>{locale.startsWith('zh') ? '当前规则' : 'Current rules'}</strong>
+                      {firewallRules.length === 0 ? (
+                        <div className="callout compact">
+                          {locale.startsWith('zh')
+                            ? '当前还没有自定义规则，系统会按默认入站/出站策略处理流量。'
+                            : 'No custom firewall rules are defined yet. Traffic currently follows the default inbound and outbound policies.'}
+                        </div>
+                      ) : (
+                        <div className="firewall-rule-list">
+                          {firewallRules.map((rule) => {
+                            const ruleStatusClass = !rule.enabled
+                              ? 'status-unknown'
+                              : ((rule.action ?? '').toUpperCase() === 'ACCEPT' ? 'status-active' : 'status-overdue');
+
+                            return (
+                              <div className="firewall-rule-card" key={`${rule.position ?? 'rule'}-${rule.comment ?? ''}-${rule.destinationPort ?? ''}`}>
+                                <div className="firewall-rule-card__header">
+                                  <div className="stack-8">
+                                    <div className="chip-row">
+                                      <span className={`status-pill ${ruleStatusClass}`}>
+                                        {rule.enabled
+                                          ? (locale.startsWith('zh') ? '已启用' : 'Enabled')
+                                          : (locale.startsWith('zh') ? '已停用' : 'Disabled')}
+                                      </span>
+                                      <span className="chip">{firewallDirectionLabel(rule.type, locale)}</span>
+                                      <span className="chip">{firewallActionLabel(rule.action, locale)}</span>
+                                      <span className="chip">{firewallProtocolLabel(rule.protocol)}</span>
+                                      {rule.destinationPort ? <span className="chip">{locale.startsWith('zh') ? '端口' : 'Port'} {rule.destinationPort}</span> : null}
+                                    </div>
+                                    <strong>
+                                      {locale.startsWith('zh') ? '规则' : 'Rule'} #{rule.position ?? '-'}
+                                      {rule.comment ? ` · ${rule.comment}` : ''}
+                                    </strong>
+                                  </div>
+                                  <button
+                                    className="button ghost"
+                                    disabled={firewallBusy !== null || !canManageFirewall || rule.position === null}
+                                    type="button"
+                                    onClick={() => void deleteFirewallRule(rule.position)}
+                                  >
+                                    {firewallBusy === `delete-rule:${rule.position}`
+                                      ? `${text.common.pending}...`
+                                      : (locale.startsWith('zh') ? '删除' : 'Delete')}
+                                  </button>
+                                </div>
+                                <div className="chip-row">
+                                  <span className="chip">
+                                    {locale.startsWith('zh') ? '来源' : 'Source'}: {rule.source ?? (locale.startsWith('zh') ? '任意' : 'Any')}
+                                  </span>
+                                  {rule.destination ? (
+                                    <span className="chip">
+                                      {locale.startsWith('zh') ? '目标' : 'Destination'}: {rule.destination}
+                                    </span>
+                                  ) : null}
+                                  {rule.sourcePort ? (
+                                    <span className="chip">
+                                      {locale.startsWith('zh') ? '源端口' : 'Source port'}: {rule.sourcePort}
+                                    </span>
+                                  ) : null}
+                                  {rule.interface ? (
+                                    <span className="chip">
+                                      IFACE: {rule.interface}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+                {!canManageFirewall ? (
+                  <div className="callout compact">
+                    {serverCapabilities.application.firewall
+                      ? (locale.startsWith('zh')
+                        ? '当前防火墙为只读状态，暂不允许在前台直接修改规则。'
+                        : 'Firewall is currently read-only for this service, so rule changes are disabled in the client panel.')
+                      : (locale.startsWith('zh')
+                        ? '当前服务还没有可用的防火墙映射，等服务器映射完成后才能在这里管理规则。'
+                        : 'Firewall management is not available until this service has an active server mapping.')}
+                  </div>
+                ) : null}
+              </div>
+            </details>
+          </article>
         </section>
       ) : null}
 
@@ -3465,35 +4361,9 @@ export function ServiceDetailPage() {
                   </article>
                 ))}
               </div>
-              <div className="summary-glance runtime-overview-panel__glance">
-                <div className="summary-glance__item">
-                  <span className="summary-glance__dot" />
-                  <div>
-                    <span>{locale.startsWith('zh') ? '主机名' : 'Hostname'}</span>
-                    <strong>{convoyState.hostname ?? '-'}</strong>
-                  </div>
-                </div>
-                <div className="summary-glance__item">
-                  <span className="summary-glance__dot summary-glance__dot--network" />
-                  <div>
-                    <span>{locale.startsWith('zh') ? '主 IP' : 'Primary IP'}</span>
-                    <strong>{displayIp}</strong>
-                  </div>
-                </div>
-                <div className="summary-glance__item">
-                  <span className="summary-glance__dot summary-glance__dot--secure" />
-                  <div>
-                    <span>Uptime</span>
-                    <strong>{displayUptime}</strong>
-                  </div>
-                </div>
-                <div className="summary-glance__item">
-                  <span className="summary-glance__dot summary-glance__dot--network" />
-                  <div>
-                    <span>{locale.startsWith('zh') ? '节点 / 状态' : 'Node / State'}</span>
-                    <strong>{`${displayNodeLabel} / ${effectiveServerStateLabel}`}</strong>
-                  </div>
-                </div>
+              <div className="callout compact">
+                <strong>Uptime</strong>
+                <p className="muted">{displayUptime}</p>
               </div>
             </>
           )}
@@ -3619,9 +4489,11 @@ export function ServiceDetailPage() {
           </article>
         </section>
       ) : (
-        <section className="service-workspace">
-          <div className="service-workspace__main">
-            <section className="panel stack-16 service-delivery-panel">
+        <section className="service-secondary-zone">
+          <details className="service-drawer service-drawer--panel" open>
+            <summary>{locale.startsWith('zh') ? '交付与应用' : 'Delivery and apps'}</summary>
+            <div className="service-drawer__body">
+              <section className="panel stack-16 service-delivery-panel">
               <div className="service-section-intro">
                 <div className="stack-8">
                   <p className="eyebrow">{locale.startsWith('zh') ? '交付与应用' : 'Delivery and apps'}</p>
@@ -4119,843 +4991,838 @@ export function ServiceDetailPage() {
                     : 'There is no app installation catalog available for this service yet.'}
                 </div>
               )}
-            </section>
+              </section>
+            </div>
+          </details>
 
-            <section className="panel stack-12 service-history-panel">
+          <details className="service-drawer service-drawer--panel">
+            <summary>{locale.startsWith('zh') ? `最近操作记录 · ${compactOperationLogs.length} 条` : `Recent operation logs · ${compactOperationLogs.length}`}</summary>
+            <div className="service-drawer__body">
+              <section className="panel stack-12 service-history-panel">
               <div className="service-section-intro">
                 <div className="stack-8">
                   <p className="eyebrow">{ui.runtime.recentLogs}</p>
                   <h3>{locale.startsWith('zh') ? '最近操作记录' : 'Recent operation history'}</h3>
                 </div>
               </div>
-              {recentOperationLogs.length === 0 ? (
+              {compactOperationLogs.length === 0 ? (
                 <div className="callout compact">
                   {ui.runtime.noOperationLogs}
                 </div>
               ) : (
                 <div className="service-history-list">
-                  {recentOperationLogs.map((log) => (
-                    <div className="operation-log" key={log.operationId || log.id}>
+                  {highlightedOperationLogs.map((log) => (
+                    <div className="operation-log" key={log.id}>
                       <div className="operation-log__header">
-                        <strong>{uiOperationActionLabel(log.action, locale)}</strong>
-                        <span className={`status-pill ${log.success === true ? 'status-active' : log.success === false ? 'status-cancelled' : 'status-pending'}`}>
-                          {uiOperationOutcomeLabel(log.success ?? null, locale)}
+                        <strong>{log.actionLabel}</strong>
+                        <span className={`status-pill ${log.outcomeClassName}`}>
+                          {log.outcomeLabel}
                         </span>
                       </div>
                       <p className="muted">
-                        {formatDate(log.createdAt)}
+                        {log.timestampLabel}
                         {log.operationId ? ` | ${ui.common.operationId}: ${log.operationId}` : ''}
                       </p>
-                      {log.message ? <p>{localizeBackendMessage(log.message, locale) || log.message}</p> : null}
-                      {log.code ? <p className="muted">{ui.runtime.errorCode}: {log.code}</p> : null}
-                      {log.detail && log.detail !== log.message ? (
-                        <p className="muted">{localizeBackendMessage(log.detail, locale) || log.detail}</p>
-                      ) : null}
+                      {log.message ? <p>{log.message}</p> : null}
+                      {log.showCode && log.code ? <p className="muted">{ui.runtime.errorCode}: {log.code}</p> : null}
+                      {log.detail ? <p className="muted">{log.detail}</p> : null}
                     </div>
                   ))}
-                </div>
-              )}
-            </section>
-          </div>
-
-          <aside className="service-workspace__side">
-            <article className="panel stack-16 service-support-panel">
-              <div className="stack-8">
-                <p className="eyebrow">{locale.startsWith('zh') ? '连接与接管' : 'Access and takeover'}</p>
-                <h3>{locale.startsWith('zh') ? '把映射、IP 和登录资料收在一起' : 'Keep mapping, IPs, and access details in one place'}</h3>
-                <p className="muted">
-                  {localizeMessage(locale, {
-                    zh: '这里只保留你真正会拿来排查和接管服务器的信息，不再重复铺 CPU、内存和磁盘。',
-                    en: 'This panel keeps only the details you actually use for troubleshooting and takeover access, without repeating CPU, memory, and disk.',
-                    ja: 'このパネルでは調査や引き継ぎに使う情報だけを残し、CPU・メモリ・ディスクの重複表示をやめています。',
-                    ko: '이 패널은 점검과 인수 접속에 필요한 정보만 남기고, CPU/메모리/디스크 반복 표시는 제거했습니다.',
-                  })}
-                </p>
-              </div>
-
-              {isArchivedService ? (
-                <div className="callout compact">
-                  {localizeMessage(locale, {
-                    zh: '该服务已取消或已归档，服务器实时控制入口已自动关闭。',
-                    en: 'This service is cancelled or archived. Real-time server controls are disabled.',
-                    ja: 'このサービスは解約済みまたはアーカイブ済みのため、サーバーリアルタイム操作は無効です。',
-                    ko: '이 서비스는 해지/보관 상태이므로 실시간 서버 제어가 비활성화되었습니다.',
-                  })}
-                </div>
-              ) : serverLoading ? (
-                <div className="loading-card">{text.common.loading}</div>
-              ) : serverError ? (
-                <div className="callout">{friendlyServerError(serverError, locale)}</div>
-              ) : (
-                <>
-                  <div className="summary-glance service-support-panel__grid">
-                    {supportSummaryItems.map((item) => (
-                      <div className="summary-glance__item" key={item.key}>
-                        <span className={`summary-glance__dot${item.tone === 'network' ? ' summary-glance__dot--network' : item.tone === 'secure' ? ' summary-glance__dot--secure' : ''}`} />
-                        <div>
-                          <span>{item.label}</span>
-                          <strong>{item.value}</strong>
+                  {compactOperationLogs.length > highlightedOperationLogs.length ? (
+                    <details className="service-drawer">
+                      <summary>
+                        {locale.startsWith('zh')
+                          ? `展开全部 ${compactOperationLogs.length} 条记录`
+                          : `Show all ${compactOperationLogs.length} logs`}
+                      </summary>
+                      <div className="service-drawer__body">
+                        <div className="service-history-list">
+                          {compactOperationLogs.map((log) => (
+                            <div className="operation-log" key={`all-${log.id}`}>
+                              <div className="operation-log__header">
+                                <strong>{log.actionLabel}</strong>
+                                <span className={`status-pill ${log.outcomeClassName}`}>
+                                  {log.outcomeLabel}
+                                </span>
+                              </div>
+                              <p className="muted">
+                                {log.timestampLabel}
+                                {log.operationId ? ` | ${ui.common.operationId}: ${log.operationId}` : ''}
+                              </p>
+                              {log.message ? <p>{log.message}</p> : null}
+                              {log.showCode && log.code ? <p className="muted">{ui.runtime.errorCode}: {log.code}</p> : null}
+                              {log.detail ? <p className="muted">{log.detail}</p> : null}
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
-
-                  <div className="callout compact service-support-panel__network">
-                    <div className="stack-8">
-                      <strong>{ui.runtime.ipAddress}</strong>
-                      <div className="chip-row">
-                        {displayIpList.map((address) => (
-                          <span className="chip" key={address}>{address}</span>
-                        ))}
-                      </div>
-                      <p className="muted">
-                        {localizeMessage(locale, {
-                          zh: `本月流量 ${trafficUsageValue}，入站 ${telemetryDisplayBandwidth} / 出站 ${telemetryDisplayTraffic}`,
-                          en: `Traffic this month ${trafficUsageValue}, RX ${telemetryDisplayBandwidth} / TX ${telemetryDisplayTraffic}`,
-                          ja: `今月の転送量 ${trafficUsageValue}、受信 ${telemetryDisplayBandwidth} / 送信 ${telemetryDisplayTraffic}`,
-                          ko: `이번 달 트래픽 ${trafficUsageValue}, 수신 ${telemetryDisplayBandwidth} / 송신 ${telemetryDisplayTraffic}`,
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                </>
+                    </details>
+                  ) : null}
+                </div>
               )}
+              </section>
+            </div>
+          </details>
 
-              {storedPassword ? (
-                <div className="callout compact service-password-card">
+          <details className="service-drawer service-drawer--panel">
+            <summary>{advancedControlsSummaryLabel}</summary>
+            <div className="service-drawer__body">
+              <article className="panel stack-16 service-ops-panel">
+                <div className="service-section-intro">
                   <div className="stack-8">
-                    <strong>{locale.startsWith('zh') ? '最近保存的系统密码' : 'Most recently saved system password'}</strong>
-                    <code className="service-password-card__code">{showStoredPassword ? storedPassword : '************'}</code>
-                    {storedPasswordLoginUsername ? (
-                      <p className="muted">
-                        {localizeMessage(locale, {
-                          zh: `建议登录用户名：${storedPasswordLoginUsername}`,
-                          en: `Suggested login username: ${storedPasswordLoginUsername}`,
-                          ja: `推奨ログインユーザー名: ${storedPasswordLoginUsername}`,
-                          ko: `권장 로그인 사용자명: ${storedPasswordLoginUsername}`,
-                        })}
-                      </p>
-                    ) : null}
-                    <p className="muted">{storedPasswordStatusHint}</p>
-                    <button
-                      className="button ghost"
-                      type="button"
-                      onClick={() => setShowStoredPassword((current) => !current)}
-                    >
-                      {showStoredPassword
-                        ? localizeMessage(locale, {
-                          zh: '隐藏密码',
-                          en: 'Hide password',
-                          ja: 'パスワードを隠す',
-                          ko: '비밀번호 숨기기',
-                        })
-                        : localizeMessage(locale, {
-                          zh: '显示密码',
-                          en: 'Show password',
-                          ja: 'パスワードを表示',
-                          ko: '비밀번호 표시',
-                        })}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="callout compact service-password-card">
-                  {localizeMessage(locale, {
-                    zh: '当前没有可直接展示的保存密码。需要时请在下方“操作中心”里重置并生成新密码。',
-                    en: 'There is no saved password to display right now. If needed, generate a new one from the controls below.',
-                    ja: '現在表示できる保存済みパスワードはありません。必要な場合は下の操作パネルから再設定してください。',
-                    ko: '지금 바로 보여 줄 저장 비밀번호는 없습니다. 필요하면 아래 제어 패널에서 새 비밀번호를 생성하세요.',
-                  })}
-                </div>
-              )}
-            </article>
-
-            <article className="panel stack-16 service-ops-panel">
-              <div className="service-section-intro">
-                <div className="stack-8">
-                  <p className="eyebrow">{ui.runtime.serverOperations}</p>
-                  <h3>{locale.startsWith('zh') ? '操作中心' : 'Control center'}</h3>
-                </div>
-              </div>
-
-              <div className="callout compact">
-                <div className="stack-12">
-                  <strong>{ui.services.runtimeConsole}</strong>
-                  <p className="muted">
-                    {localizeMessage(locale, {
-                      zh: '控制台适合处理开机异常、网络配置错误、重装排障和忘记放行端口时的紧急登录。',
-                      en: 'Use the runtime console to recover from boot issues, bad network settings, reinstall failures, or emergency access when SSH is unavailable.',
-                      ja: 'ランタイムコンソールは、起動障害、ネットワーク設定ミス、再インストール障害、SSH が使えない緊急時の復旧に適しています。',
-                      ko: '런타임 콘솔은 부팅 오류, 네트워크 설정 문제, 재설치 장애, SSH 접속 불가 상황의 긴급 복구에 적합합니다.',
-                    })}
-                  </p>
-                  <div className="action-grid">
-                    <select
-                      className="text-input select-input"
-                      disabled={consoleBusy || !canOpenServerConsole}
-                      value={consoleType}
-                      onChange={(event) => setConsoleType(event.target.value as ConsoleSessionType)}
-                    >
-                      <option value="novnc">{locale.startsWith('zh') ? '网页控制台（noVNC）' : 'Web console (noVNC)'}</option>
-                      <option value="xtermjs">{locale.startsWith('zh') ? '终端控制台（xtermjs）' : 'Terminal console (xtermjs)'}</option>
-                    </select>
-                    <button
-                      className="button secondary"
-                      disabled={consoleBusy || !canOpenServerConsole}
-                      type="button"
-                      onClick={() => void openServerConsole()}
-                    >
-                      {consoleBusy
-                        ? `${text.common.pending}...`
-                        : localizeMessage(locale, {
-                          zh: '打开控制台',
-                          en: 'Open console',
-                          ja: 'コンソールを開く',
-                          ko: '콘솔 열기',
-                        })}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="stack-10">
-                <p className="eyebrow">{locale.startsWith('zh') ? '电源操作' : 'Power actions'}</p>
-                <div className="action-grid">
-                  <button
-                    className="button secondary"
-                    disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
-                    type="button"
-                    onClick={() => void runServerAction('start')}
-                  >
-                    {serverBusy === 'start' ? `${text.common.pending}...` : ui.runtime.start}
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
-                    type="button"
-                    onClick={() => void runServerAction('stop')}
-                  >
-                    {serverBusy === 'stop' ? `${text.common.pending}...` : ui.runtime.stop}
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
-                    type="button"
-                    onClick={() => void runServerAction('restart')}
-                  >
-                    {serverBusy === 'restart' ? `${text.common.pending}...` : ui.runtime.restart}
-                  </button>
-                </div>
-              </div>
-
-              {(serverCapabilities.application.suspend || serverCapabilities.application.unsuspend || serverCapabilities.application.destroy) ? (
-                <div className="callout compact">
-                  <div className="stack-12">
-                    <strong>{locale.startsWith('zh') ? '暂停 / 恢复 / 销毁' : 'Suspend / Unsuspend / Destroy'}</strong>
+                    <p className="eyebrow">{locale.startsWith('zh') ? '高风险与深度操作' : 'Deep and high-risk controls'}</p>
+                    <h3>{locale.startsWith('zh') ? '把重装、密码和不可逆操作收在这里' : 'Keep reinstall, password, and irreversible actions here'}</h3>
                     <p className="muted">
                       {localizeMessage(locale, {
-                        zh: '这些操作会直接影响服务可用性，其中销毁是不可逆操作，请务必确认后再执行。',
-                        en: 'These operations directly affect availability, and destroy is irreversible. Please confirm carefully before continuing.',
-                        ja: 'これらの操作は可用性へ直接影響し、削除は元に戻せません。十分確認の上で実行してください。',
-                        ko: '이 작업들은 가용성에 직접 영향을 주며, 삭제는 되돌릴 수 없습니다. 충분히 확인 후 진행해 주세요.',
+                        zh: '这里只保留真正需要二次确认或深度配置的操作，避免和上方操作中心重复。',
+                        en: 'Only the actions that require deeper configuration or stronger confirmation stay here, so the main control center does not repeat itself.',
+                        ja: 'ここには、詳細設定や強い確認が必要な操作だけを残し、上部コントロールセンターとの重複を避けます。',
+                        ko: '여기에는 심화 설정이나 강한 확인이 필요한 작업만 남겨 상단 제어 센터와의 중복을 줄였습니다.',
                       })}
                     </p>
-                    <div className="action-grid">
-                      <button
-                        className="button ghost"
-                        disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.suspend}
-                        type="button"
-                        onClick={() => void runServerAction('suspend')}
-                      >
-                        {serverBusy === 'suspend'
-                          ? `${text.common.pending}...`
-                          : (locale.startsWith('zh') ? '暂停服务器' : 'Suspend server')}
-                      </button>
-                      <button
-                        className="button ghost"
-                        disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.unsuspend}
-                        type="button"
-                        onClick={() => void runServerAction('unsuspend')}
-                      >
-                        {serverBusy === 'unsuspend'
-                          ? `${text.common.pending}...`
-                          : (locale.startsWith('zh') ? '恢复服务器' : 'Unsuspend server')}
-                      </button>
-                      <button
-                        className="button danger"
-                        disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.destroy}
-                        type="button"
-                        onClick={() => void runServerAction('destroy')}
-                      >
-                        {serverBusy === 'destroy'
-                          ? `${text.common.pending}...`
-                          : (locale.startsWith('zh') ? '销毁服务器' : 'Destroy server')}
-                      </button>
-                    </div>
                   </div>
                 </div>
-              ) : null}
 
-              <div className="callout compact">
-                <div className="stack-12">
-                  <strong>{locale.startsWith('zh') ? '密码与访问' : 'Password and access'}</strong>
-                  <label className="field">
-                    <span>{locale.startsWith('zh') ? '自定义新密码（可选）' : 'Custom new password (optional)'}</span>
-                    <input
-                      className="text-input"
-                      minLength={8}
-                      placeholder={locale.startsWith('zh')
-                        ? '留空则系统自动生成；8-50 位且含大写/小写/数字/特殊字符'
-                        : 'Leave empty to auto-generate; 8-50 chars with upper/lowercase, number, special'}
-                      type="password"
-                      value={serverPasswordDraft}
-                      onChange={(event) => {
-                        setServerPasswordDraft(event.target.value);
-                        setServerActionError(null);
-                      }}
-                    />
-                  </label>
-                  <p className="muted">
-                    {locale.startsWith('zh')
-                      ? '密码规则：8-50 位，至少包含 1 个大写字母、1 个小写字母、1 个数字和 1 个特殊字符。'
-                      : 'Password policy: 8-50 characters with at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.'}
-                  </p>
-                  {serverPasswordDraftError ? <div className="error-card compact">{serverPasswordDraftError}</div> : null}
-                  <label className="checkbox-row">
-                    <input
-                      checked={serverPasswordAutoRestart}
-                      type="checkbox"
-                      onChange={(event) => setServerPasswordAutoRestart(event.target.checked)}
-                    />
-                    <span>{locale.startsWith('zh') ? '若模板要求重启，自动重启服务器' : 'Auto-restart if template requires reboot'}</span>
-                  </label>
-                  <button
-                    className="button secondary service-action-button"
-                    disabled={serverBusy !== null || !canRunServerActions || !(runtimeCapabilities?.actions.revealPassword ?? false) || Boolean(serverPasswordDraftError)}
-                    type="button"
-                    onClick={() => void runServerAction('reveal-password', {
-                      customPassword: serverPasswordDraft,
-                      autoRestart: serverPasswordAutoRestart,
-                    })}
-                  >
-                    {serverBusy === 'reveal-password'
-                      ? `${text.common.pending}...`
-                      : (serverPasswordDraft.trim().length > 0
-                        ? (locale.startsWith('zh') ? '按自定义密码重置' : 'Reset with custom password')
-                        : ui.runtime.resetPassword)}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                className="button secondary service-action-button"
-                disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.reinstall}
-                type="button"
-                onClick={() => setShowReinstallComposer((current) => !current)}
-              >
-                {showReinstallComposer
-                  ? (locale.startsWith('zh') ? '收起重装配置' : 'Hide reinstall config')
-                  : (locale.startsWith('zh') ? '重装系统（先配置）' : 'Reinstall system (configure first)')}
-              </button>
-              {showReinstallComposer ? (
-                <div className="stack-12 danger-action-panel">
-                  <label className="field">
-                    <span>{locale.startsWith('zh') ? '重装系统' : 'Reinstall OS'}</span>
-                    <select
-                      className="text-input select-input"
-                      value={effectiveReinstallOs}
-                      onChange={(event) => {
-                        setReinstallMarketplaceHint(null);
-                        setReinstallOsChoice(event.target.value);
-                        setReinstallPrimaryAppChoice('');
-                        setReinstallAddonAppChoices([]);
-                      }}
-                    >
-                      <option value="">{locale.startsWith('zh') ? '请选择操作系统' : 'Choose an operating system'}</option>
-                      {reinstallOsOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                {!canRunServerActions ? (
                   <div className="callout compact">
-                    <div className="chip-row">
-                      <span className="chip">{locale.startsWith('zh') ? 'OS' : 'OS'}: {effectiveReinstallOs || '-'}</span>
-                      <span className="chip">
-                        {locale.startsWith('zh') ? '主应用' : 'Primary'}: {reinstallSelectedPrimaryDescriptor?.name ?? (locale.startsWith('zh') ? '未选择' : 'None')}
-                      </span>
-                      <span className="chip">
-                        {locale.startsWith('zh') ? '附加组件' : 'Addons'}: {reinstallSelectedAddonDescriptors.length}
-                      </span>
-                    </div>
-                    <p className="muted">
-                      {locale.startsWith('zh')
-                        ? '重装会先按所选 OS 重新装系统，再重新执行主应用与附加组件安装。'
-                        : 'Reinstall rebuilds the VPS with the selected OS, then replays the selected primary app and addon installs.'}
-                    </p>
-                  </div>
-                  {effectiveReinstallOs ? (
-                    <div className="stack-12">
-                      <div className="field">
-                        <span>{locale.startsWith('zh') ? '主应用' : 'Primary app'}</span>
-                        {reinstallMarketLoading ? (
-                          <div className="loading-card">{text.common.loading}</div>
-                        ) : reinstallPrimaryApps.length === 0 ? (
-                          <div className="callout compact">
-                            {locale.startsWith('zh')
-                              ? '当前 OS 还没有可选主应用。你仍然可以只重装系统。'
-                              : 'No primary apps are currently available for this OS. You can still reinstall the base OS only.'}
-                          </div>
-                        ) : (
-                          <div className="choice-grid">
-                            {reinstallPrimaryApps.map((app) => (
-                              <button
-                                className={`choice-card compact vps-app-card ${reinstallPrimaryAppChoice === app.slug ? 'selected' : ''}`}
-                                disabled={!app.available}
-                                key={app.slug}
-                                type="button"
-                                onClick={() => {
-                                  setReinstallMarketplaceHint(null);
-                                  setReinstallPrimaryAppChoice(reinstallPrimaryAppChoice === app.slug ? '' : app.slug);
-                                }}
-                              >
-                                <strong>{app.name}</strong>
-                                {app.tagline ? <span>{app.tagline}</span> : null}
-                                <small>{app.recipe?.effectiveInstallStrategy ?? app.recipe?.installStrategy ?? '-'}</small>
-                                {!app.available && app.unavailableReason ? <small>{app.unavailableReason}</small> : null}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="field">
-                        <span>{locale.startsWith('zh') ? '附加组件' : 'Addon apps'}</span>
-                        {reinstallMarketLoading ? (
-                          <div className="loading-card">{text.common.loading}</div>
-                        ) : reinstallAddonApps.length === 0 ? (
-                          <div className="callout compact">
-                            {locale.startsWith('zh')
-                              ? '当前 OS 没有可用附加组件。'
-                              : 'No addon apps are currently available for this OS.'}
-                          </div>
-                        ) : (
-                          <div className="choice-grid">
-                            {reinstallAddonApps.map((app) => (
-                              <button
-                                className={`choice-card compact vps-app-card ${reinstallAddonAppChoices.includes(app.slug) ? 'selected' : ''}`}
-                                disabled={!app.available}
-                                key={app.slug}
-                                type="button"
-                                onClick={() => {
-                                  setReinstallMarketplaceHint(null);
-                                  setReinstallAddonAppChoices((current) => current.includes(app.slug)
-                                    ? current.filter((slug) => slug !== app.slug)
-                                    : [...current, app.slug]);
-                                }}
-                              >
-                                <strong>{app.name}</strong>
-                                {app.tagline ? <span>{app.tagline}</span> : null}
-                                <small>{app.recipe?.effectiveInstallStrategy ?? app.recipe?.installStrategy ?? '-'}</small>
-                                {(app.recipe?.dependencies ?? []).length > 0 ? (
-                                  <small>{locale.startsWith('zh') ? '依赖' : 'Depends on'}: {app.recipe?.dependencies.join(', ')}</small>
-                                ) : null}
-                                {(app.recipe?.conflicts ?? []).length > 0 ? (
-                                  <small>{locale.startsWith('zh') ? '冲突' : 'Conflicts'}: {app.recipe?.conflicts.join(', ')}</small>
-                                ) : null}
-                                {!app.available && app.unavailableReason ? <small>{app.unavailableReason}</small> : null}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                  {reinstallMarketplaceHint ? <div className="callout compact">{reinstallMarketplaceHint}</div> : null}
-                  {reinstallMarketError ? <div className="error-card compact">{reinstallMarketError}</div> : null}
-                  {reinstallSelectionError ? <div className="error-card compact">{reinstallSelectionError}</div> : null}
-                  <label className="field">
-                    <span>{ui.runtime.reinstallPassword}</span>
-                    <input
-                      className="text-input"
-                      placeholder={locale.startsWith('zh')
-                        ? '留空则系统自动生成；8-50 位且含大写/小写/数字/特殊字符'
-                        : 'Leave empty to auto-generate; 8-50 chars with upper/lowercase, number, special'}
-                      type="password"
-                      value={reinstallPassword}
-                      onChange={(event) => {
-                        setReinstallPassword(event.target.value);
-                        setServerActionError(null);
-                      }}
-                    />
-                  </label>
-                  <p className="muted">
-                    {locale.startsWith('zh')
-                      ? '如果你想在重装后保留固定密码，这里填写符合策略的新密码。'
-                      : 'If you want a fixed password after reinstall, enter a password here that matches the policy.'}
-                  </p>
-                  {reinstallPasswordError ? <div className="error-card compact">{reinstallPasswordError}</div> : null}
-                  <label className="field">
-                    <span>{ui.runtime.startOnCompletion}</span>
-                    <div className="callout compact">
-                      <input
-                        checked={reinstallStartOnCompletion}
-                        onChange={(event) => setReinstallStartOnCompletion(event.target.checked)}
-                        type="checkbox"
-                      />
-                    </div>
-                  </label>
-                  <button
-                    className="button danger service-action-button--danger"
-                    disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.reinstall || !reinstallReady || Boolean(reinstallSelectionError) || Boolean(reinstallPasswordError)}
-                    type="button"
-                    onClick={() => void runServerAction('reinstall')}
-                  >
-                    {serverBusy === 'reinstall' ? `${text.common.pending}...` : ui.runtime.reinstall}
-                  </button>
-                </div>
-              ) : null}
-
-              {!canRunServerActions ? (
-                <div className="callout compact">
-                  {isArchivedService
-                    ? localizeMessage(locale, {
-                      zh: '该服务当前处于已取消/归档状态，服务器操作已关闭。',
-                      en: 'This service is cancelled/archived, so server actions are disabled.',
-                      ja: 'このサービスは解約/アーカイブ状態のため、サーバー操作は無効です。',
-                      ko: '이 서비스는 해지/보관 상태이므로 서버 작업이 비활성化되었습니다.',
-                    })
-                    : provisioningInFlight
-                    ? localizeMessage(locale, {
-                      zh: '服务正在开通中，暂不可执行服务器操作。',
-                      en: 'Server actions are disabled while provisioning is in progress.',
-                      ja: '開通処理中はサーバー操作を実行できません。',
-                      ko: '개통 진행 중에는 서버 작업을 실행할 수 없습니다.',
-                    })
-                    : provisioningCanRetry
+                    {isArchivedService
                       ? localizeMessage(locale, {
-                        zh: '服务开通失败，请先在左侧“交付与应用”里重试开通。',
-                        en: 'Provisioning failed. Retry provisioning from the delivery panel before running server actions.',
-                        ja: '開通に失敗しました。サーバー操作の前に左側の提供パネルで再試行してください。',
-                        ko: '개통에 실패했습니다. 서버 작업 전 왼쪽 전달 패널에서 다시 시도해 주세요.',
+                        zh: '该服务当前处于已取消/归档状态，服务器操作已关闭。',
+                        en: 'This service is cancelled/archived, so server actions are disabled.',
+                        ja: 'このサービスは解約/アーカイブ状態のため、サーバー操作は無効です。',
+                        ko: '이 서비스는 해지/보관 상태이므로 서버 작업이 비활성化되었습니다.',
                       })
-                    : runtimeTelemetryMessage
-                      ? runtimeTelemetryMessage
-                    : localizeMessage(locale, {
-                        zh: '服务器映射尚未完成，暂不可执行服务器操作。',
-                        en: 'Server mapping is not ready yet, so actions are currently unavailable.',
-                        ja: 'サーバーマッピングが未完了のため、現在サーバー操作は利用できません。',
-                        ko: '서버 매핑이 아직 완료되지 않아 현재 서버 작업을 사용할 수 없습니다.',
-                      })}
-                </div>
-              ) : null}
-              {!canOpenServerConsole ? (
-                <div className="callout compact">
-                  {isArchivedService
-                    ? localizeMessage(locale, {
-                      zh: '该服务已归档，控制台入口不再开放。',
-                      en: 'This service is archived, so console access is no longer available.',
-                      ja: 'このサービスはアーカイブ済みのため、コンソールは利用できません。',
-                      ko: '이 서비스는 보관 상태라 콘솔 접근이 제공되지 않습니다.',
-                    })
-                    : runtimeTelemetryMessage
-                      ? runtimeTelemetryMessage
-                    : localizeMessage(locale, {
-                      zh: '当前服务还没有可用的控制台映射。等服务器映射完成后，这里会开放浏览器控制台。',
-                      en: 'Console access is not ready for this service yet. The browser console will become available once the server mapping is ready.',
-                      ja: 'このサービスではまだコンソールを利用できません。サーバーマッピング完了後にブラウザコンソールが有効になります。',
-                      ko: '이 서비스는 아직 콘솔에 접근할 수 없습니다. 서버 매핑이 완료되면 브라우저 콘솔을 사용할 수 있습니다.',
-                    })}
-                </div>
-              ) : null}
-              {consoleMessage ? <div className="callout compact">{consoleMessage}</div> : null}
-              {consoleError ? <div className="error-card">{consoleError}</div> : null}
-              {canRunServerActions && !isArchivedService && !reinstallReady ? (
-                <div className="callout compact">
-                  {localizeMessage(locale, {
-                    zh: '当前服务还没有可用的系统模板映射，重装功能暂时不可用。',
-                    en: 'No operating system mapping is available for this service yet, so reinstall is currently unavailable.',
-                    ja: 'このサービスに利用可能な OS マッピングがまだないため、再インストールは現在利用できません。',
-                    ko: '이 서비스에 사용 가능한 운영체제 매핑이 아직 없어 재설치를 현재 사용할 수 없습니다.',
-                  })}
-                </div>
-              ) : null}
-              {revealedPassword ? (
-                <div className="callout compact">
-                  <strong>{localizeMessage(locale, {
-                    zh: '新密码（已保存）：',
-                    en: 'New password (saved): ',
-                    ja: '新しいパスワード（保存済み）: ',
-                    ko: '새 비밀번호(저장됨): ',
-                  })}</strong>
-                  <code>{revealedPassword}</code>
-                  {passwordRestartSuggested ? (
-                    <div className="stack-8">
-                      <p className="muted">
-                        {localizeMessage(locale, {
-                          zh: '该密码需要重启服务器后才会生效。',
-                          en: 'This password requires a server restart before it takes effect.',
-                          ja: 'このパスワードはサーバー再起動後に有効になります。',
-                          ko: '이 비밀번호는 서버 재시작 후 적용됩니다.',
-                        })}
-                      </p>
-                      <button
-                        className="button ghost"
-                        disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
-                        type="button"
-                        onClick={() => void runServerAction('restart')}
-                      >
-                        {serverBusy === 'restart'
-                          ? `${text.common.pending}...`
-                          : localizeMessage(locale, {
-                            zh: '立即重启使密码生效',
-                            en: 'Restart now to apply password',
-                            ja: '今すぐ再起動して反映',
-                            ko: '지금 재시작하여 적용',
-                          })}
-                      </button>
-                      {!serverCapabilities.actionBridge.power ? (
-                        <p className="muted">
-                          {localizeMessage(locale, {
-                            zh: '当前服务未暴露重启控制能力，请在上游面板或联系客服手动重启后再使用新密码登录。',
-                            en: 'This service does not expose restart control in the current mapping. Restart from upstream panel or ask support to restart before using the new password.',
-                            ja: '現在のマッピングでは再起動操作が公開されていません。上流パネルまたはサポート経由で再起動後に新パスワードをご利用ください。',
-                            ko: '현재 매핑에서는 재시작 제어가 노출되지 않습니다. 업스트림 패널 또는 고객센터를 통해 재시작 후 새 비밀번호를 사용해 주세요.',
-                          })}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {serverMessage ? <div className="callout compact">{serverMessage}</div> : null}
-              {serverActionError ? <div className="error-card">{serverActionError}</div> : null}
-            </article>
-
-            <article className="panel stack-16 service-billing-panel">
-              <div className="service-section-intro">
-                <div className="stack-8">
-                  <p className="eyebrow">{locale.startsWith('zh') ? '账务与配置' : 'Billing and configuration'}</p>
-                  <h3>{locale.startsWith('zh') ? '把续费、取消、标签和账单收进一个侧栏' : 'Keep renewal, cancellation, labels, and invoices in one sidebar'}</h3>
-                </div>
-              </div>
-
-              <div className="service-meta-grid service-meta-grid--compact">
-                {billingSummaryItems.map((item) => (
-                  <div className="service-meta-card" key={item.key}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
+                      : provisioningInFlight
+                        ? localizeMessage(locale, {
+                          zh: '服务正在开通中，暂不可执行服务器操作。',
+                          en: 'Server actions are disabled while provisioning is in progress.',
+                          ja: '開通処理中はサーバー操作を実行できません。',
+                          ko: '개통 진행 중에는 서버 작업을 실행할 수 없습니다.',
+                        })
+                        : provisioningCanRetry
+                          ? localizeMessage(locale, {
+                            zh: '服务开通失败，请先在“交付与应用”抽屉里重试开通。',
+                            en: 'Provisioning failed. Retry provisioning from the delivery drawer before running server actions.',
+                            ja: '開通に失敗しました。サーバー操作の前に「提供とアプリ」ドロワーで再試行してください。',
+                            ko: '개통에 실패했습니다. 서버 작업 전 "개통 및 앱" 드로어에서 다시 시도해 주세요.',
+                          })
+                          : runtimeTelemetryMessage
+                            ? runtimeTelemetryMessage
+                            : localizeMessage(locale, {
+                              zh: '服务器映射尚未完成，暂不可执行服务器操作。',
+                              en: 'Server mapping is not ready yet, so actions are currently unavailable.',
+                              ja: 'サーバーマッピングが未完了のため、現在サーバー操作は利用できません。',
+                              ko: '서버 매핑이 아직 완료되지 않아 현재 서버 작업을 사용할 수 없습니다.',
+                            })}
                   </div>
-                ))}
-              </div>
-
-              <div className="stack-12 danger-action-panel">
-                <p className="eyebrow">{locale.startsWith('zh') ? '续费与取消' : 'Renewal and cancellation'}</p>
-                <div className="action-grid action-grid--tight">
-                  <button
-                    className="button ghost service-action-button"
-                    disabled={renewingService || !canRenewService}
-                    type="button"
-                    onClick={() => void renewService()}
-                  >
-                    {renewingService
-                      ? ui.services.renewing
-                      : ui.services.renewService}
-                  </button>
-                  <button
-                    className="button ghost service-action-button service-action-button--muted"
-                    type="button"
-                    onClick={() => setShowBillingActions((current) => !current)}
-                  >
-                    {showBillingActions
-                      ? (locale.startsWith('zh') ? '收起取消服务' : 'Hide cancellation')
-                      : (locale.startsWith('zh') ? '取消服务（需密码确认）' : 'Cancel service (password required)')}
-                  </button>
-                </div>
-                {!canRenewService ? (
-                  <p className="muted">
-                    {provisioningInFlight
-                      ? ui.services.renewAfterProvisioning
-                      : (serviceCancellation
-                          ? ui.services.cancelUnavailableState
-                          : (hasPendingInvoice
-                            ? ui.services.pendingInvoiceHint
-                            : ui.services.cancelUnavailableState))}
-                  </p>
                 ) : null}
-                {showBillingActions ? (
-                  <div className="stack-12">
+
+                <div className="service-subpanel-grid">
+                  {(serverCapabilities.application.suspend || serverCapabilities.application.unsuspend || serverCapabilities.application.destroy) ? (
+                    <section className="service-subpanel service-subpanel--danger">
+                      <div className="service-subpanel__header">
+                        <div className="stack-8">
+                          <strong>{locale.startsWith('zh') ? '暂停 / 恢复 / 销毁' : 'Suspend / Unsuspend / Destroy'}</strong>
+                          <p className="muted">
+                            {localizeMessage(locale, {
+                              zh: '这些操作会直接影响服务可用性，其中销毁是不可逆操作，请务必确认后再执行。',
+                              en: 'These operations directly affect availability, and destroy is irreversible. Please confirm carefully before continuing.',
+                              ja: 'これらの操作は可用性へ直接影響し、削除は元に戻せません。十分確認の上で実行してください。',
+                              ko: '이 작업들은 가용성에 직접 영향을 주며, 삭제는 되돌릴 수 없습니다. 충분히 확인 후 진행해 주세요.',
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="action-grid action-grid--tight">
+                        <button
+                          className="button ghost"
+                          disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.suspend}
+                          type="button"
+                          onClick={() => void runServerAction('suspend')}
+                        >
+                          {serverBusy === 'suspend'
+                            ? `${text.common.pending}...`
+                            : (locale.startsWith('zh') ? '暂停服务器' : 'Suspend server')}
+                        </button>
+                        <button
+                          className="button ghost"
+                          disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.unsuspend}
+                          type="button"
+                          onClick={() => void runServerAction('unsuspend')}
+                        >
+                          {serverBusy === 'unsuspend'
+                            ? `${text.common.pending}...`
+                            : (locale.startsWith('zh') ? '恢复服务器' : 'Unsuspend server')}
+                        </button>
+                        <button
+                          className="button danger"
+                          disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.application.destroy}
+                          type="button"
+                          onClick={() => void runServerAction('destroy')}
+                        >
+                          {serverBusy === 'destroy'
+                            ? `${text.common.pending}...`
+                            : (locale.startsWith('zh') ? '销毁服务器' : 'Destroy server')}
+                        </button>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  <section className="service-subpanel">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '密码与访问' : 'Password and access'}</strong>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '把最近一次保存密码、登录账号和密码重置收在一起，避免你来回找入口。'
+                            : 'Keep the latest password, login hint, and password reset workflow together in one place.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="service-info-strip">
+                      <div className="service-info-pill">
+                        <span>{locale.startsWith('zh') ? '登录账号' : 'Login user'}</span>
+                        <strong>{storedPasswordLoginUsername ?? '-'}</strong>
+                      </div>
+                      <div className="service-info-pill">
+                        <span>{locale.startsWith('zh') ? '密码状态' : 'Password status'}</span>
+                        <strong>
+                          {storedPasswordRestartRequired
+                            ? (locale.startsWith('zh') ? '需重启生效' : 'Restart required')
+                            : storedPasswordAppliedLive
+                              ? (locale.startsWith('zh') ? '已实时生效' : 'Applied live')
+                              : (locale.startsWith('zh') ? '已保存' : 'Stored')}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {storedPassword ? (
+                      <div className="callout compact service-password-card service-password-card--embedded">
+                        <div className="stack-8">
+                          <strong>{locale.startsWith('zh') ? '最近保存的系统密码' : 'Most recently saved system password'}</strong>
+                          <code className="service-password-card__code">{showStoredPassword ? storedPassword : '************'}</code>
+                          <p className="muted">{storedPasswordStatusHint}</p>
+                          <button
+                            className="button ghost service-action-button"
+                            type="button"
+                            onClick={() => setShowStoredPassword((current) => !current)}
+                          >
+                            {showStoredPassword
+                              ? localizeMessage(locale, {
+                                zh: '隐藏密码',
+                                en: 'Hide password',
+                                ja: 'パスワードを隠す',
+                                ko: '비밀번호 숨기기',
+                              })
+                              : localizeMessage(locale, {
+                                zh: '显示密码',
+                                en: 'Show password',
+                                ja: 'パスワードを表示',
+                                ko: '비밀번호 표시',
+                              })}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="callout compact service-password-card service-password-card--embedded">
+                        {localizeMessage(locale, {
+                          zh: '当前没有可直接展示的保存密码。需要时请在这里重置并生成新密码。',
+                          en: 'There is no saved password to display right now. Generate a new one here whenever you need it.',
+                          ja: '現在表示できる保存済みパスワードはありません。必要なときはここで新しいパスワードを生成してください。',
+                          ko: '지금 바로 보여 줄 저장 비밀번호는 없습니다. 필요할 때 여기에서 새 비밀번호를 생성하세요.',
+                        })}
+                      </div>
+                    )}
+
                     <label className="field">
-                      <span>{ui.services.cancelType}</span>
-                      <select
-                        className="text-input select-input"
-                        disabled={!canCancelService}
-                        value={cancelType}
-                        onChange={(event) => setCancelType(event.target.value as 'end_of_period' | 'immediate')}
-                      >
-                        <option value="end_of_period">{ui.services.cancelEndPeriod}</option>
-                        <option value="immediate">{ui.services.cancelImmediate}</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>{text.services.cancel}</span>
+                      <span>{locale.startsWith('zh') ? '自定义新密码（可选）' : 'Custom new password (optional)'}</span>
                       <input
                         className="text-input"
-                        disabled={!canCancelService}
-                        placeholder={canCancelService ? ui.services.cancelReason : ''}
-                        value={reason}
-                        onChange={(event) => setReason(event.target.value)}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>{locale.startsWith('zh') ? '账号当前密码（必填）' : 'Current account password (required)'}</span>
-                      <input
-                        className="text-input"
-                        disabled={!canCancelService}
                         minLength={8}
+                        placeholder={locale.startsWith('zh')
+                          ? '留空则系统自动生成；8-50 位且含大写/小写/数字/特殊字符'
+                          : 'Leave empty to auto-generate; 8-50 chars with upper/lowercase, number, special'}
                         type="password"
-                        value={cancelPassword}
+                        value={serverPasswordDraft}
                         onChange={(event) => {
-                          setCancelPassword(event.target.value);
-                          setCancelActionError(null);
+                          setServerPasswordDraft(event.target.value);
+                          setServerActionError(null);
                         }}
                       />
                     </label>
-                    {cancelActionError ? <div className="error-card compact">{cancelActionError}</div> : null}
+                    <p className="muted">
+                      {locale.startsWith('zh')
+                        ? '密码规则：8-50 位，至少包含 1 个大写字母、1 个小写字母、1 个数字和 1 个特殊字符。'
+                        : 'Password policy: 8-50 characters with at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.'}
+                    </p>
+                    {serverPasswordDraftError ? <div className="error-card compact">{serverPasswordDraftError}</div> : null}
+                    <label className="checkbox-row">
+                      <input
+                        checked={serverPasswordAutoRestart}
+                        type="checkbox"
+                        onChange={(event) => setServerPasswordAutoRestart(event.target.checked)}
+                      />
+                      <span>{locale.startsWith('zh') ? '若模板要求重启，自动重启服务器' : 'Auto-restart if template requires reboot'}</span>
+                    </label>
                     <button
-                      className="button danger service-action-button service-action-button--danger"
-                      disabled={pending || !canCancelService}
+                      className="button secondary service-action-button"
+                      disabled={serverBusy !== null || !canRunServerActions || !(runtimeCapabilities?.actions.revealPassword ?? false) || Boolean(serverPasswordDraftError)}
                       type="button"
-                      onClick={() => void cancelService()}
+                      onClick={() => void runServerAction('reveal-password', {
+                        customPassword: serverPasswordDraft,
+                        autoRestart: serverPasswordAutoRestart,
+                      })}
                     >
-                      {text.services.cancel}
+                      {serverBusy === 'reveal-password'
+                        ? `${text.common.pending}...`
+                        : (serverPasswordDraft.trim().length > 0
+                          ? (locale.startsWith('zh') ? '按自定义密码重置' : 'Reset with custom password')
+                          : ui.runtime.resetPassword)}
                     </button>
-                    {serviceCancellation ? (
-                      <div className="stack-8">
-                        <p className="muted">
-                          {ui.services.cancelType}: {localizeCancellationType(serviceCancellation.type, locale, ui)}
-                          {serviceCancellation.reason
-                            ? ` | ${ui.services.cancelReason}: ${localizeCancellationReason(serviceCancellation.reason, locale)}`
-                            : ''}
-                        </p>
-                        <button
-                          className="button ghost service-action-button"
-                          disabled={revokingCancellation || provisioningInFlight}
-                          type="button"
-                          onClick={() => void revokeCancellation()}
-                        >
-                          {revokingCancellation
-                            ? ui.common.pending
-                            : ui.services.revokeCancellation}
-                        </button>
+
+                    {revealedPassword ? (
+                      <div className="callout compact service-password-card service-password-card--embedded">
+                        <strong>{localizeMessage(locale, {
+                          zh: '新密码（已保存）：',
+                          en: 'New password (saved): ',
+                          ja: '新しいパスワード（保存済み）: ',
+                          ko: '새 비밀번호(저장됨): ',
+                        })}</strong>
+                        <code>{revealedPassword}</code>
+                        {passwordRestartSuggested ? (
+                          <div className="stack-8">
+                            <p className="muted">
+                              {localizeMessage(locale, {
+                                zh: '该密码需要重启服务器后才会生效。',
+                                en: 'This password requires a server restart before it takes effect.',
+                                ja: 'このパスワードはサーバー再起動後に有効になります。',
+                                ko: '이 비밀번호는 서버 재시작 후 적용됩니다.',
+                              })}
+                            </p>
+                            <button
+                              className="button ghost"
+                              disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.power}
+                              type="button"
+                              onClick={() => void runServerAction('restart')}
+                            >
+                              {serverBusy === 'restart'
+                                ? `${text.common.pending}...`
+                                : localizeMessage(locale, {
+                                  zh: '立即重启使密码生效',
+                                  en: 'Restart now to apply password',
+                                  ja: '今すぐ再起動して反映',
+                                  ko: '지금 재시작하여 적용',
+                                })}
+                            </button>
+                            {!serverCapabilities.actionBridge.power ? (
+                              <p className="muted">
+                                {localizeMessage(locale, {
+                                  zh: '当前服务未暴露重启控制能力，请在上游面板或联系客服手动重启后再使用新密码登录。',
+                                  en: 'This service does not expose restart control in the current mapping. Restart from upstream panel or ask support to restart before using the new password.',
+                                  ja: '現在のマッピングでは再起動操作が公開されていません。上流パネルまたはサポート経由で再起動後に新パスワードをご利用ください。',
+                                  ko: '현재 매핑에서는 재시작 제어가 노출되지 않습니다. 업스트림 패널 또는 고객센터를 통해 재시작 후 새 비밀번호를 사용해 주세요.',
+                                })}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
-                  </div>
-                ) : null}
-              </div>
+                  </section>
 
-              <label className="field">
-                <span>{text.services.updateLabel}</span>
-                <input className="text-input" value={label} onChange={(event) => setLabel(event.target.value)} />
-              </label>
-              <button className="button ghost service-action-button" disabled={pending} type="button" onClick={() => void updateLabel()}>
-                {text.services.updateLabel}
-              </button>
-
-              {service.upgradable ? (
-                <div className="stack-12">
-                  <p className="eyebrow">{locale.startsWith('zh') ? '同节点续费升降配' : 'Same-node resize on renewal'}</p>
-                  {upgradeOptionsLoading ? (
-                    <div className="loading-card">{text.common.loading}</div>
-                  ) : upgradeOptionsError ? (
-                    <div className="error-card compact">{upgradeOptionsError}</div>
-                  ) : upgradeProducts.length === 0 ? (
-                    <div className="callout compact">
-                      {locale.startsWith('zh')
-                        ? '当前账期没有可用的升降配选项。'
-                        : 'No upgrade options are available for the current billing cycle.'}
-                    </div>
-                  ) : (
-                    <div className="stack-12">
-                      {upgradeProducts.length > 1 ? (
-                        <label className="field">
-                          <span>{locale.startsWith('zh') ? '套餐规格' : 'Plan target'}</span>
-                          <select
-                            className="text-input select-input"
-                            value={selectedUpgradeProductId}
-                            onChange={(event) => setSelectedUpgradeProductId(event.target.value)}
-                          >
-                            {upgradeProducts.map((product) => (
-                              <option key={String(product.id)} value={String(product.id)}>
-                                {localizeText(product.name, locale, String(product.slug ?? product.id))}
-                                {product.current ? ` (${locale.startsWith('zh') ? '当前' : 'Current'})` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ) : null}
-                      {selectedUpgradeOptions.map((option) => (
-                        <label className="field" key={String(option.id)}>
-                          <span>{localizeText(option.name, locale, String(option.id))}</span>
-                          <select
-                            className="text-input select-input"
-                            value={selectedUpgradeConfig[String(option.id)] ?? ''}
-                            onChange={(event) => setSelectedUpgradeConfig((current) => ({
-                              ...current,
-                              [String(option.id)]: event.target.value,
-                            }))}
-                          >
-                            {asArray<ServiceUpgradeOptionChoice>(option.children).map((choice) => (
-                              <option key={String(choice.id)} value={String(choice.id)}>
-                                {localizeText(choice.name, locale, String(choice.id))}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ))}
-                      <button
-                        className="button ghost service-action-button"
-                        disabled={upgradingService || !canUpgradeService}
-                        type="button"
-                        onClick={() => void submitUpgrade()}
-                      >
-                        {upgradingService
-                          ? `${text.common.pending}...`
-                          : (locale.startsWith('zh') ? '提交升降配并生成账单' : 'Submit resize and create invoice')}
-                      </button>
-                      {!canUpgradeService ? (
+                  <section className="service-subpanel service-subpanel--full">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '系统重装' : 'System reinstall'}</strong>
                         <p className="muted">
                           {locale.startsWith('zh')
-                            ? '请选择与当前不同的规格或配置后再提交。'
-                            : 'Choose a different plan/configuration before submitting.'}
+                            ? '先选操作系统和组件，再执行重装。展开后才显示完整配置，默认只保留概要。'
+                            : 'Choose the operating system and apps first, then run reinstall. The full composer appears only when expanded.'}
                         </p>
-                      ) : null}
+                      </div>
+                      <button
+                        className="button secondary service-action-button"
+                        disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.reinstall}
+                        type="button"
+                        onClick={() => setShowReinstallComposer((current) => !current)}
+                      >
+                        {showReinstallComposer
+                          ? (locale.startsWith('zh') ? '收起重装配置' : 'Hide reinstall config')
+                          : (locale.startsWith('zh') ? '配置重装方案' : 'Configure reinstall')}
+                      </button>
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div className="callout compact">
-                  {locale.startsWith('zh')
-                    ? '当前服务不支持在线升降配。'
-                    : 'This service does not support online resize.'}
-                </div>
-              )}
 
-              <div className="stack-12">
-                <p className="eyebrow">{text.nav.invoices}</p>
-                {invoices.length === 0 ? (
-                  <div className="callout compact">{text.invoices.noInvoices}</div>
-                ) : invoices.map((invoice) => (
-                  <Link className="callout compact" key={invoice.id} to={`/invoices/${invoice.id}`}>
-                    #{invoice.number ?? invoice.id} - {invoice.formattedTotal}
-                  </Link>
-                ))}
-              </div>
+                    {canRunServerActions && !isArchivedService && !reinstallReady ? (
+                      <div className="callout compact">
+                        {localizeMessage(locale, {
+                          zh: '当前服务还没有可用的系统模板映射，重装功能暂时不可用。',
+                          en: 'No operating system mapping is available for this service yet, so reinstall is currently unavailable.',
+                          ja: 'このサービスに利用可能な OS マッピングがまだないため、再インストールは現在利用できません。',
+                          ko: '이 서비스에 사용 가능한 운영체제 매핑이 아직 없어 재설치를 현재 사용할 수 없습니다.',
+                        })}
+                      </div>
+                    ) : null}
 
-              {message ? <div className="callout compact">{message}</div> : null}
-              {actionError ? <div className="error-card compact">{actionError}</div> : null}
-            </article>
-          </aside>
+                    <div className="service-info-strip">
+                      <div className="service-info-pill">
+                        <span>{locale.startsWith('zh') ? '当前 OS' : 'Current OS'}</span>
+                        <strong>{effectiveReinstallOs || '-'}</strong>
+                      </div>
+                      <div className="service-info-pill">
+                        <span>{locale.startsWith('zh') ? '主应用' : 'Primary app'}</span>
+                        <strong>{reinstallSelectedPrimaryDescriptor?.name ?? (locale.startsWith('zh') ? '未选择' : 'None')}</strong>
+                      </div>
+                      <div className="service-info-pill">
+                        <span>{locale.startsWith('zh') ? '附加组件' : 'Addons'}</span>
+                        <strong>{reinstallSelectedAddonDescriptors.length}</strong>
+                      </div>
+                    </div>
+
+                    {!showReinstallComposer ? (
+                      <div className="callout compact">
+                        {locale.startsWith('zh')
+                          ? '这里只显示当前重装方案概要。需要改系统、主应用或附加组件时，再展开完整配置。'
+                          : 'This keeps only the current reinstall summary visible. Expand it when you need to change the OS, primary app, or addons.'}
+                      </div>
+                    ) : (
+                      <div className="stack-12 danger-action-panel service-subpanel__composer">
+                        <label className="field">
+                          <span>{locale.startsWith('zh') ? '重装系统' : 'Reinstall OS'}</span>
+                          <select
+                            className="text-input select-input"
+                            value={effectiveReinstallOs}
+                            onChange={(event) => {
+                              setReinstallMarketplaceHint(null);
+                              setReinstallOsChoice(event.target.value);
+                              setReinstallPrimaryAppChoice('');
+                              setReinstallAddonAppChoices([]);
+                            }}
+                          >
+                            <option value="">{locale.startsWith('zh') ? '请选择操作系统' : 'Choose an operating system'}</option>
+                            {reinstallOsOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="callout compact">
+                          <div className="chip-row">
+                            <span className="chip">{locale.startsWith('zh') ? 'OS' : 'OS'}: {effectiveReinstallOs || '-'}</span>
+                            <span className="chip">
+                              {locale.startsWith('zh') ? '主应用' : 'Primary'}: {reinstallSelectedPrimaryDescriptor?.name ?? (locale.startsWith('zh') ? '未选择' : 'None')}
+                            </span>
+                            <span className="chip">
+                              {locale.startsWith('zh') ? '附加组件' : 'Addons'}: {reinstallSelectedAddonDescriptors.length}
+                            </span>
+                          </div>
+                          <p className="muted">
+                            {locale.startsWith('zh')
+                              ? '重装会先按所选 OS 重新装系统，再重新执行主应用与附加组件安装。'
+                              : 'Reinstall rebuilds the VPS with the selected OS, then replays the selected primary app and addon installs.'}
+                          </p>
+                        </div>
+                        {effectiveReinstallOs ? (
+                          <div className="stack-12">
+                            <div className="field">
+                              <span>{locale.startsWith('zh') ? '主应用' : 'Primary app'}</span>
+                              {reinstallMarketLoading ? (
+                                <div className="loading-card">{text.common.loading}</div>
+                              ) : reinstallPrimaryApps.length === 0 ? (
+                                <div className="callout compact">
+                                  {locale.startsWith('zh')
+                                    ? '当前 OS 还没有可选主应用。你仍然可以只重装系统。'
+                                    : 'No primary apps are currently available for this OS. You can still reinstall the base OS only.'}
+                                </div>
+                              ) : (
+                                <div className="choice-grid">
+                                  {reinstallPrimaryApps.map((app) => (
+                                    <button
+                                      className={`choice-card compact vps-app-card ${reinstallPrimaryAppChoice === app.slug ? 'selected' : ''}`}
+                                      disabled={!app.available}
+                                      key={app.slug}
+                                      type="button"
+                                      onClick={() => {
+                                        setReinstallMarketplaceHint(null);
+                                        setReinstallPrimaryAppChoice(reinstallPrimaryAppChoice === app.slug ? '' : app.slug);
+                                      }}
+                                    >
+                                      <strong>{app.name}</strong>
+                                      {app.tagline ? <span>{app.tagline}</span> : null}
+                                      <small>{app.recipe?.effectiveInstallStrategy ?? app.recipe?.installStrategy ?? '-'}</small>
+                                      {!app.available && app.unavailableReason ? <small>{app.unavailableReason}</small> : null}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div className="field">
+                              <span>{locale.startsWith('zh') ? '附加组件' : 'Addon apps'}</span>
+                              {reinstallMarketLoading ? (
+                                <div className="loading-card">{text.common.loading}</div>
+                              ) : reinstallAddonApps.length === 0 ? (
+                                <div className="callout compact">
+                                  {locale.startsWith('zh')
+                                    ? '当前 OS 没有可用附加组件。'
+                                    : 'No addon apps are currently available for this OS.'}
+                                </div>
+                              ) : (
+                                <div className="choice-grid">
+                                  {reinstallAddonApps.map((app) => (
+                                    <button
+                                      className={`choice-card compact vps-app-card ${reinstallAddonAppChoices.includes(app.slug) ? 'selected' : ''}`}
+                                      disabled={!app.available}
+                                      key={app.slug}
+                                      type="button"
+                                      onClick={() => {
+                                        setReinstallMarketplaceHint(null);
+                                        setReinstallAddonAppChoices((current) => current.includes(app.slug)
+                                          ? current.filter((slug) => slug !== app.slug)
+                                          : [...current, app.slug]);
+                                      }}
+                                    >
+                                      <strong>{app.name}</strong>
+                                      {app.tagline ? <span>{app.tagline}</span> : null}
+                                      <small>{app.recipe?.effectiveInstallStrategy ?? app.recipe?.installStrategy ?? '-'}</small>
+                                      {(app.recipe?.dependencies ?? []).length > 0 ? (
+                                        <small>{locale.startsWith('zh') ? '依赖' : 'Depends on'}: {app.recipe?.dependencies.join(', ')}</small>
+                                      ) : null}
+                                      {(app.recipe?.conflicts ?? []).length > 0 ? (
+                                        <small>{locale.startsWith('zh') ? '冲突' : 'Conflicts'}: {app.recipe?.conflicts.join(', ')}</small>
+                                      ) : null}
+                                      {!app.available && app.unavailableReason ? <small>{app.unavailableReason}</small> : null}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                        {reinstallMarketplaceHint ? <div className="callout compact">{reinstallMarketplaceHint}</div> : null}
+                        {reinstallMarketError ? <div className="error-card compact">{reinstallMarketError}</div> : null}
+                        {reinstallSelectionError ? <div className="error-card compact">{reinstallSelectionError}</div> : null}
+                        <label className="field">
+                          <span>{ui.runtime.reinstallPassword}</span>
+                          <input
+                            className="text-input"
+                            placeholder={locale.startsWith('zh')
+                              ? '留空则系统自动生成；8-50 位且含大写/小写/数字/特殊字符'
+                              : 'Leave empty to auto-generate; 8-50 chars with upper/lowercase, number, special'}
+                            type="password"
+                            value={reinstallPassword}
+                            onChange={(event) => {
+                              setReinstallPassword(event.target.value);
+                              setServerActionError(null);
+                            }}
+                          />
+                        </label>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '如果你想在重装后保留固定密码，这里填写符合策略的新密码。'
+                            : 'If you want a fixed password after reinstall, enter a password here that matches the policy.'}
+                        </p>
+                        {reinstallPasswordError ? <div className="error-card compact">{reinstallPasswordError}</div> : null}
+                        <label className="checkbox-row">
+                          <input
+                            checked={reinstallStartOnCompletion}
+                            onChange={(event) => setReinstallStartOnCompletion(event.target.checked)}
+                            type="checkbox"
+                          />
+                          <span>{ui.runtime.startOnCompletion}</span>
+                        </label>
+                        <button
+                          className="button danger service-action-button--danger"
+                          disabled={serverBusy !== null || !canRunServerActions || !serverCapabilities.actionBridge.reinstall || !reinstallReady || Boolean(reinstallSelectionError) || Boolean(reinstallPasswordError)}
+                          type="button"
+                          onClick={() => void runServerAction('reinstall')}
+                        >
+                          {serverBusy === 'reinstall' ? `${text.common.pending}...` : ui.runtime.reinstall}
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              </article>
+            </div>
+          </details>
+
+          <details className="service-drawer service-drawer--panel">
+            <summary>{locale.startsWith('zh') ? '账务与配置' : 'Billing and configuration'}</summary>
+            <div className="service-drawer__body">
+              <article className="panel stack-16 service-billing-panel">
+                <div className="service-section-intro">
+                  <div className="stack-8">
+                    <p className="eyebrow">{locale.startsWith('zh') ? '账务与配置' : 'Billing and configuration'}</p>
+                    <h3>{locale.startsWith('zh') ? '把续费、取消、标签和账单收进一个侧栏' : 'Keep renewal, cancellation, labels, and invoices in one sidebar'}</h3>
+                  </div>
+                </div>
+
+                <div className="service-meta-grid service-meta-grid--compact service-billing-panel__summary">
+                  {billingSummaryItems.map((item) => (
+                    <div className="service-meta-card" key={item.key}>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="service-subpanel-grid">
+                  <section className="service-subpanel">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '续费与取消' : 'Renewal and cancellation'}</strong>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '把续费和取消服务放到一组，避免账务动作散落在页面各处。'
+                            : 'Keep renewal and cancellation together so billing actions do not feel scattered.'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="action-grid action-grid--tight">
+                      <button
+                        className="button ghost service-action-button"
+                        disabled={renewingService || !canRenewService}
+                        type="button"
+                        onClick={() => void renewService()}
+                      >
+                        {renewingService
+                          ? ui.services.renewing
+                          : ui.services.renewService}
+                      </button>
+                      <button
+                        className="button ghost service-action-button service-action-button--muted"
+                        type="button"
+                        onClick={() => setShowBillingActions((current) => !current)}
+                      >
+                        {showBillingActions
+                          ? (locale.startsWith('zh') ? '收起取消服务' : 'Hide cancellation')
+                          : (locale.startsWith('zh') ? '取消服务（需密码确认）' : 'Cancel service (password required)')}
+                      </button>
+                    </div>
+                    {!canRenewService ? (
+                      <p className="muted">
+                        {provisioningInFlight
+                          ? ui.services.renewAfterProvisioning
+                          : (serviceCancellation
+                            ? ui.services.cancelUnavailableState
+                            : (hasPendingInvoice
+                              ? ui.services.pendingInvoiceHint
+                              : ui.services.cancelUnavailableState))}
+                      </p>
+                    ) : null}
+                    {showBillingActions ? (
+                      <div className="stack-12">
+                        <label className="field">
+                          <span>{ui.services.cancelType}</span>
+                          <select
+                            className="text-input select-input"
+                            disabled={!canCancelService}
+                            value={cancelType}
+                            onChange={(event) => setCancelType(event.target.value as 'end_of_period' | 'immediate')}
+                          >
+                            <option value="end_of_period">{ui.services.cancelEndPeriod}</option>
+                            <option value="immediate">{ui.services.cancelImmediate}</option>
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>{text.services.cancel}</span>
+                          <input
+                            className="text-input"
+                            disabled={!canCancelService}
+                            placeholder={canCancelService ? ui.services.cancelReason : ''}
+                            value={reason}
+                            onChange={(event) => setReason(event.target.value)}
+                          />
+                        </label>
+                        <label className="field">
+                          <span>{locale.startsWith('zh') ? '账号当前密码（必填）' : 'Current account password (required)'}</span>
+                          <input
+                            className="text-input"
+                            disabled={!canCancelService}
+                            minLength={8}
+                            type="password"
+                            value={cancelPassword}
+                            onChange={(event) => {
+                              setCancelPassword(event.target.value);
+                              setCancelActionError(null);
+                            }}
+                          />
+                        </label>
+                        {cancelActionError ? <div className="error-card compact">{cancelActionError}</div> : null}
+                        <button
+                          className="button danger service-action-button service-action-button--danger"
+                          disabled={pending || !canCancelService}
+                          type="button"
+                          onClick={() => void cancelService()}
+                        >
+                          {text.services.cancel}
+                        </button>
+                        {serviceCancellation ? (
+                          <div className="stack-8">
+                            <p className="muted">
+                              {ui.services.cancelType}: {localizeCancellationType(serviceCancellation.type, locale, ui)}
+                              {serviceCancellation.reason
+                                ? ` | ${ui.services.cancelReason}: ${localizeCancellationReason(serviceCancellation.reason, locale)}`
+                                : ''}
+                            </p>
+                            <button
+                              className="button ghost service-action-button"
+                              disabled={revokingCancellation || provisioningInFlight}
+                              type="button"
+                              onClick={() => void revokeCancellation()}
+                            >
+                              {revokingCancellation
+                                ? ui.common.pending
+                                : ui.services.revokeCancellation}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="service-subpanel">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '标签与展示信息' : 'Label and display info'}</strong>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '这里只负责你在前台看到的服务名称，不影响机器本身运行。'
+                            : 'This only changes how the service is labeled in the client area. It does not affect the machine runtime.'}
+                        </p>
+                      </div>
+                    </div>
+                    <label className="field">
+                      <span>{text.services.updateLabel}</span>
+                      <input className="text-input" value={label} onChange={(event) => setLabel(event.target.value)} />
+                    </label>
+                    <button className="button ghost service-action-button" disabled={pending} type="button" onClick={() => void updateLabel()}>
+                      {text.services.updateLabel}
+                    </button>
+                  </section>
+
+                  <section className="service-subpanel service-subpanel--full">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '同节点续费升降配' : 'Same-node resize on renewal'}</strong>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '升降配和续费账单放在一块，避免配置变更和付款入口分散。'
+                            : 'Keep resize and invoice creation in one place so configuration changes and billing stay connected.'}
+                        </p>
+                      </div>
+                    </div>
+                    {service.upgradable ? (
+                      <>
+                        {upgradeOptionsLoading ? (
+                          <div className="loading-card">{text.common.loading}</div>
+                        ) : upgradeOptionsError ? (
+                          <div className="error-card compact">{upgradeOptionsError}</div>
+                        ) : upgradeProducts.length === 0 ? (
+                          <div className="callout compact">
+                            {locale.startsWith('zh')
+                              ? '当前账期没有可用的升降配选项。'
+                              : 'No upgrade options are available for the current billing cycle.'}
+                          </div>
+                        ) : (
+                          <div className="stack-12">
+                            {upgradeProducts.length > 1 ? (
+                              <label className="field">
+                                <span>{locale.startsWith('zh') ? '套餐规格' : 'Plan target'}</span>
+                                <select
+                                  className="text-input select-input"
+                                  value={selectedUpgradeProductId}
+                                  onChange={(event) => setSelectedUpgradeProductId(event.target.value)}
+                                >
+                                  {upgradeProducts.map((product) => (
+                                    <option key={String(product.id)} value={String(product.id)}>
+                                      {localizeText(product.name, locale, String(product.slug ?? product.id))}
+                                      {product.current ? ` (${locale.startsWith('zh') ? '当前' : 'Current'})` : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : null}
+                            {selectedUpgradeOptions.map((option) => (
+                              <label className="field" key={String(option.id)}>
+                                <span>{localizeText(option.name, locale, String(option.id))}</span>
+                                <select
+                                  className="text-input select-input"
+                                  value={selectedUpgradeConfig[String(option.id)] ?? ''}
+                                  onChange={(event) => setSelectedUpgradeConfig((current) => ({
+                                    ...current,
+                                    [String(option.id)]: event.target.value,
+                                  }))}
+                                >
+                                  {asArray<ServiceUpgradeOptionChoice>(option.children).map((choice) => (
+                                    <option key={String(choice.id)} value={String(choice.id)}>
+                                      {localizeText(choice.name, locale, String(choice.id))}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ))}
+                            <button
+                              className="button ghost service-action-button"
+                              disabled={upgradingService || !canUpgradeService}
+                              type="button"
+                              onClick={() => void submitUpgrade()}
+                            >
+                              {upgradingService
+                                ? `${text.common.pending}...`
+                                : (locale.startsWith('zh') ? '提交升降配并生成账单' : 'Submit resize and create invoice')}
+                            </button>
+                            {!canUpgradeService ? (
+                              <p className="muted">
+                                {locale.startsWith('zh')
+                                  ? '请选择与当前不同的规格或配置后再提交。'
+                                  : 'Choose a different plan/configuration before submitting.'}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="callout compact">
+                        {locale.startsWith('zh')
+                          ? '当前服务不支持在线升降配。'
+                          : 'This service does not support online resize.'}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="service-subpanel service-subpanel--full">
+                    <div className="service-subpanel__header">
+                      <div className="stack-8">
+                        <strong>{locale.startsWith('zh') ? '账单记录' : 'Invoice records'}</strong>
+                        <p className="muted">
+                          {locale.startsWith('zh')
+                            ? '账单入口收在这里，默认只展示简洁列表。'
+                            : 'Invoice access stays here as a compact list instead of taking over the whole page.'}
+                        </p>
+                      </div>
+                    </div>
+                    {invoices.length === 0 ? (
+                      <div className="callout compact">{text.invoices.noInvoices}</div>
+                    ) : (
+                      <div className="service-link-stack">
+                        {invoices.map((invoice) => (
+                          <Link className="service-link-card" key={invoice.id} to={`/invoices/${invoice.id}`}>
+                            <strong>#{invoice.number ?? invoice.id}</strong>
+                            <span>{invoice.formattedTotal}</span>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                {message ? <div className="callout compact">{message}</div> : null}
+                {actionError ? <div className="error-card compact">{actionError}</div> : null}
+              </article>
+            </div>
+          </details>
         </section>
       )}
 

@@ -107,7 +107,7 @@ export function LoginPage() {
         <Link className="text-link" to="/register">
           {text.auth.needAccount}
         </Link>
-        <Link className="text-link" to="/operator">
+        <Link className="text-link" to="/operator-lab">
           {locale.startsWith('zh') ? '先看看 AI 工作台' : 'Preview the AI workspace first'}
         </Link>
       </article>

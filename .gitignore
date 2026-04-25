@@ -1,20 +1,44 @@
+# Dependencies
 node_modules/
-.turbo/
-.next/
+.pnpm-store/
+
+# Build outputs
 dist/
+build/
 coverage/
-.DS_Store
-Thumbs.db
-*.log
-.cache/
-.tmp/
+*.tsbuildinfo
+
+# Local environment and secrets
 .env
-.env.local
-.env.*.local
-.openclaw/
-test-results/
-runtime/data/
-runtime/sloth-daemon.json
-runtime/env/*.swp
-runtime/env/api.env
-runtime/env/paymenter.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Runtime/generated state
+runtime/
+artifacts/
+backups/
+*.backup
+*.bak
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+*.log
+
+# Upstream/vendor source trees that must not be redistributed here
+Paymenter-master/
+Convoy panel-develop/
+OpenClaw/
+CLIProxyAPI-main/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

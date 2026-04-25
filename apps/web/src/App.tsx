@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { AppShell } from './components/AppShell';
 import { AuthProvider } from './lib/auth-context';
@@ -12,6 +12,8 @@ import { InvoicesPage } from './pages/InvoicesPage';
 import { LoginPage } from './pages/LoginPage';
 import { OperatorCapsulePage } from './pages/OperatorCapsulePage';
 import { OperatorHubPage } from './pages/OperatorHubPage';
+import { OperatorV3Page } from './pages/OperatorV3Page';
+import { OperatorV4Page } from './pages/OperatorV4Page';
 import { ProductPage } from './pages/ProductPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ServiceDetailPage } from './pages/ServiceDetailPage';
@@ -25,8 +27,15 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route element={<AppShell />} path="/">
-              <Route element={<HomePage />} index />
-              <Route element={<OperatorHubPage />} path="operator" />
+            <Route element={<HomePage />} index />
+              <Route element={<Navigate replace to="/operator-lab" />} path="operator" />
+              <Route element={<OperatorCapsulePage />} path="operator/:capsuleId" />
+              <Route element={<OperatorV4Page />} path="operator-lab" />
+              <Route element={<OperatorV4Page />} path="operator-lab/:capsuleId" />
+              <Route element={<OperatorHubPage />} path="operator/debug" />
+              <Route element={<OperatorHubPage />} path="operator/debug/:capsuleId" />
+              <Route element={<OperatorV3Page />} path="operator/debug/v3" />
+              <Route element={<OperatorV3Page />} path="operator/debug/v3/:capsuleId" />
               <Route element={<OperatorCapsulePage />} path="workspaces/:capsuleId" />
               <Route element={<OperatorCapsulePage />} path="capsules/:capsuleId" />
               <Route element={<CatalogPage />} path="catalog" />

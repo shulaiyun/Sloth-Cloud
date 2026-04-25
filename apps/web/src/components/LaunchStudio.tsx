@@ -203,7 +203,7 @@ export function LaunchStudio() {
         method: 'POST',
         body: projectForm,
       });
-      navigate(`/workspaces/${response.data.capsule.id}`);
+      navigate(`/operator/${response.data.capsule.id}`);
     } catch (caughtError) {
       setError(toFriendlyError(caughtError as Error, locale));
     } finally {
@@ -307,7 +307,7 @@ export function LaunchStudio() {
           sshKey: serverForm.authMode === 'ssh-key' ? serverForm.sshKey : undefined,
         },
       });
-      navigate(`/workspaces/${response.data.capsule.id}`);
+      navigate(`/operator/${response.data.capsule.id}`);
     } catch (caughtError) {
       setError(toFriendlyError(caughtError as Error, locale));
     } finally {

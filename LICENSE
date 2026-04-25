@@ -1,0 +1,14 @@
+AGPL-3.0-or-later
+
+Copyright (C) 2026 Sloth Cloud contributors
+
+Sloth Cloud-owned source code in this repository is licensed under the GNU Affero General Public License version 3 or later.
+
+You may redistribute and/or modify this program under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+The full AGPL-3.0 license text is available from the Free Software Foundation:
+https://www.gnu.org/licenses/agpl-3.0.html
+
+Third-party systems integrated by Sloth Cloud, including Paymenter, Convoy, OpenClaw, CLI proxy services, model providers, and infrastructure providers, keep their own licenses and are not relicensed by this repository.

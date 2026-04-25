@@ -1,110 +1,107 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { requestJson } from './api';
-import type { AuthResponse, AuthUser, LoginInput, LogoutResponse, MeResponse, RegisterInput } from './types';
+import type {
+  AuthResponse,
+  AuthUser,
+  LoginInput,
+  LogoutResponse,
+  MeResponse,
+  RegisterInput,
+} from './types';
 
 interface AuthContextValue {
+  user: AuthUser | null;
   isAuthenticated: boolean;
   loading: boolean;
-  user: AuthUser | null;
-  login: (payload: LoginInput) => Promise<AuthResponse>;
+  login: (input: LoginInput) => Promise<AuthUser>;
+  register: (input: RegisterInput) => Promise<AuthUser>;
   logout: () => Promise<void>;
-  register: (payload: RegisterInput) => Promise<AuthResponse>;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<AuthUser | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
 
-  async function refresh() {
-    if (refreshInFlightRef.current) {
-      return refreshInFlightRef.current;
-    }
-
-    const task = (async () => {
-      try {
-        const response = await requestJson<MeResponse>('/api/v1/auth/me');
-        setUser(response.data.user);
-      } catch {
-        setUser(null);
-      } finally {
-        setLoading(false);
-        refreshInFlightRef.current = null;
-      }
-    })();
-
-    refreshInFlightRef.current = task;
-
+  const refresh = useCallback(async () => {
     try {
-      await task;
+      const response = await requestJson<MeResponse>('/api/v1/auth/me');
+      const nextUser = response?.data?.user ?? null;
+      setUser(nextUser);
+      return nextUser;
+    } catch {
+      setUser(null);
+      return null;
     } finally {
-      refreshInFlightRef.current = null;
+      setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  const login = useCallback(async (input: LoginInput) => {
+    const response = await requestJson<AuthResponse>('/api/v1/auth/login', {
+      method: 'POST',
+      body: input,
+    });
+    const nextUser = response.data.user;
+    setUser(nextUser);
+    setLoading(false);
+    return nextUser;
   }, []);
 
-  useEffect(() => {
-    const refreshOnFocus = () => {
-      void refresh();
-    };
+  const register = useCallback(async (input: RegisterInput) => {
+    const response = await requestJson<AuthResponse>('/api/v1/auth/register', {
+      method: 'POST',
+      body: input,
+    });
+    const nextUser = response.data.user;
+    setUser(nextUser);
+    setLoading(false);
+    return nextUser;
+  }, []);
 
-    window.addEventListener('focus', refreshOnFocus);
-    document.addEventListener('visibilitychange', refreshOnFocus);
-
-    return () => {
-      window.removeEventListener('focus', refreshOnFocus);
-      document.removeEventListener('visibilitychange', refreshOnFocus);
-    };
+  const logout = useCallback(async () => {
+    try {
+      await requestJson<LogoutResponse>('/api/v1/auth/logout', {
+        method: 'POST',
+      });
+    } finally {
+      setUser(null);
+      setLoading(false);
+    }
   }, []);
 
   const value = useMemo<AuthContextValue>(() => ({
+    user,
     isAuthenticated: Boolean(user),
     loading,
-    user,
-    async login(payload) {
-      const response = await requestJson<AuthResponse>('/api/v1/auth/login', {
-        method: 'POST',
-        body: payload,
-      });
-      setUser(response.data.user);
-
-      return response;
-    },
-    async register(payload) {
-      const response = await requestJson<AuthResponse>('/api/v1/auth/register', {
-        method: 'POST',
-        body: payload,
-      });
-      setUser(response.data.user);
-
-      return response;
-    },
-    async logout() {
-      await requestJson<LogoutResponse>('/api/v1/auth/logout', {
-        method: 'POST',
-      }).catch(() => undefined);
-
-      setUser(null);
-    },
+    login,
+    register,
+    logout,
     refresh,
-  }), [loading, user]);
+  }), [loading, login, logout, refresh, register, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
   const context = useContext(AuthContext);
-
   if (!context) {
-    throw new Error('useAuth must be used inside AuthProvider.');
+    throw new Error('useAuth must be used within AuthProvider');
   }
-
   return context;
 }
