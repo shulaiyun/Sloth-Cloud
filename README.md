@@ -72,6 +72,17 @@ pnpm run secret:scan
 
 The scan blocks common high-risk leaks such as private keys, API keys, tokens, `.env` files, runtime workspaces, generated projects, and vendored upstream panel directories.
 
+## Community Maintenance
+
+Sloth Cloud is open to community maintenance around the public shell, BFF, operator workflow, adapter contracts, tests, and docs.
+
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR.
+- Read [GOVERNANCE.md](./GOVERNANCE.md) to understand maintainer decisions and repository boundaries.
+- Read [ROADMAP.md](./ROADMAP.md) for public maintenance priorities.
+- Read [docs/public-private-deployment.md](./docs/public-private-deployment.md) before wiring real production infrastructure.
+
+Please do not submit upstream panel source trees, production credentials, customer data, or private deployment state.
+
 ## License
 
 Sloth Cloud-owned code in this repository is licensed under AGPL-3.0-or-later. See [LICENSE](./LICENSE).
