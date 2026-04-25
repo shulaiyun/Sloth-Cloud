@@ -1,0 +1,21 @@
+node_modules
+apps/*/node_modules
+apps/*/dist
+dist
+runtime
+.git
+.env
+.env.*
+!.env.example
+!.env.*.example
+Convoy panel-develop
+Paymenter-master
+OpenClaw
+CLIProxyAPI-main
+*.log
+*.sql
+*.dump
+*.sqlite
+*.sqlite3
+*.pem
+*.key

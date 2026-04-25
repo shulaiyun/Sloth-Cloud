@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Runtime/generated state
+runtime/
+artifacts/
+backups/
+*.backup
+*.bak
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+*.log
+
+# Upstream/vendor source trees that must not be redistributed here
+Paymenter-master/
+Convoy panel-develop/
+OpenClaw/
+CLIProxyAPI-main/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
