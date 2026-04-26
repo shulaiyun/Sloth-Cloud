@@ -50,6 +50,8 @@ jobs:
 
       - name: Support direct SPA routes
         run: |
+          mkdir -p apps/web/dist/preview/customer
+          cp apps/web/dist/index.html apps/web/dist/preview/customer/index.html
           cp apps/web/dist/index.html apps/web/dist/404.html
           touch apps/web/dist/.nojekyll
 
