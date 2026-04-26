@@ -34,12 +34,16 @@ pnpm test
 
 ## 客户前台预览
 
-本仓库通过 GitHub Pages 发布了一个安全的静态客户前台预览：
+真实云端演示会部署到：
+
+- 真实演示入口：<https://shu.jxjvip.help/>
+
+GitHub Pages 只作为安全静态预览，不代表完整生产能力：
 
 - 预览地址：<https://shulaiyun.github.io/Sloth-Cloud/>
 - 直达路由：<https://shulaiyun.github.io/Sloth-Cloud/preview/customer/>
 
-Pages 构建使用 `VITE_STATIC_CUSTOMER_PREVIEW=true`，只渲染脱敏后的前端预览。它不会请求生产 API，不包含 Paymenter / Convoy / OpenClaw 源码，也不会暴露真实凭据、订单、客户数据或部署状态。
+Pages 构建使用 `VITE_STATIC_CUSTOMER_PREVIEW=true`，只渲染脱敏后的前端预览。它不会请求生产 API，不包含 Paymenter / Convoy / OpenClaw 源码，也不会暴露真实凭据、订单、客户数据或部署状态。完整登录、商品、VPS 控制和 AI 工作台能力以云端演示站为准。
 
 本地开发：
 
@@ -140,12 +144,16 @@ pnpm test
 
 ## Public Customer Preview
 
-The repository publishes a safe static customer-front preview through GitHub Pages:
+The real cloud demo is planned at:
+
+- Real demo: <https://shu.jxjvip.help/>
+
+GitHub Pages is only a safe static preview and does not represent full production capability:
 
 - Preview URL: <https://shulaiyun.github.io/Sloth-Cloud/>
 - Direct route: <https://shulaiyun.github.io/Sloth-Cloud/preview/customer/>
 
-The Pages build uses `VITE_STATIC_CUSTOMER_PREVIEW=true`, so it renders a sanitized frontend preview only. It does not call production APIs, does not include Paymenter/Convoy/OpenClaw source, and does not expose real credentials, orders, customer data, or deployment state.
+The Pages build uses `VITE_STATIC_CUSTOMER_PREVIEW=true`, so it renders a sanitized frontend preview only. It does not call production APIs, does not include Paymenter/Convoy/OpenClaw source, and does not expose real credentials, orders, customer data, or deployment state. Full login, catalog, VPS control, and AI workbench capabilities should be evaluated on the cloud demo.
 
 For local development:
 
