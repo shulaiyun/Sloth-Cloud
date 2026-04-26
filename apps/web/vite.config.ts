@@ -10,8 +10,10 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = normalizeProxyTarget(env.VITE_DEV_API_TARGET)
     || normalizeProxyTarget(env.VITE_API_BASE_URL)
     || 'http://127.0.0.1:14000';
+  const publicBasePath = String(env.VITE_PUBLIC_BASE_PATH ?? '').trim();
 
   return {
+    base: publicBasePath || '/',
     plugins: [react()],
     server: {
       proxy: {

@@ -30,6 +30,15 @@ pnpm build
 pnpm test
 ```
 
+## Public Customer Preview
+
+The repository publishes a safe static customer-front preview through GitHub Pages:
+
+- Preview URL: <https://shulaiyun.github.io/Sloth-Cloud/>
+- Direct route: <https://shulaiyun.github.io/Sloth-Cloud/preview/customer>
+
+The Pages build uses `VITE_STATIC_CUSTOMER_PREVIEW=true`, so it renders a sanitized frontend preview only. It does not call production APIs, does not include Paymenter/Convoy/OpenClaw source, and does not expose real credentials, orders, customer data, or deployment state.
+
 For local development:
 
 ```bash
