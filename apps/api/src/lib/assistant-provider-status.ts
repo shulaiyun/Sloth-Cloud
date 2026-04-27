@@ -212,6 +212,7 @@ export async function probeAssistantProviderStatus(
     let modelReachable = false;
     let httpStatus: number | null = null;
     let reason = 'Provider probe did not complete.';
+    let modelListed = false;
 
     try {
       const modelsResponse = await probeHttpResponse({
@@ -226,8 +227,8 @@ export async function probeAssistantProviderStatus(
         const payload = await modelsResponse.json().catch(() => ({}));
         const ids = extractListedModelIds(payload).map((entry) => entry.toLowerCase());
         if (ids.includes(model.toLowerCase())) {
-          modelReachable = true;
-          reason = 'Provider listed the configured model.';
+          modelListed = true;
+          reason = 'Provider listed the configured model; checking chat completion.';
         } else {
           reason = 'Provider responded, but the configured model was not listed.';
         }
@@ -238,11 +239,10 @@ export async function probeAssistantProviderStatus(
       reason = error instanceof Error ? error.message : String(error);
     }
 
-    const shouldSkipChatProbe = !modelReachable
-      && !networkReachable
+    const shouldSkipChatProbe = !networkReachable
       && isLikelyNetworkProbeError(reason);
 
-    if (!modelReachable && !shouldSkipChatProbe) {
+    if (!shouldSkipChatProbe) {
       try {
         const completionResponse = await probeHttpResponse({
           fetchImpl,
@@ -268,13 +268,15 @@ export async function probeAssistantProviderStatus(
           modelReachable = true;
           reason = 'Chat completion probe succeeded.';
         } else {
-          reason = `Provider returned status ${completionResponse.status} for /chat/completions.`;
+          const detail = await completionResponse.text().catch(() => '');
+          const suffix = detail ? ` Detail: ${detail.slice(0, 240)}` : '';
+          reason = `Provider returned status ${completionResponse.status} for /chat/completions.${suffix}`;
         }
       } catch (error) {
-        if (!networkReachable) {
-          reason = error instanceof Error ? error.message : String(error);
-        }
+        reason = error instanceof Error ? error.message : String(error);
       }
+    } else if (modelListed) {
+      reason = 'Provider listed the configured model, but chat completion was not verified.';
     }
 
     return {

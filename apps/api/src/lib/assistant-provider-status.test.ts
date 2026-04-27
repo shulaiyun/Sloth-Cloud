@@ -85,4 +85,39 @@ describe('probeAssistantProviderStatus', () => {
     expect(status.canRun).toBe(false);
     expect(status.reason).toContain('ECONNREFUSED');
   });
+
+  it('does not mark a provider runnable when the model list works but chat completion fails', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          { id: 'gpt-5.4' },
+        ],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          message: 'auth unavailable',
+        },
+      }), { status: 503 }));
+
+    const status = await probeAssistantProviderStatus({
+      enabled: true,
+      primaryProvider: 'openai',
+      providers: [
+        {
+          name: 'openai',
+          apiKey: 'sk-test',
+          model: 'gpt-5.4',
+          baseUrl: 'http://provider.local/v1',
+        },
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(status.networkReachable).toBe(true);
+    expect(status.modelReachable).toBe(false);
+    expect(status.canRun).toBe(false);
+    expect(status.responseMode).toBe('fallback');
+    expect(status.reason).toContain('/chat/completions');
+  });
 });
